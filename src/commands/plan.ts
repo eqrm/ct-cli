@@ -1,14 +1,10 @@
 import { Command } from "commander";
 import { authedSession } from "../api/session.js";
-import { CtApiError } from "../api/ctClient.js";
 import { resolveConfig } from "../config.js";
-import { RESOURCES } from "../resources/registry.js";
 import { loadState, resolveStatePath } from "../state/state.js";
 import { loadConfig, resolveConfigPath } from "../config/load.js";
-import { computePlan } from "../engine/plan.js";
+import { buildPlan } from "../engine/build.js";
 import { renderPlan } from "../engine/render.js";
-import { parentIdsByGroupId, applyHierarchy, type HierarchyEntry } from "../engine/hierarchy.js";
-import { mapConcurrent } from "../util/concurrency.js";
 import { info, warn, out } from "../ui.js";
 
 interface PlanOptions {
@@ -16,9 +12,6 @@ interface PlanOptions {
   state?: string;
   json?: boolean;
 }
-
-/** How many managed resources to fetch from ChurchTools at once. */
-const FETCH_CONCURRENCY = 8;
 
 export function planCommand(): Command {
   return new Command("plan")
@@ -36,54 +29,7 @@ export function planCommand(): Command {
       }
 
       const { client } = await authedSession();
-      // Keyed by logical key (globally unique), not CT id (unique only within a type — the Mainz campus is id 0).
-      const actual = new Map<string, Record<string, unknown>>();
-      const unresolved = new Set<string>();
-      const fetchErrors: string[] = [];
-
-      await mapConcurrent(Object.values(state.resources), FETCH_CONCURRENCY, async (managed) => {
-        const spec = RESOURCES[managed.type];
-        if (!spec) {
-          unresolved.add(managed.key);
-          warn(
-            `No registry entry for managed type "${managed.type}" (${managed.type}.${managed.key} #${managed.id}) — cannot diff; leaving untouched.`,
-          );
-          return;
-        }
-        try {
-          const raw = await client.get<Record<string, unknown>>(spec.itemPath(managed.id));
-          actual.set(managed.key, spec.managedFields(raw));
-        } catch (err) {
-          if (err instanceof CtApiError && err.status === 404) {
-            return; // vanished in CT — the plan will propose recreating (or pruning) it
-          }
-          // A read-only plan should not abort on one bad fetch: record it, keep going, flag the plan as partial.
-          const message = err instanceof Error ? err.message : String(err);
-          fetchErrors.push(`${managed.type}.${managed.key} (#${managed.id}): ${message}`);
-          warn(`Failed to fetch ${managed.type}.${managed.key} (#${managed.id}): ${message}`);
-        }
-      });
-
-      // Group hierarchy: one bulk call, folded into each opted-in group's `parents` set-field.
-      let parentIds = new Map<number, number[]>();
-      let hierarchyOk = true;
-      const hasManagedGroups = Object.values(state.resources).some((m) => m.type === "group");
-      if (hasManagedGroups) {
-        try {
-          const raw = await client.get<HierarchyEntry[]>("/groups/hierarchies");
-          parentIds = parentIdsByGroupId(Array.isArray(raw) ? raw : []);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          fetchErrors.push(`group hierarchies: ${message}`);
-          warn(`Failed to fetch group hierarchies: ${message}`);
-          hierarchyOk = false;
-        }
-      }
-      // On a hierarchy-fetch failure, leave `parents` undiffed rather than folding an empty map
-      // (which would fabricate spurious "add all parents" changes). The plan is flagged INCOMPLETE below.
-      const desiredWithHierarchy = hierarchyOk ? applyHierarchy(desired, state, actual, parentIds) : desired;
-
-      const plan = computePlan(desiredWithHierarchy, state, actual, { unresolved });
+      const { plan, fetchErrors } = await buildPlan(client, state, desired);
       if (opts.json) {
         out(plan);
       } else {
