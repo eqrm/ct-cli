@@ -122,3 +122,21 @@ describe("config context", () => {
     expect(resources.map((r) => r.key)).toEqual(["mainz", "mainz_kids", "berlin", "berlin_kids"]);
   });
 });
+
+describe("preventDestroy lifecycle flag", () => {
+  it("is carried on the resource but kept out of managed fields", async () => {
+    const resources = await evaluateConfig((ct) => {
+      ct.group({ key: "kids_lead", name: "Kids Leitung", preventDestroy: true });
+    });
+    const group = resources.find((r) => r.key === "kids_lead")!;
+    expect(group.preventDestroy).toBe(true);
+    expect(group.fields).toEqual({ name: "Kids Leitung" });
+  });
+
+  it("defaults to undefined when not declared", async () => {
+    const resources = await evaluateConfig((ct) => {
+      ct.campus({ key: "mainz", name: "Mainz", shortName: "MZ" });
+    });
+    expect(resources[0]!.preventDestroy).toBeUndefined();
+  });
+});

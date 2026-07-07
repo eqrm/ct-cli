@@ -24,6 +24,8 @@ export interface ResourceInput {
    */
   parents?: string[];
   dependsOn?: string[];
+  /** Block `ct destroy` for this resource until the flag is removed. */
+  preventDestroy?: boolean;
   [field: string]: unknown;
 }
 
@@ -39,7 +41,7 @@ export interface ConfigContext {
 export type ConfigModule = (ct: ConfigContext) => void | Promise<void>;
 
 function toDesired(type: string, input: ResourceInput): DesiredResource {
-  const { key, parent, parents, dependsOn = [], ...fields } = input;
+  const { key, parent, parents, dependsOn = [], preventDestroy, ...fields } = input;
   if (!key || typeof key !== "string") {
     throw new Error(`${type} declaration is missing a string "key".`);
   }
@@ -56,7 +58,7 @@ function toDesired(type: string, input: ResourceInput): DesiredResource {
   const parentKey = typeof parent === "string" && parent !== "" ? parent : undefined;
   const parentKeys = parents !== undefined ? [...new Set(parents)] : undefined;
   const edges = [...new Set([...dependsOn, ...(parentKey ? [parentKey] : []), ...(parentKeys ?? [])])];
-  return { type, key, fields, parent: parentKey, parents: parentKeys, dependsOn: edges };
+  return { type, key, fields, parent: parentKey, parents: parentKeys, dependsOn: edges, preventDestroy };
 }
 
 /**

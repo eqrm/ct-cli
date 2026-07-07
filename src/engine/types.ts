@@ -14,6 +14,8 @@ export interface DesiredResource {
   parents?: string[];
   /** Logical keys this resource must be applied after (includes `parent`/`parents`). */
   dependsOn: string[];
+  /** Lifecycle flag: block `ct destroy` for this resource. Never diffed or sent to the API. */
+  preventDestroy?: boolean;
 }
 
 export type PlanAction = "create" | "update" | "delete" | "no-op";
