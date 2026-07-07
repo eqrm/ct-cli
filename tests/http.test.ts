@@ -25,6 +25,28 @@ describe("fetchWithRetry", () => {
     expect(sleep).toHaveBeenCalledWith(2000);
   });
 
+  it("caps an outsized Retry-After so the CLI can't hang for hours", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(res(429, { "retry-after": "86400" }))
+      .mockResolvedValueOnce(res(200));
+    const sleep = vi.fn(() => Promise.resolve());
+    await fetchWithRetry("https://x/api/campuses", {}, { sleep, fetchImpl });
+    expect(sleep).toHaveBeenCalledWith(60_000);
+  });
+
+  it("ignores a malformed Retry-After and falls back to backoff", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(res(429, { "retry-after": "-5" }))
+      .mockResolvedValueOnce(res(200));
+    const sleep = vi.fn<(ms: number) => Promise<void>>(() => Promise.resolve());
+    await fetchWithRetry("https://x/api/campuses", {}, { baseDelayMs: 500, sleep, fetchImpl });
+    // Backoff, not an immediate (negative → 0) retry.
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep.mock.calls[0]?.[0] ?? 0).toBeGreaterThanOrEqual(500);
+  });
+
   it("retries idempotent GET on 500", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(res(500)).mockResolvedValueOnce(res(200));
     const out = await fetchWithRetry(

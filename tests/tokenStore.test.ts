@@ -14,6 +14,6 @@ afterEach(() => {
 describe("readToken", () => {
   it("prefers the CT_LOGINTOKEN env var over any store", async () => {
     process.env.CT_LOGINTOKEN = "env-token";
-    await expect(readToken("https://eqrm.church.tools")).resolves.toBe("env-token");
+    await expect(readToken()).resolves.toBe("env-token");
   });
 });

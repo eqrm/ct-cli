@@ -21,20 +21,42 @@ export interface RetryOptions {
   fetchImpl?: typeof fetch;
 }
 
+/** Cap on any single wait, so an outsized `Retry-After` can't hang the CLI. */
+const MAX_DELAY_MS = 60_000;
+
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+function clampDelay(ms: number): number {
+  if (!Number.isFinite(ms)) {
+    return 0;
+  }
+  return Math.min(Math.max(ms, 0), MAX_DELAY_MS);
+}
 
 function backoffMs(base: number, attempt: number): number {
   const exp = base * 2 ** (attempt - 1);
-  return exp + Math.floor(Math.random() * base);
+  return clampDelay(exp + Math.floor(Math.random() * base));
 }
 
 function retryAfterMs(res: Response): number | null {
-  const header = res.headers.get("retry-after");
+  const header = res.headers.get("retry-after")?.trim();
   if (!header) {
     return null;
   }
-  const seconds = Number.parseInt(header, 10);
-  return Number.isFinite(seconds) ? seconds * 1000 : null;
+  // `Retry-After` is either a non-negative delta-seconds count or an HTTP-date.
+  if (/^\d+$/.test(header)) {
+    return clampDelay(Number.parseInt(header, 10) * 1000);
+  }
+  // Only treat it as a date when it actually looks like one — `Date.parse` is
+  // lax enough to accept e.g. "-5" as a year, which must not become a 0ms wait.
+  if (/[a-zA-Z]/.test(header)) {
+    const dateMs = Date.parse(header);
+    if (Number.isFinite(dateMs)) {
+      return clampDelay(dateMs - Date.now());
+    }
+  }
+  // Unparseable (e.g. a negative or malformed value): fall back to backoff.
+  return null;
 }
 
 function shouldRetryStatus(status: number, isIdempotent: boolean): boolean {
@@ -69,7 +91,10 @@ export async function fetchWithRetry(
       throw err;
     }
     if (attempt <= retries && shouldRetryStatus(res.status, isIdempotent)) {
-      await sleep(retryAfterMs(res) ?? backoffMs(base, attempt));
+      const delay = retryAfterMs(res) ?? backoffMs(base, attempt);
+      // Drain the response we're discarding so its socket isn't left buffered.
+      await res.body?.cancel().catch(() => {});
+      await sleep(delay);
       continue;
     }
     return res;

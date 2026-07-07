@@ -23,7 +23,7 @@ export function authCommand(): Command {
       }
       const client = new CtClient(config);
       const me = await client.authenticate(token);
-      const location = await storeToken(config.host, token);
+      const location = await storeToken(token);
       success(`Logged in to ${config.host} as ${me.firstName ?? ""} ${me.lastName ?? ""} (#${me.id})`.trim());
       info(`Token stored in ${location}.`);
 
@@ -43,8 +43,7 @@ export function authCommand(): Command {
     .command("status")
     .description("Show the currently authenticated user")
     .action(async () => {
-      const config = resolveConfig();
-      if (!(await readToken(config.host))) {
+      if (!(await readToken())) {
         error("Not logged in. Run `ct auth login --token <token>`.");
         process.exitCode = 1;
         return;
@@ -57,7 +56,7 @@ export function authCommand(): Command {
     .command("logout")
     .description("Remove the stored login token")
     .action(async () => {
-      await clearToken(resolveConfig().host);
+      await clearToken();
       success("Logged out — stored token removed.");
     });
 
