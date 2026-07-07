@@ -14,6 +14,7 @@
  * here can be swapped for `openapi-fetch` while keeping this class's surface.
  */
 import { resolveConfig, type CtConfig } from "../config.js";
+import { fetchWithRetry } from "./http.js";
 
 export interface WhoAmI {
   id: number;
@@ -48,7 +49,11 @@ export class CtClient {
   /** Run the login-token handshake and cache the session cookie + CSRF token. */
   async authenticate(loginToken: string): Promise<WhoAmI> {
     const url = `${this.config.host}/api/whoami?login_token=${encodeURIComponent(loginToken)}`;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    const res = await fetchWithRetry(
+      url,
+      { headers: { Accept: "application/json" } },
+      { isIdempotent: true },
+    );
     this.captureCookie(res);
     if (!res.ok) {
       throw new CtApiError(`Login failed (whoami)`, res.status, await safeBody(res));
@@ -82,11 +87,15 @@ export class CtClient {
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
     }
-    const res = await fetch(`${this.config.host}/api${path}`, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+    const res = await fetchWithRetry(
+      `${this.config.host}/api${path}`,
+      {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      },
+      { isIdempotent: method === "GET" || method === "HEAD" },
+    );
     this.captureCookie(res);
     if (!res.ok) {
       throw new CtApiError(`${method} ${path} failed`, res.status, await safeBody(res));
@@ -102,9 +111,11 @@ export class CtClient {
     if (!this.cookie) {
       return;
     }
-    const res = await fetch(`${this.config.host}/api/csrftoken`, {
-      headers: { Accept: "application/json", Cookie: this.cookie },
-    });
+    const res = await fetchWithRetry(
+      `${this.config.host}/api/csrftoken`,
+      { headers: { Accept: "application/json", Cookie: this.cookie } },
+      { isIdempotent: true },
+    );
     this.captureCookie(res);
     if (!res.ok) {
       throw new CtApiError("Failed to fetch CSRF token", res.status, await safeBody(res));
