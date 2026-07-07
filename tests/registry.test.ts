@@ -63,3 +63,23 @@ describe("configSnippet", () => {
     );
   });
 });
+
+describe("write specs", () => {
+  it("campus creates via POST /campuses and updates via PUT", () => {
+    expect(RESOURCES.campus?.collectionPath).toBe("/campuses");
+    expect(RESOURCES.campus?.updateMethod).toBe("PUT");
+  });
+
+  it("group updates via PATCH", () => {
+    expect(RESOURCES.group?.collectionPath).toBe("/groups");
+    expect(RESOURCES.group?.updateMethod).toBe("PATCH");
+  });
+
+  it("registers the new writable types with their collection + item paths", () => {
+    expect(RESOURCES["age-group"]?.collectionPath).toBe("/group/agegroups");
+    expect(RESOURCES["target-group"]?.collectionPath).toBe("/group/targetgroups");
+    expect(RESOURCES["relationship-type"]?.collectionPath).toBe("/person/relationshiptypes");
+    expect(RESOURCES["group-role"]?.collectionPath).toBe("/group/roles");
+    expect(RESOURCES["age-group"]?.itemPath(3)).toBe("/group/agegroups/3");
+  });
+});

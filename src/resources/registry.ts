@@ -8,16 +8,22 @@
  */
 
 export interface AdoptableResource {
-  /** GET path for a single resource by id. */
+  /** Collection path: `POST` here creates. */
+  collectionPath: string;
+  /** GET/PUT/PATCH/DELETE path for a single resource by id. */
   itemPath: (id: number) => string;
+  /** Update verb: `group` is PATCH; every other type is PUT. */
+  updateMethod: "PUT" | "PATCH";
   /** Stable logical key derived from the fetched resource. */
   deriveKey: (resource: Record<string, unknown>) => string;
   /** The subset of fields we manage — the desired-state baseline. */
   managedFields: (resource: Record<string, unknown>) => Record<string, unknown>;
 }
 
-/** Build an `itemPath` from a collection path, so each entry names its path once. */
-const item = (collectionPath: string) => (id: number) => `${collectionPath}/${id}`;
+/** Build a full spec, deriving `itemPath` from the collection path so each entry names its path once. */
+function define(spec: Omit<AdoptableResource, "itemPath">): AdoptableResource {
+  return { ...spec, itemPath: (id: number) => `${spec.collectionPath}/${id}` };
+}
 
 /**
  * kebab/underscore slug: "Kids Leitung" → "kids_leitung", "Zürich" → "zurich".
@@ -45,25 +51,56 @@ function fromInformation(resource: Record<string, unknown>, key: string): unknow
 }
 
 export const RESOURCES: Record<string, AdoptableResource> = {
-  campus: {
-    itemPath: item("/campuses"),
+  campus: define({
+    collectionPath: "/campuses",
+    updateMethod: "PUT",
     deriveKey: (r) => slug(str(r, "shortName") || str(r, "name")),
     managedFields: (r) => ({ name: r.name, shortName: r.shortName }),
-  },
-  group: {
-    itemPath: item("/groups"),
+  }),
+  group: define({
+    collectionPath: "/groups",
+    updateMethod: "PATCH",
     deriveKey: (r) => slug(str(r, "name")),
     managedFields: (r) => ({
       name: r.name,
       groupTypeId: fromInformation(r, "groupTypeId"),
       groupStatusId: fromInformation(r, "groupStatusId"),
     }),
-  },
-  "group-type": {
-    itemPath: item("/group/grouptypes"),
+  }),
+  "group-type": define({
+    collectionPath: "/group/grouptypes",
+    updateMethod: "PUT",
     deriveKey: (r) => slug(str(r, "name")),
     managedFields: (r) => ({ name: r.name, nameTranslated: r.nameTranslated }),
-  },
+  }),
+  "age-group": define({
+    collectionPath: "/group/agegroups",
+    updateMethod: "PUT",
+    deriveKey: (r) => slug(str(r, "name")),
+    managedFields: (r) => ({ name: r.name, sortKey: r.sortKey }),
+  }),
+  "target-group": define({
+    collectionPath: "/group/targetgroups",
+    updateMethod: "PUT",
+    deriveKey: (r) => slug(str(r, "name")),
+    managedFields: (r) => ({ name: r.name, sortKey: r.sortKey }),
+  }),
+  "relationship-type": define({
+    collectionPath: "/person/relationshiptypes",
+    updateMethod: "PUT",
+    deriveKey: (r) => slug(str(r, "name")),
+    managedFields: (r) => ({
+      name: r.name,
+      degreeForward: r.degreeForward,
+      degreeReverse: r.degreeReverse,
+    }),
+  }),
+  "group-role": define({
+    collectionPath: "/group/roles",
+    updateMethod: "PUT",
+    deriveKey: (r) => slug(str(r, "name")),
+    managedFields: (r) => ({ name: r.name, groupTypeId: r.groupTypeId }),
+  }),
 };
 
 export function resourceType(type: string): AdoptableResource {
