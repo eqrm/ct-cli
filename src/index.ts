@@ -2,6 +2,8 @@
 import { Command } from "commander";
 import { authCommand } from "./commands/auth.js";
 import { getCommand } from "./commands/get.js";
+import { adoptCommand } from "./commands/adopt.js";
+import { stateCommand } from "./commands/state.js";
 import { plannedCommands } from "./commands/placeholders.js";
 import { error } from "./ui.js";
 
@@ -17,6 +19,8 @@ export function buildProgram(): Command {
 
   program.addCommand(authCommand());
   program.addCommand(getCommand());
+  program.addCommand(adoptCommand());
+  program.addCommand(stateCommand());
   for (const cmd of plannedCommands()) {
     program.addCommand(cmd);
   }

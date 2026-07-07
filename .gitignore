@@ -10,6 +10,7 @@ dist/
 
 # Local ChurchTools state / adopted config (belongs in eqrm/ct-structure, never here)
 *.ctstate.json
+ct-state.json
 
 # Generated typed client (regenerated from the live OpenAPI spec)
 src/api/schema.d.ts

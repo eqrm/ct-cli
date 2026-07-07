@@ -12,7 +12,6 @@ interface Planned {
 }
 
 const PLANNED: Planned[] = [
-  { name: "adopt", description: "Put one existing resource under management", issue: "Phase 2 (#4)" },
   { name: "plan", description: "Show the diff between desired state and ChurchTools", issue: "Phase 3 (#5)" },
   { name: "apply", description: "Apply the plan (idempotent, in dependency order)", issue: "Phase 4 (#6)" },
   { name: "destroy", description: "Explicitly remove managed resources (protected)", issue: "Phase 4 (#6)" },
