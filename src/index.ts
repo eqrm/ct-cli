@@ -5,6 +5,8 @@ import { getCommand } from "./commands/get.js";
 import { adoptCommand } from "./commands/adopt.js";
 import { stateCommand } from "./commands/state.js";
 import { planCommand } from "./commands/plan.js";
+import { applyCommand } from "./commands/apply.js";
+import { destroyCommand } from "./commands/destroy.js";
 import { plannedCommands } from "./commands/placeholders.js";
 import { isMainModule } from "./isMain.js";
 import { error } from "./ui.js";
@@ -24,6 +26,8 @@ export function buildProgram(): Command {
   program.addCommand(adoptCommand());
   program.addCommand(stateCommand());
   program.addCommand(planCommand());
+  program.addCommand(applyCommand());
+  program.addCommand(destroyCommand());
   for (const cmd of plannedCommands()) {
     program.addCommand(cmd);
   }

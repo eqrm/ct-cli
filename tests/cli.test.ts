@@ -12,4 +12,14 @@ describe("ct program", () => {
     const subs = auth?.commands.map((c) => c.name()) ?? [];
     expect(subs).toEqual(expect.arrayContaining(["login", "status", "logout"]));
   });
+
+  it("registers apply with --auto-approve", () => {
+    const cmd = buildProgram().commands.find((c) => c.name() === "apply")!;
+    expect(cmd.options.some((o) => o.long === "--auto-approve")).toBe(true);
+  });
+
+  it("registers destroy with a required --target", () => {
+    const cmd = buildProgram().commands.find((c) => c.name() === "destroy")!;
+    expect(cmd.options.some((o) => o.long === "--target")).toBe(true);
+  });
 });

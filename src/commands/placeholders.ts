@@ -11,10 +11,8 @@ interface Planned {
   issue: string;
 }
 
-const PLANNED: Planned[] = [
-  { name: "apply", description: "Apply the plan (idempotent, in dependency order)", issue: "Phase 4 (#6)" },
-  { name: "destroy", description: "Explicitly remove managed resources (protected)", issue: "Phase 4 (#6)" },
-];
+// apply/destroy landed in Phase 4; no verbs are gated at present.
+const PLANNED: Planned[] = [];
 
 export function plannedCommands(): Command[] {
   return PLANNED.map(({ name, description, issue }) =>

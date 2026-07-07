@@ -21,7 +21,7 @@ function recorder(responses: Record<string, unknown> = {}) {
   return { client, calls };
 }
 
-const noSave = async (_p: string, _s: State) => {};
+const noSave: (path: string, state: State) => Promise<void> = async () => {};
 const fixedNow = () => "2026-07-07T00:00:00.000Z";
 
 describe("executePlan", () => {
