@@ -45,15 +45,29 @@ npm link             # optional: puts `ct` on your PATH
 ```bash
 export CT_HOST=https://eqrm.church.tools   # default; override for a test instance
 
-ct auth login --token <personal-login-token>   # stored at ~/.config/ct-cli/credentials.json (0600)
+ct auth login --token <personal-login-token>   # stored in the macOS Keychain
 ct auth status                                  # who am I?
 
 ct get campuses            # JSON to stdout — pipe into jq
 ct get groups
-ct get group-types
 ct get raw /groups/42      # arbitrary GET
 
-ct plan | apply | adopt | destroy   # not yet implemented — see phase issues
+ct adopt campus 0          # bring an existing resource under management (→ state file)
+ct state list              # show the managed set
+ct plan                    # diff the desired-state config against ChurchTools (read-only)
+ct plan --json             # the raw plan as JSON
+
+ct apply | destroy         # not yet implemented — see phase issues
+```
+
+The desired state lives in a config file (default `ct.config.ts`) that
+default-exports a function receiving the DSL:
+
+```ts
+export default (ct) => {
+  ct.campus({ key: "mainz", name: "Mainz", shortName: "MZ" });
+  ct.group({ key: "mainz_kids_lead", name: "Mainz · Kids Leitung", parent: "mainz_area" });
+};
 ```
 
 Machine-readable output goes to **stdout** (pipe/`jq` it); human status lines go
