@@ -64,8 +64,9 @@ export function planCommand(): Command {
         }
       });
 
-      // Group hierarchy: one bulk call, folded into each managed group's `parents` set-field.
+      // Group hierarchy: one bulk call, folded into each opted-in group's `parents` set-field.
       let parentIds = new Map<number, number[]>();
+      let hierarchyOk = true;
       const hasManagedGroups = Object.values(state.resources).some((m) => m.type === "group");
       if (hasManagedGroups) {
         try {
@@ -75,9 +76,12 @@ export function planCommand(): Command {
           const message = err instanceof Error ? err.message : String(err);
           fetchErrors.push(`group hierarchies: ${message}`);
           warn(`Failed to fetch group hierarchies: ${message}`);
+          hierarchyOk = false;
         }
       }
-      const desiredWithHierarchy = applyHierarchy(desired, state, actual, parentIds);
+      // On a hierarchy-fetch failure, leave `parents` undiffed rather than folding an empty map
+      // (which would fabricate spurious "add all parents" changes). The plan is flagged INCOMPLETE below.
+      const desiredWithHierarchy = hierarchyOk ? applyHierarchy(desired, state, actual, parentIds) : desired;
 
       const plan = computePlan(desiredWithHierarchy, state, actual, { unresolved });
       if (opts.json) {

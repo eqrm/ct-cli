@@ -8,7 +8,7 @@ export interface DesiredResource {
   key: string;
   /** Managed fields — same shape as the Phase 2 registry snapshot, so they diff like-for-like against actual. */
   fields: Record<string, unknown>;
-  /** Parent logical key (group hierarchy). Also contributes a dependency edge. */
+  /** Ordering hint: a dependency edge only (may point at a campus). NOT managed hierarchy — see `parents`. */
   parent?: string;
   /** Managed parent group keys (hierarchy). `undefined` = hierarchy not managed for this group; `[]` = should have no managed parents. */
   parents?: string[];

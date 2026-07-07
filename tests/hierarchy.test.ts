@@ -53,9 +53,28 @@ describe("applyHierarchy", () => {
     const out = applyHierarchy(desired, state, actual, parentIds);
 
     expect(actual.get("child")?.parents).toEqual(["parent"]); // 119/1175 unmanaged → dropped
-    expect(actual.get("parent")?.parents).toEqual([]);
+    // "parent" did not opt into hierarchy → its actual is left untouched (no injected pseudo-field).
+    expect(actual.get("parent")).not.toHaveProperty("parents");
     expect(out[0]?.fields.parents).toEqual(["parent"]);
     expect(out[1]?.fields.parents).toBeUndefined(); // group that did not opt in is untouched
+  });
+
+  it("injects an empty actual.parents for an opted-in group whose managed parents are all gone", () => {
+    // A group that opts in (parents: []) but still has a managed parent in CT must see the removal.
+    const actual = new Map<string, Record<string, unknown>>([
+      ["child", { name: "child" }],
+      ["parent", { name: "parent" }],
+    ]);
+    const parentIds = new Map([[1311, [8]]]); // CT still links child -> parent(8, managed)
+    const desired: DesiredResource[] = [
+      { type: "group", key: "child", fields: { name: "child" }, parents: [], dependsOn: [] }, // managed-empty
+      { type: "group", key: "parent", fields: { name: "parent" }, dependsOn: [] },
+    ];
+
+    const out = applyHierarchy(desired, state, actual, parentIds);
+
+    expect(actual.get("child")?.parents).toEqual(["parent"]); // real managed parent surfaced...
+    expect(out[0]?.fields.parents).toEqual([]); // ...against a desired of none → diff proposes removal
   });
 
   it("leaves non-group resources untouched", () => {

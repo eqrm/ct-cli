@@ -47,11 +47,18 @@ export function managedParentKeys(parentIds: number[], groupIdToKey: Map<number,
 /**
  * Fold group hierarchy into the plan inputs as a `parents` set-field.
  *
- * Mutates `actual`: every managed group gets `parents` set to its managed
- * parent keys (from `parentIdsByGroup`). Returns a new desired list where each
- * group that opted into hierarchy (`parents !== undefined`) carries a sorted
- * `parents` field, so `computePlan` diffs it generically. Groups that did not
- * opt in are untouched — their hierarchy is not managed.
+ * Only groups that opted into hierarchy (`parents !== undefined` on the desired
+ * side) are touched: their `actual` record gets a `parents` set of managed
+ * parent keys (from `parentIdsByGroup`), and their desired gets a sorted
+ * `parents` field so `computePlan` diffs it generically. Groups that did not opt
+ * in are left untouched on both sides — their hierarchy is not managed.
+ *
+ * Two caveats `parents` inherits from being a synthetic field:
+ *  - It is a *pseudo-field* of logical keys, NOT a real ChurchTools group column.
+ *    Apply must route it to the per-edge endpoint (`PUT`/`DELETE
+ *    /groups/{id}/parents/{parentId}`) — never PATCH it onto the group object.
+ *  - The adopt snapshot (`managed.fields`) never carries `parents`, so a
+ *    third-party re-parent surfaces as an ordinary `update`, not under drift.
  */
 export function applyHierarchy(
   desired: DesiredResource[],
@@ -66,8 +73,14 @@ export function applyHierarchy(
     }
   }
 
+  // Only groups whose desired opted into hierarchy are managed — mirror the desired-side guard
+  // below so we never write a `parents` field onto the actual of an opted-out group.
+  const optedIn = new Set(
+    desired.filter((d) => d.type === "group" && d.parents !== undefined).map((d) => d.key),
+  );
+
   for (const managed of Object.values(state.resources)) {
-    if (managed.type !== "group") {
+    if (managed.type !== "group" || !optedIn.has(managed.key)) {
       continue;
     }
     const a = actual.get(managed.key);
