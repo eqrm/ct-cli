@@ -24,8 +24,11 @@ Like Terraform, the tool never lives in the same repo as the infra config.
 Early scaffold. See the [epic (#1)](https://github.com/eqrm/ct-cli/issues/1) and phase issues.
 
 - ✅ **Phase 0 — Spike** ([#2](https://github.com/eqrm/ct-cli/issues/2)): API CRUD coverage mapped — see [`docs/api-coverage.md`](docs/api-coverage.md). Instance runs CT **3.123.0**; 7 resources have full CRUD.
-- 🚧 **Phase 1 — CLI + client** ([#3](https://github.com/eqrm/ct-cli/issues/3)): `auth login`, `get` commands, session handshake — this scaffold.
-- ⬜ Phases 2–5: adopt/state, engine (plan/diff), apply, blueprints.
+- ✅ **Phase 1 — CLI + client** ([#3](https://github.com/eqrm/ct-cli/issues/3)): `auth login`, `get` commands, session handshake.
+- ✅ **Phase 2 — Read/Adopt** ([#4](https://github.com/eqrm/ct-cli/issues/4)): `ct adopt` + JSON state file.
+- ✅ **Phase 3 — Declarative engine** ([#5](https://github.com/eqrm/ct-cli/issues/5)): config DSL, `plan`/diff, dependency graph, group hierarchy.
+- ✅ **Phase 4 — Apply + guardrails** ([#6](https://github.com/eqrm/ct-cli/issues/6)): `ct apply` / `ct destroy`, confirmation, backup, `preventDestroy`.
+- ⬜ Phase 5: blueprints.
 
 ## Requirements
 
@@ -58,8 +61,22 @@ ct state list              # show the managed set
 ct plan                    # diff the desired-state config against ChurchTools (read-only)
 ct plan --json             # the raw plan as JSON
 
-ct apply | destroy         # not yet implemented — see phase issues
+ct apply                   # create + update in dependency order (confirmation + backup first)
+ct apply --auto-approve    # skip the prompt (CI); apply NEVER deletes
+ct destroy --target old    # explicit, protected deletion (typed confirmation)
 ```
+
+`apply` reconciles **creates and updates** only, in dependency order, saving
+state after each action (crash-safe / resumable). It **never deletes**: a
+resource dropped from the config is surfaced as a notice pointing at `destroy`.
+Before any write it prints the plan, asks for confirmation (`-y` to skip), and
+writes a JSON backup of the affected resources to `backups/` beside the state
+file (override with `--backup-dir` / `CT_BACKUP_DIR`).
+
+`destroy` deletes only the resources named by `--target` (repeatable or
+comma-separated), in reverse dependency order, after a typed confirmation
+(`--force` to skip). A resource declared with `preventDestroy: true` is blocked
+until that flag is removed from the config.
 
 The desired state lives in a config file (default `ct.config.ts`) that
 default-exports a function receiving the DSL:
@@ -101,7 +118,9 @@ npm run generate:client       # regenerate the typed client from the live OpenAP
 ## Guardrails (by design)
 
 - `plan` is the default; `apply` is explicit, with a confirmation prompt.
-- Destroy-protection; never implicit deletions.
+- `apply` never deletes; destruction is explicit via `destroy --target`.
+- Destroy-protection (`preventDestroy` config flag); never implicit deletions.
 - People/memberships are never touched (hard boundary in code).
-- Backup/export before every `apply`.
+- Backup/export before every `apply` and `destroy`.
+- Rate-limit + retry on API calls (writes are never blindly re-sent on 5xx).
 - Tokens live in the OS keychain / `.env`, never in git.
