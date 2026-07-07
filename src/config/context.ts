@@ -14,7 +14,10 @@ import type { DesiredResource } from "../engine/types.js";
 
 export interface ResourceInput {
   key: string;
+  /** Single parent group (sugar for `parents: [parent]`). */
   parent?: string;
+  /** Managed parent groups (hierarchy). Opt-in: omit to leave a group's hierarchy unmanaged. */
+  parents?: string[];
   dependsOn?: string[];
   [field: string]: unknown;
 }
@@ -31,15 +34,15 @@ export interface ConfigContext {
 export type ConfigModule = (ct: ConfigContext) => void | Promise<void>;
 
 function toDesired(type: string, input: ResourceInput): DesiredResource {
-  const { key, parent, dependsOn = [], ...fields } = input;
+  const { key, parent, parents, dependsOn = [], ...fields } = input;
   if (!key || typeof key !== "string") {
     throw new Error(`${type} declaration is missing a string "key".`);
   }
-  const edges = [...dependsOn];
-  if (parent) {
-    edges.push(parent);
-  }
-  return { type, key, fields, parent, dependsOn: edges };
+  // Hierarchy is opt-in: `parents`/`parent` present (even as []) means "manage this group's parents".
+  const declared = parents !== undefined || parent !== undefined;
+  const parentKeys = declared ? [...new Set([...(parents ?? []), ...(parent ? [parent] : [])])] : undefined;
+  const edges = [...dependsOn, ...(parentKeys ?? [])];
+  return { type, key, fields, parent, parents: parentKeys, dependsOn: edges };
 }
 
 export function createContext(): { ct: ConfigContext; resources: DesiredResource[] } {

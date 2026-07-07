@@ -30,6 +30,28 @@ describe("config context", () => {
     expect(resources[0]?.dependsOn).toEqual(["type_x", "lead"]);
   });
 
+  it("captures multiple parents (hierarchy is a DAG) as an opt-in set, not in fields", () => {
+    const { ct, resources } = createContext();
+    ct.group({ key: "team", name: "Team", parents: ["area_a", "area_b"] });
+    expect(resources[0]?.parents).toEqual(["area_a", "area_b"]);
+    expect(resources[0]?.dependsOn).toEqual(["area_a", "area_b"]);
+    expect(resources[0]?.fields).not.toHaveProperty("parents");
+  });
+
+  it("treats parents as opt-in: omitted → undefined, explicit [] → managed-empty", () => {
+    const { ct, resources } = createContext();
+    ct.group({ key: "no_hierarchy", name: "N" });
+    ct.group({ key: "empty_hierarchy", name: "E", parents: [] });
+    expect(resources[0]?.parents).toBeUndefined();
+    expect(resources[1]?.parents).toEqual([]);
+  });
+
+  it("de-duplicates parent + parents", () => {
+    const { ct, resources } = createContext();
+    ct.group({ key: "team", name: "T", parent: "lead", parents: ["lead", "other"] });
+    expect(resources[0]?.parents).toEqual(["lead", "other"]);
+  });
+
   it("rejects a duplicate logical key", () => {
     const { ct } = createContext();
     ct.campus({ key: "mainz", name: "A" });

@@ -10,7 +10,9 @@ export interface DesiredResource {
   fields: Record<string, unknown>;
   /** Parent logical key (group hierarchy). Also contributes a dependency edge. */
   parent?: string;
-  /** Logical keys this resource must be applied after (includes `parent`). */
+  /** Managed parent group keys (hierarchy). `undefined` = hierarchy not managed for this group; `[]` = should have no managed parents. */
+  parents?: string[];
+  /** Logical keys this resource must be applied after (includes `parent`/`parents`). */
   dependsOn: string[];
 }
 

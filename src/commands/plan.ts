@@ -7,6 +7,7 @@ import { loadState, resolveStatePath } from "../state/state.js";
 import { loadConfig, resolveConfigPath } from "../config/load.js";
 import { computePlan } from "../engine/plan.js";
 import { renderPlan } from "../engine/render.js";
+import { parentIdsByGroupId, applyHierarchy, type HierarchyEntry } from "../engine/hierarchy.js";
 import { mapConcurrent } from "../util/concurrency.js";
 import { info, warn, out } from "../ui.js";
 
@@ -63,7 +64,22 @@ export function planCommand(): Command {
         }
       });
 
-      const plan = computePlan(desired, state, actual, { unresolved });
+      // Group hierarchy: one bulk call, folded into each managed group's `parents` set-field.
+      let parentIds = new Map<number, number[]>();
+      const hasManagedGroups = Object.values(state.resources).some((m) => m.type === "group");
+      if (hasManagedGroups) {
+        try {
+          const raw = await client.get<HierarchyEntry[]>("/groups/hierarchies");
+          parentIds = parentIdsByGroupId(Array.isArray(raw) ? raw : []);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          fetchErrors.push(`group hierarchies: ${message}`);
+          warn(`Failed to fetch group hierarchies: ${message}`);
+        }
+      }
+      const desiredWithHierarchy = applyHierarchy(desired, state, actual, parentIds);
+
+      const plan = computePlan(desiredWithHierarchy, state, actual, { unresolved });
       if (opts.json) {
         out(plan);
       } else {
