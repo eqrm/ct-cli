@@ -16,6 +16,14 @@ export interface DesiredResource {
 
 export type PlanAction = "create" | "update" | "delete" | "no-op";
 
+/**
+ * A resource that needs surfacing beyond its plain action:
+ *  - `recreate`         — desired + managed, but vanished from ChurchTools (a create that replaces a dead id).
+ *  - `stale`            — managed + dropped from config + already gone from ChurchTools (nothing to delete; prune from state).
+ *  - `unresolved-type`  — managed but its type has no registry entry, so it cannot be fetched/diffed (left untouched).
+ */
+export type PlanNote = "recreate" | "stale" | "unresolved-type";
+
 export interface FieldChange {
   field: string;
   from: unknown;
@@ -32,8 +40,8 @@ export interface PlanItem {
   changes: FieldChange[];
   /** Manual changes in ChurchTools since adoption (last-known snapshot vs actual). */
   drift?: FieldChange[];
-  /** A managed resource that has vanished from ChurchTools and will be recreated. */
-  recreated?: boolean;
+  /** A non-standard state the plan must surface (see {@link PlanNote}). */
+  note?: PlanNote;
 }
 
 export interface Plan {

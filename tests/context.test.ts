@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createContext, evaluateConfig } from "../src/config/context.js";
+import { isKnownType } from "../src/engine/graph.js";
 
 describe("config context", () => {
   it("builds desired resources from DSL calls, separating key/parent from fields", () => {
@@ -38,6 +39,19 @@ describe("config context", () => {
   it("rejects a missing key", () => {
     const { ct } = createContext();
     expect(() => ct.campus({ name: "no key" } as never)).toThrow(/key/);
+  });
+
+  it("every DSL resource type has an apply tier (context and graph stay in sync)", () => {
+    const { ct, resources } = createContext();
+    ct.campus({ key: "a", name: "a" });
+    ct.group({ key: "b", name: "b" });
+    ct.groupType({ key: "c", name: "c" });
+    ct.ageGroup({ key: "d", name: "d" });
+    ct.targetGroup({ key: "e", name: "e" });
+    ct.relationshipType({ key: "f", name: "f" });
+    for (const r of resources) {
+      expect(isKnownType(r.type), `type "${r.type}" is missing from TYPE_TIER`).toBe(true);
+    }
   });
 
   it("evaluateConfig runs a module against a fresh context (blueprints + loops)", async () => {

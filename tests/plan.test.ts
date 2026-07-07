@@ -17,8 +17,17 @@ function managed(key: string, id: number, fields: Record<string, unknown>): Mana
   return { type: "campus", id, key, fields, adoptedAt: "t", updatedAt: "t" };
 }
 
+function managedT(type: string, key: string, id: number, fields: Record<string, unknown>): ManagedResource {
+  return { type, id, key, fields, adoptedAt: "t", updatedAt: "t" };
+}
+
 function stateOf(...entries: ManagedResource[]): State {
   return { version: 1, host: HOST, resources: Object.fromEntries(entries.map((e) => [e.key, e])) };
+}
+
+/** actual is keyed by logical key. */
+function actualOf(entries: Record<string, Record<string, unknown>>): Map<string, Record<string, unknown>> {
+  return new Map(Object.entries(entries));
 }
 
 describe("computePlan", () => {
@@ -33,35 +42,78 @@ describe("computePlan", () => {
     const plan = computePlan(
       [desired("mainz", { name: "Mainz" })],
       stateOf(managed("mainz", 0, { name: "Mainz" })),
-      new Map([[0, { name: "Mainz" }]]),
+      actualOf({ mainz: { name: "Mainz" } }),
     );
     expect(plan.items[0]).toMatchObject({ action: "no-op", key: "mainz", id: 0 });
+  });
+
+  it("does not collide two resources of different types that share a CT id", () => {
+    // campus 'mainz' #0 and group-type 'lead' #0 — a numeric-id map would overwrite one with the other.
+    const plan = computePlan(
+      [desired("mainz", { name: "Mainz" }), desired("lead", { name: "Lead" }, { type: "group-type" })],
+      stateOf(managed("mainz", 0, { name: "Mainz" }), managedT("group-type", "lead", 0, { name: "Lead" })),
+      actualOf({ mainz: { name: "Mainz" }, lead: { name: "Lead" } }),
+    );
+    const byKey = Object.fromEntries(plan.items.map((i) => [i.key, i]));
+    expect(byKey.mainz?.action).toBe("no-op");
+    expect(byKey.lead?.action).toBe("no-op");
+  });
+
+  it("throws when a config key collides with a different type in state", () => {
+    expect(() =>
+      computePlan(
+        [desired("x", { name: "A" }, { type: "campus" })],
+        stateOf(managedT("group", "x", 1, { name: "A" })),
+        actualOf({ x: { name: "A" } }),
+      ),
+    ).toThrow(/campus.*group|group.*campus/i);
+  });
+
+  it("throws for a desired resource whose type has no apply tier", () => {
+    expect(() =>
+      computePlan([desired("x", { name: "A" }, { type: "made-up" })], stateOf(), new Map()),
+    ).toThrow(/Unknown resource type/);
   });
 
   it("plans an update with just the changed fields", () => {
     const plan = computePlan(
       [desired("mainz", { name: "Mainz HQ", shortName: "MZ" })],
       stateOf(managed("mainz", 5, { name: "Mainz", shortName: "MZ" })),
-      new Map([[5, { name: "Mainz", shortName: "MZ" }]]),
+      actualOf({ mainz: { name: "Mainz", shortName: "MZ" } }),
     );
     expect(plan.items[0]).toMatchObject({ action: "update", id: 5 });
     expect(plan.items[0]?.changes).toEqual([{ field: "name", from: "Mainz", to: "Mainz HQ" }]);
+  });
+
+  it("does not flag a mere object-key-order difference as a change", () => {
+    const plan = computePlan(
+      [desired("mz", { nameTranslated: { en: "M", de: "M" } })],
+      stateOf(managed("mz", 1, { nameTranslated: { en: "M", de: "M" } })),
+      actualOf({ mz: { nameTranslated: { de: "M", en: "M" } } }), // reversed key order
+    );
+    expect(plan.items[0]?.action).toBe("no-op");
+    expect(plan.items[0]?.changes).toEqual([]);
   });
 
   it("plans a delete for a managed resource dropped from config", () => {
     const plan = computePlan(
       [],
       stateOf(managed("old", 9, { name: "Old" })),
-      new Map([[9, { name: "Old" }]]),
+      actualOf({ old: { name: "Old" } }),
     );
     expect(plan.items[0]).toMatchObject({ action: "delete", key: "old", id: 9 });
+  });
+
+  it("surfaces a dropped resource already gone from ChurchTools as stale, not a silent no-op", () => {
+    const plan = computePlan([], stateOf(managed("old", 9, { name: "Old" })), new Map());
+    expect(plan.items[0]).toMatchObject({ action: "no-op", key: "old", id: 9, note: "stale" });
   });
 
   it("reports drift when ChurchTools differs from the last-known snapshot", () => {
     const plan = computePlan(
       [desired("mainz", { name: "Mainz" })],
       stateOf(managed("mainz", 5, { name: "Mainz", shortName: "MZ" })),
-      new Map([[5, { name: "Mainz", shortName: "CHANGED" }]]),
+      actualOf({ mainz: { name: "Mainz", shortName: "CHANGED" } }),
     );
     expect(plan.items[0]?.drift).toEqual([{ field: "shortName", from: "MZ", to: "CHANGED" }]);
   });
@@ -72,12 +124,22 @@ describe("computePlan", () => {
       stateOf(managed("mainz", 5, { name: "Mainz" })),
       new Map(), // actual absent → 404
     );
-    expect(plan.items[0]).toMatchObject({ action: "create", recreated: true });
+    expect(plan.items[0]).toMatchObject({ action: "create", note: "recreate" });
+  });
+
+  it("leaves an unresolved-type managed resource untouched instead of recreating it", () => {
+    const plan = computePlan(
+      [desired("ag", { name: "A" }, { type: "age-group" })],
+      stateOf(managedT("age-group", "ag", 3, { name: "A" })),
+      new Map(), // could not fetch: type has no registry entry
+      { unresolved: new Set(["ag"]) },
+    );
+    expect(plan.items[0]).toMatchObject({ action: "no-op", note: "unresolved-type" });
   });
 
   it("never surfaces unmanaged resources", () => {
-    // actual contains an id that is neither in config nor state — must be ignored.
-    const plan = computePlan([], stateOf(), new Map([[42, { name: "Unmanaged" }]]));
+    // actual contains a key that is neither in config nor state — must be ignored.
+    const plan = computePlan([], stateOf(), actualOf({ ghost: { name: "Unmanaged" } }));
     expect(plan.items).toHaveLength(0);
   });
 
@@ -91,5 +153,14 @@ describe("computePlan", () => {
       new Map(),
     );
     expect(plan.items.map((i) => i.key)).toEqual(["parent", "child"]);
+  });
+
+  it("orders deletes in reverse tier order (higher tier first)", () => {
+    const plan = computePlan(
+      [],
+      stateOf(managedT("campus", "c", 1, {}), managedT("group", "g", 2, {})),
+      actualOf({ c: {}, g: {} }),
+    );
+    expect(plan.items.map((i) => i.key)).toEqual(["g", "c"]);
   });
 });

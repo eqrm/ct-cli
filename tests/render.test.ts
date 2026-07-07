@@ -49,4 +49,38 @@ describe("renderPlan", () => {
     expect(out).toMatch(/Drift detected/);
     expect(out).toMatch(/shortName/);
   });
+
+  it("surfaces stale state entries instead of reporting no changes", () => {
+    const out = renderPlan({
+      items: [{ type: "campus", key: "old", id: 9, action: "no-op", changes: [], note: "stale" }],
+    });
+    expect(out).not.toMatch(/No changes/);
+    expect(out).toMatch(/Stale state entries/);
+    expect(out).toMatch(/campus\.old/);
+  });
+
+  it("surfaces unresolved types", () => {
+    const out = renderPlan({
+      items: [{ type: "age-group", key: "ag", id: 3, action: "no-op", changes: [], note: "unresolved-type" }],
+    });
+    expect(out).not.toMatch(/No changes/);
+    expect(out).toMatch(/Unresolved types/);
+    expect(out).toMatch(/age-group\.ag/);
+  });
+
+  it("marks a recreate", () => {
+    const out = renderPlan({
+      items: [
+        {
+          type: "campus",
+          key: "mainz",
+          id: null,
+          action: "create",
+          changes: [{ field: "name", from: undefined, to: "Mainz" }],
+          note: "recreate",
+        },
+      ],
+    });
+    expect(out).toMatch(/recreate/);
+  });
 });

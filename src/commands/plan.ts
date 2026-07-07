@@ -7,6 +7,7 @@ import { loadState, resolveStatePath } from "../state/state.js";
 import { loadConfig, resolveConfigPath } from "../config/load.js";
 import { computePlan } from "../engine/plan.js";
 import { renderPlan } from "../engine/render.js";
+import { mapConcurrent } from "../util/concurrency.js";
 import { info, warn, out } from "../ui.js";
 
 interface PlanOptions {
@@ -14,6 +15,9 @@ interface PlanOptions {
   state?: string;
   json?: boolean;
 }
+
+/** How many managed resources to fetch from ChurchTools at once. */
+const FETCH_CONCURRENCY = 8;
 
 export function planCommand(): Command {
   return new Command("plan")
@@ -23,37 +27,55 @@ export function planCommand(): Command {
     .option("--json", "emit the raw plan as JSON instead of the rendered diff")
     .action(async (opts: PlanOptions) => {
       const config = resolveConfig();
-      const desired = await loadConfig(resolveConfigPath(opts.config));
+      const configPath = resolveConfigPath(opts.config);
+      const desired = await loadConfig(configPath);
       const state = await loadState(resolveStatePath(opts.state), config.host);
       if (state.host !== config.host) {
         throw new Error(`State host (${state.host}) does not match CT_HOST (${config.host}).`);
       }
 
       const { client } = await authedSession();
-      const actualById = new Map<number, Record<string, unknown>>();
-      for (const managed of Object.values(state.resources)) {
+      // Keyed by logical key (globally unique), not CT id (unique only within a type — the Mainz campus is id 0).
+      const actual = new Map<string, Record<string, unknown>>();
+      const unresolved = new Set<string>();
+      const fetchErrors: string[] = [];
+
+      await mapConcurrent(Object.values(state.resources), FETCH_CONCURRENCY, async (managed) => {
         const spec = RESOURCES[managed.type];
         if (!spec) {
-          warn(`No registry entry for managed type "${managed.type}" (#${managed.id}) — skipping.`);
-          continue;
+          unresolved.add(managed.key);
+          warn(
+            `No registry entry for managed type "${managed.type}" (${managed.type}.${managed.key} #${managed.id}) — cannot diff; leaving untouched.`,
+          );
+          return;
         }
         try {
           const raw = await client.get<Record<string, unknown>>(spec.itemPath(managed.id));
-          actualById.set(managed.id, spec.managedFields(raw));
+          actual.set(managed.key, spec.managedFields(raw));
         } catch (err) {
           if (err instanceof CtApiError && err.status === 404) {
-            continue; // vanished in CT — the plan will propose recreating it
+            return; // vanished in CT — the plan will propose recreating (or pruning) it
           }
-          throw err;
+          // A read-only plan should not abort on one bad fetch: record it, keep going, flag the plan as partial.
+          const message = err instanceof Error ? err.message : String(err);
+          fetchErrors.push(`${managed.type}.${managed.key} (#${managed.id}): ${message}`);
+          warn(`Failed to fetch ${managed.type}.${managed.key} (#${managed.id}): ${message}`);
         }
-      }
+      });
 
-      const plan = computePlan(desired, state, actualById);
+      const plan = computePlan(desired, state, actual, { unresolved });
       if (opts.json) {
         out(plan);
-        return;
+      } else {
+        info(`config: ${configPath} · state host: ${state.host}`);
+        process.stdout.write(`${renderPlan(plan)}\n`);
       }
-      info(`config: ${resolveConfigPath(opts.config)} · state host: ${state.host}`);
-      process.stdout.write(`${renderPlan(plan)}\n`);
+
+      if (fetchErrors.length > 0) {
+        warn(
+          `Plan is INCOMPLETE — ${fetchErrors.length} resource(s) could not be fetched; their diff is missing. Re-run to retry.`,
+        );
+        process.exitCode = 1;
+      }
     });
 }

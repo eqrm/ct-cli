@@ -17,4 +17,8 @@ describe("loadConfig", () => {
       /default-export a function/,
     );
   });
+
+  it("gives a friendly error when the config file is missing", async () => {
+    await expect(loadConfig(join(here, "fixtures/does-not-exist.config.ts"))).rejects.toThrow(/not found/i);
+  });
 });

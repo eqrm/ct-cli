@@ -25,15 +25,17 @@ function fmt(value: unknown): string {
 export function renderPlan(plan: Plan): string {
   const changed = plan.items.filter((i) => i.action !== "no-op");
   const drifted = plan.items.filter((i) => i.drift && i.drift.length > 0);
+  const stale = plan.items.filter((i) => i.note === "stale");
+  const unresolved = plan.items.filter((i) => i.note === "unresolved-type");
   const lines: string[] = [];
 
-  if (changed.length === 0 && drifted.length === 0) {
+  if (changed.length === 0 && drifted.length === 0 && stale.length === 0 && unresolved.length === 0) {
     return pc.green("No changes. Desired state matches ChurchTools.");
   }
 
   for (const item of changed) {
     const id = item.id !== null ? pc.dim(` (#${item.id})`) : "";
-    const note = item.recreated ? pc.yellow(" [recreate — missing in ChurchTools]") : "";
+    const note = item.note === "recreate" ? pc.yellow(" [recreate — missing in ChurchTools]") : "";
     lines.push(`  ${sigil(item.action)} ${item.type}.${item.key}${id}${note}`);
     for (const c of item.changes) {
       lines.push(
@@ -53,6 +55,22 @@ export function renderPlan(plan: Plan): string {
           `  ! ${item.type}.${item.key} (#${item.id}): ${c.field} = ${fmt(c.to)} (last known ${fmt(c.from)})`,
         );
       }
+    }
+  }
+
+  if (stale.length > 0) {
+    lines.push("");
+    lines.push(pc.yellow("Stale state entries (already gone from ChurchTools — prune from the state file):"));
+    for (const item of stale) {
+      lines.push(`  ! ${item.type}.${item.key} (#${item.id})`);
+    }
+  }
+
+  if (unresolved.length > 0) {
+    lines.push("");
+    lines.push(pc.yellow("Unresolved types (no registry entry — not diffed, left untouched):"));
+    for (const item of unresolved) {
+      lines.push(`  ? ${item.type}.${item.key} (#${item.id})`);
     }
   }
 

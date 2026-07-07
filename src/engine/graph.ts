@@ -29,6 +29,15 @@ export function tierOf(type: string): number {
 }
 
 /**
+ * Whether `type` has a declared apply tier. Every type the config DSL can emit
+ * MUST be here (locked by a test), so an unknown type is a registration bug —
+ * not something to silently order as tier 0.
+ */
+export function isKnownType(type: string): boolean {
+  return Object.prototype.hasOwnProperty.call(TYPE_TIER, type);
+}
+
+/**
  * Return logical keys in apply order. Stable: ties break by tier, then by the
  * original declaration order. Throws on a dependency cycle.
  */

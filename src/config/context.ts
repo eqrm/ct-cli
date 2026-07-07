@@ -55,6 +55,8 @@ export function createContext(): { ct: ConfigContext; resources: DesiredResource
       seen.add(resource.key);
       resources.push(resource);
     };
+  // Every type emitted here MUST have an apply tier in engine/graph.ts TYPE_TIER
+  // (locked by tests/context.test.ts), else computePlan rejects it at plan time.
   const ct: ConfigContext = {
     campus: define("campus"),
     group: define("group"),

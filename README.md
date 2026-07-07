@@ -50,6 +50,7 @@ ct auth status                                  # who am I?
 
 ct get campuses            # JSON to stdout — pipe into jq
 ct get groups
+ct get group-types
 ct get raw /groups/42      # arbitrary GET
 
 ct adopt campus 0          # bring an existing resource under management (→ state file)
