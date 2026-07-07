@@ -5,6 +5,7 @@ import { getCommand } from "./commands/get.js";
 import { adoptCommand } from "./commands/adopt.js";
 import { stateCommand } from "./commands/state.js";
 import { plannedCommands } from "./commands/placeholders.js";
+import { isMainModule } from "./isMain.js";
 import { error } from "./ui.js";
 
 export function buildProgram(): Command {
@@ -39,6 +40,6 @@ async function main(): Promise<void> {
 }
 
 /** Only run when invoked as the binary — importing this module (tests) must not parse argv. */
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(process.argv[1], import.meta.url)) {
   void main();
 }
