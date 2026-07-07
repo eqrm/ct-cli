@@ -7,11 +7,21 @@ describe("slug", () => {
     expect(slug("Kids 0–3")).toBe("kids_0_3");
     expect(slug("  MZ  ")).toBe("mz");
   });
+
+  it("strips German diacritics to their base letters instead of adding underscores", () => {
+    expect(slug("Zürich")).toBe("zurich");
+    expect(slug("Jugendküche")).toBe("jugendkuche");
+    expect(slug("Gebärdensprache")).toBe("gebardensprache");
+  });
 });
 
 describe("resourceType", () => {
   it("returns the campus spec with the right item path", () => {
     expect(resourceType("campus").itemPath(0)).toBe("/campuses/0");
+  });
+
+  it("builds the group-type item path from its collection path", () => {
+    expect(resourceType("group-type").itemPath(7)).toBe("/group/grouptypes/7");
   });
 
   it("throws for an unknown type, listing the known ones", () => {
@@ -20,6 +30,17 @@ describe("resourceType", () => {
 
   it("derives a key from campus shortName", () => {
     expect(RESOURCES.campus?.deriveKey({ name: "Mainz", shortName: "MZ" })).toBe("mz");
+  });
+
+  it("snapshots group ids whether they are nested under information or top-level", () => {
+    expect(
+      RESOURCES.group?.managedFields({ name: "Team", information: { groupTypeId: 2, groupStatusId: 1 } }),
+    ).toEqual({ name: "Team", groupTypeId: 2, groupStatusId: 1 });
+    expect(RESOURCES.group?.managedFields({ name: "Team", groupTypeId: 2, groupStatusId: 1 })).toEqual({
+      name: "Team",
+      groupTypeId: 2,
+      groupStatusId: 1,
+    });
   });
 });
 

@@ -62,4 +62,14 @@ describe("ct adopt", () => {
     await expect(runAdopt(["widget", "1", "--state", statePath])).rejects.toThrow(/Adoptable types/);
     expect(getMock).not.toHaveBeenCalled();
   });
+
+  it("rejects a non-integer id (trailing garbage) before any API call", async () => {
+    await expect(runAdopt(["campus", "3abc", "--state", statePath])).rejects.toThrow(
+      /expected a non-negative integer/,
+    );
+    await expect(runAdopt(["campus", "0x10", "--state", statePath])).rejects.toThrow(
+      /expected a non-negative integer/,
+    );
+    expect(getMock).not.toHaveBeenCalled();
+  });
 });

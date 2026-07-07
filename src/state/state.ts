@@ -41,20 +41,56 @@ export function emptyState(host: string): State {
   return { version: 1, host, resources: {} };
 }
 
+/**
+ * Load the state file at `path`, validating its shape and asserting it belongs
+ * to `host`. A missing file yields an empty state for `host`. `host` is the
+ * instance the caller intends to operate on: a file recorded against a
+ * different host is rejected here so no command (adopt, state list, …) can
+ * silently mix instances.
+ */
 export async function loadState(path: string, host: string): Promise<State> {
+  let raw: string;
   try {
-    const raw = await readFile(path, "utf8");
-    const parsed = JSON.parse(raw) as State;
-    if (parsed.version !== 1) {
-      throw new Error(`Unsupported state file version ${parsed.version} in ${path}`);
-    }
-    return parsed;
+    raw = await readFile(path, "utf8");
   } catch (err) {
     if (isNotFound(err)) {
       return emptyState(host);
     }
     throw err;
   }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Malformed state file ${path}: not valid JSON (${(err as Error).message}).`);
+  }
+
+  const state = validateState(parsed, path);
+  if (state.host !== host) {
+    throw new Error(
+      `State file host (${state.host}) does not match CT_HOST (${host}). Refusing to mix instances.`,
+    );
+  }
+  return state;
+}
+
+/** Assert the parsed JSON has the shape of a State; throw a friendly error otherwise. */
+function validateState(parsed: unknown, path: string): State {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Malformed state file ${path}: expected a JSON object at the top level.`);
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (obj.version !== 1) {
+    throw new Error(`Unsupported state file version ${String(obj.version)} in ${path}`);
+  }
+  if (typeof obj.host !== "string" || obj.host === "") {
+    throw new Error(`Malformed state file ${path}: missing or empty "host".`);
+  }
+  if (typeof obj.resources !== "object" || obj.resources === null || Array.isArray(obj.resources)) {
+    throw new Error(`Malformed state file ${path}: "resources" must be an object.`);
+  }
+  return obj as unknown as State;
 }
 
 export async function saveState(path: string, state: State): Promise<void> {

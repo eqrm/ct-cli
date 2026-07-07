@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { emptyState, upsert, findByTypeId, isManaged } from "../src/state/state.js";
+import { describe, it, expect, afterEach } from "vitest";
+import { writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { emptyState, loadState, saveState, upsert, findByTypeId, isManaged } from "../src/state/state.js";
 
 const HOST = "https://eqrm.church.tools";
 const NOW = "2026-07-07T00:00:00.000Z";
@@ -49,5 +52,50 @@ describe("state.upsert", () => {
     expect(() => upsert(state, { type: "group", id: 5, key: "shared", fields: {} }, NOW)).toThrow(
       /already used/,
     );
+  });
+});
+
+describe("state.loadState", () => {
+  const statePath = join(tmpdir(), `ct-cli-loadstate-${process.pid}.json`);
+
+  afterEach(async () => {
+    await rm(statePath, { force: true });
+  });
+
+  it("returns an empty state for the given host when the file is missing", async () => {
+    const state = await loadState(statePath, HOST);
+    expect(state).toEqual(emptyState(HOST));
+  });
+
+  it("round-trips a saved state", async () => {
+    const original = emptyState(HOST);
+    upsert(original, { type: "campus", id: 0, key: "mainz", fields: { name: "Mainz" } }, NOW);
+    await saveState(statePath, original);
+    expect(await loadState(statePath, HOST)).toEqual(original);
+  });
+
+  it("refuses to load a state file recorded against a different host", async () => {
+    await saveState(statePath, emptyState("https://other.church.tools"));
+    await expect(loadState(statePath, HOST)).rejects.toThrow(/Refusing to mix instances/);
+  });
+
+  it("rejects a structurally invalid state file (missing resources) with a friendly error", async () => {
+    await writeFile(statePath, JSON.stringify({ version: 1, host: HOST }), "utf8");
+    await expect(loadState(statePath, HOST)).rejects.toThrow(/"resources" must be an object/);
+  });
+
+  it("rejects a top-level non-object state file", async () => {
+    await writeFile(statePath, "null", "utf8");
+    await expect(loadState(statePath, HOST)).rejects.toThrow(/expected a JSON object/);
+  });
+
+  it("rejects invalid JSON with a friendly error", async () => {
+    await writeFile(statePath, "{ not json", "utf8");
+    await expect(loadState(statePath, HOST)).rejects.toThrow(/not valid JSON/);
+  });
+
+  it("rejects an unsupported version", async () => {
+    await writeFile(statePath, JSON.stringify({ version: 2, host: HOST, resources: {} }), "utf8");
+    await expect(loadState(statePath, HOST)).rejects.toThrow(/Unsupported state file version/);
   });
 });

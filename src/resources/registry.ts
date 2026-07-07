@@ -16,11 +16,19 @@ export interface AdoptableResource {
   managedFields: (resource: Record<string, unknown>) => Record<string, unknown>;
 }
 
-/** kebab/underscore slug: "Kids Leitung" → "kids_leitung". */
+/** Build an `itemPath` from a collection path, so each entry names its path once. */
+const item = (collectionPath: string) => (id: number) => `${collectionPath}/${id}`;
+
+/**
+ * kebab/underscore slug: "Kids Leitung" → "kids_leitung", "Zürich" → "zurich".
+ * NFKD splits accented letters into base + combining mark; we drop the marks so
+ * German names (ü/ö/ä/…) slug to their base letters rather than gaining a `_`.
+ */
 export function slug(value: string): string {
   return value
     .toLowerCase()
     .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 }
@@ -30,22 +38,29 @@ function str(resource: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+/** Read a field, preferring a nested `information` object but falling back to the top level. */
+function fromInformation(resource: Record<string, unknown>, key: string): unknown {
+  const information = (resource.information as Record<string, unknown> | undefined) ?? {};
+  return information[key] ?? resource[key];
+}
+
 export const RESOURCES: Record<string, AdoptableResource> = {
   campus: {
-    itemPath: (id) => `/campuses/${id}`,
+    itemPath: item("/campuses"),
     deriveKey: (r) => slug(str(r, "shortName") || str(r, "name")),
     managedFields: (r) => ({ name: r.name, shortName: r.shortName }),
   },
   group: {
-    itemPath: (id) => `/groups/${id}`,
+    itemPath: item("/groups"),
     deriveKey: (r) => slug(str(r, "name")),
-    managedFields: (r) => {
-      const information = (r.information as Record<string, unknown> | undefined) ?? {};
-      return { name: r.name, groupTypeId: information.groupTypeId, groupStatusId: information.groupStatusId };
-    },
+    managedFields: (r) => ({
+      name: r.name,
+      groupTypeId: fromInformation(r, "groupTypeId"),
+      groupStatusId: fromInformation(r, "groupStatusId"),
+    }),
   },
   "group-type": {
-    itemPath: (id) => `/group/grouptypes/${id}`,
+    itemPath: item("/group/grouptypes"),
     deriveKey: (r) => slug(str(r, "name")),
     managedFields: (r) => ({ name: r.name, nameTranslated: r.nameTranslated }),
   },

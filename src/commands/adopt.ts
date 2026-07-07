@@ -21,10 +21,17 @@ export function adoptCommand(): Command {
     .option("--dry-run", "preview the config entry and state change without writing")
     .action(async (type: string, rawId: string, opts: AdoptOptions) => {
       const spec = resourceType(type);
-      const id = Number.parseInt(rawId, 10);
-      if (!Number.isInteger(id)) {
-        throw new Error(`Invalid id "${rawId}" — expected an integer.`);
+      if (!/^\d+$/.test(rawId.trim())) {
+        throw new Error(`Invalid id "${rawId}" — expected a non-negative integer.`);
       }
+      const id = Number.parseInt(rawId, 10);
+
+      // Load + validate the state file (host guard included) BEFORE any network
+      // call, so a state file recorded against another instance never triggers a
+      // live authenticated request against the wrong ChurchTools host.
+      const config = resolveConfig();
+      const statePath = resolveStatePath(opts.state);
+      const state = await loadState(statePath, config.host);
 
       const { client } = await authedSession();
       const resource = await client.get<Record<string, unknown>>(spec.itemPath(id));
@@ -40,16 +47,6 @@ export function adoptCommand(): Command {
         info(`Would adopt ${type} #${id} as "${key}". Generated config entry:`);
         out({ key, type, id, fields, config: snippet });
         return;
-      }
-
-      const config = resolveConfig();
-      const statePath = resolveStatePath(opts.state);
-      const state = await loadState(statePath, config.host);
-      if (state.host !== config.host) {
-        throw new Error(
-          `State file host (${state.host}) does not match CT_HOST (${config.host}). ` +
-            `Refusing to mix instances.`,
-        );
       }
 
       const now = new Date().toISOString();

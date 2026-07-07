@@ -6,7 +6,8 @@
  * the binary is invoked through a symlink — npm link, a global install, or a
  * Homebrew shim all leave `argv[1]` as the symlink path while `import.meta.url`
  * is the module's realpath. Resolving both to their realpath makes the
- * comparison robust; a resolution failure falls back to a plain comparison.
+ * comparison robust; each side falls back to its raw path if resolution fails,
+ * so an unresolvable argv1 still gets compared against the module's realpath.
  */
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -20,9 +21,12 @@ export function isMainModule(
     return false;
   }
   const modulePath = fileURLToPath(metaUrl);
-  try {
-    return realpath(argv1) === realpath(modulePath);
-  } catch {
-    return argv1 === modulePath;
-  }
+  const resolve = (p: string): string => {
+    try {
+      return realpath(p);
+    } catch {
+      return p;
+    }
+  };
+  return resolve(argv1) === resolve(modulePath);
 }
