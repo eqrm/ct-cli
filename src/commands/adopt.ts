@@ -29,7 +29,7 @@ export function adoptCommand(): Command {
       // Load + validate the state file (host guard included) BEFORE any network
       // call, so a state file recorded against another instance never triggers a
       // live authenticated request against the wrong ChurchTools host.
-      const config = resolveConfig();
+      const config = await resolveConfig();
       const statePath = resolveStatePath(opts.state);
       const state = await loadState(statePath, config.host);
 

@@ -36,7 +36,7 @@ export function applyCommand(): Command {
     .option("--backup-dir <path>", "directory for the pre-apply backup (or set CT_BACKUP_DIR)")
     .option("-y, --auto-approve", "skip the confirmation prompt")
     .action(async (opts: ApplyOptions) => {
-      const config = resolveConfig();
+      const config = await resolveConfig();
       const configPath = resolveConfigPath(opts.config);
       const statePath = resolveStatePath(opts.state);
       const desired = await loadConfig(configPath);

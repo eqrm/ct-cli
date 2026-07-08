@@ -13,7 +13,7 @@
  * client is generated (`npm run generate:client`), the hand-written `request`
  * here can be swapped for `openapi-fetch` while keeping this class's surface.
  */
-import { resolveConfig, type CtConfig } from "../config.js";
+import { type CtConfig } from "../config.js";
 import { fetchWithRetry } from "./http.js";
 
 export interface WhoAmI {
@@ -40,7 +40,7 @@ export class CtClient {
   private cookie: string | null = null;
   private csrfToken: string | null = null;
 
-  constructor(private readonly config: CtConfig = resolveConfig()) {}
+  constructor(private readonly config: CtConfig) {}
 
   get host(): string {
     return this.config.host;

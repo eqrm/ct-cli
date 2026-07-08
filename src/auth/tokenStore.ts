@@ -1,15 +1,17 @@
 /**
- * Persistence for the personal ChurchTools login token.
+ * Persistence for the ChurchTools credentials: the instance **host** and the
+ * personal **login token**, stored together so a token is always bound to the
+ * instance it authenticates against.
  *
- * A single token is stored in the macOS Keychain (via the `security` CLI).
- * There is no file fallback: on CI or non-macOS hosts, supply the token through
- * the `CT_LOGINTOKEN` environment variable instead.
+ * They live in the macOS Keychain (via the `security` CLI) as a single JSON
+ * blob. There is no file fallback: on CI or non-macOS hosts, supply the host and
+ * token through the `CT_HOST` / `CT_LOGINTOKEN` environment variables instead.
  *
- * Read precedence:
- *   1. `CT_LOGINTOKEN` environment variable (CI / one-off use)
- *   2. macOS Keychain
+ * Read precedence is applied by the callers:
+ *   - token: `CT_LOGINTOKEN` env  → stored credentials
+ *   - host:  `CT_HOST` env        → stored credentials  (see config.ts)
  *
- * Note: `security ... -w <token>` passes the token as an argv, briefly visible
+ * Note: `security ... -w <value>` passes the value as an argv, briefly visible
  * to `ps`. Acceptable for a local developer CLI; the value never touches git.
  */
 import { platform } from "node:os";
@@ -18,13 +20,36 @@ import { promisify } from "node:util";
 
 const run = promisify(execFile);
 const KEYCHAIN_SERVICE = "ct-cli";
-const KEYCHAIN_ACCOUNT = "login-token";
+const KEYCHAIN_ACCOUNT = "credentials";
+
+export interface Credentials {
+  host: string;
+  token: string;
+}
 
 function isMac(): boolean {
   return platform() === "darwin";
 }
 
-async function keychainSet(token: string): Promise<void> {
+/** Parse the stored blob. Returns null for anything that is not a well-formed {host, token}. */
+export function parseCredentials(raw: string): Credentials | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null; // legacy bare-token value or corruption — require a fresh `auth login`
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return null;
+  }
+  const { host, token } = parsed as Record<string, unknown>;
+  if (typeof host !== "string" || host === "" || typeof token !== "string" || token === "") {
+    return null;
+  }
+  return { host, token };
+}
+
+async function keychainSet(value: string): Promise<void> {
   await run("security", [
     "add-generic-password",
     "-U",
@@ -33,7 +58,7 @@ async function keychainSet(token: string): Promise<void> {
     "-a",
     KEYCHAIN_ACCOUNT,
     "-w",
-    token,
+    value,
   ]);
 }
 
@@ -61,29 +86,41 @@ async function keychainDelete(): Promise<void> {
   }
 }
 
-/** Persist the token in the macOS Keychain; returns a human-readable location. */
-export async function storeToken(token: string): Promise<string> {
+/** Persist host + token in the macOS Keychain; returns a human-readable location. */
+export async function storeCredentials(creds: Credentials): Promise<string> {
   if (!isMac()) {
     throw new Error(
-      "Token storage requires the macOS Keychain. On other platforms, set CT_LOGINTOKEN instead.",
+      "Credential storage requires the macOS Keychain. On other platforms, set CT_HOST and CT_LOGINTOKEN instead.",
     );
   }
-  await keychainSet(token);
+  await keychainSet(JSON.stringify(creds));
   return `macOS Keychain (service "${KEYCHAIN_SERVICE}", account "${KEYCHAIN_ACCOUNT}")`;
 }
 
+/** The stored credentials, or null when nothing valid is stored. */
+export async function readCredentials(): Promise<Credentials | null> {
+  if (!isMac()) {
+    return null;
+  }
+  const raw = await keychainGet();
+  return raw ? parseCredentials(raw) : null;
+}
+
+/** The login token: `CT_LOGINTOKEN` env wins, else the stored credentials. */
 export async function readToken(): Promise<string | null> {
   const fromEnv = process.env.CT_LOGINTOKEN?.trim();
   if (fromEnv) {
     return fromEnv;
   }
-  if (isMac()) {
-    return keychainGet();
-  }
-  return null;
+  return (await readCredentials())?.token ?? null;
 }
 
-export async function clearToken(): Promise<void> {
+/** The stored instance host (no env fallback — env precedence lives in resolveConfig). */
+export async function readStoredHost(): Promise<string | null> {
+  return (await readCredentials())?.host ?? null;
+}
+
+export async function clearCredentials(): Promise<void> {
   if (isMac()) {
     await keychainDelete();
   }

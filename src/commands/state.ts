@@ -16,7 +16,7 @@ export function stateCommand(): Command {
     .option("-s, --state <path>", "state file path (or set CT_STATE)")
     .action(async (opts: StateOptions) => {
       const statePath = resolveStatePath(opts.state);
-      const state = await loadState(statePath, resolveConfig().host);
+      const state = await loadState(statePath, (await resolveConfig()).host);
       const resources = Object.values(state.resources);
       info(`${resources.length} managed resource(s) in ${statePath} (host ${state.host}).`);
       out(resources);

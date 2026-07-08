@@ -46,9 +46,9 @@ npm link             # optional: puts `ct` on your PATH
 ## Usage
 
 ```bash
-export CT_HOST=https://eqrm.church.tools   # default; override for a test instance
-
-ct auth login --token <personal-login-token>   # stored in the macOS Keychain
+# The host is captured at login (stored with the token). No hardcoded default —
+# CT_HOST overrides the stored host for CI / one-off use.
+ct auth login --host https://mychurch.church.tools --token <personal-login-token>
 ct auth status                                  # who am I?
 
 ct get campuses            # JSON to stdout — pipe into jq

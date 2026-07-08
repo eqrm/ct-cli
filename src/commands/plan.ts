@@ -20,7 +20,7 @@ export function planCommand(): Command {
     .option("-s, --state <path>", "state file (or set CT_STATE)")
     .option("--json", "emit the raw plan as JSON instead of the rendered diff")
     .action(async (opts: PlanOptions) => {
-      const config = resolveConfig();
+      const config = await resolveConfig();
       const configPath = resolveConfigPath(opts.config);
       const desired = await loadConfig(configPath);
       const state = await loadState(resolveStatePath(opts.state), config.host);

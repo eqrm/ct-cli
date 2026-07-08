@@ -53,7 +53,7 @@ export function destroyCommand(): Command {
         throw new Error("No --target given. Destroy never deletes implicitly.");
       }
 
-      const config = resolveConfig();
+      const config = await resolveConfig();
       const statePath = resolveStatePath(opts.state);
       const state = await loadState(statePath, config.host);
 

@@ -20,11 +20,19 @@ async function runAdopt(args: string[]): Promise<void> {
   await adoptCommand().parseAsync(args, { from: "user" });
 }
 
+const originalHost = process.env.CT_HOST;
+
 beforeEach(() => {
   getMock.mockClear();
+  process.env.CT_HOST = HOST; // host is now resolved from env/stored login, not a hardcoded default
 });
 
 afterEach(async () => {
+  if (originalHost === undefined) {
+    delete process.env.CT_HOST;
+  } else {
+    process.env.CT_HOST = originalHost;
+  }
   await rm(statePath, { force: true });
 });
 
