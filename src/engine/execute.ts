@@ -118,6 +118,11 @@ export async function executePlan(plan: Plan, deps: ExecuteDeps): Promise<Execut
         if (typeof res.id !== "number") {
           throw new Error(`create returned no numeric id (got ${JSON.stringify(res.id)})`);
         }
+        // A "recreate" create item (resource vanished from CT but still in state) leaves the
+        // stale entry — with the *old* id — under this key. upsert would read the new id as a
+        // key collision and throw, so the just-created resource never lands in state and every
+        // re-run POSTs another duplicate. Drop the stale entry: a create owns its key outright.
+        delete state.resources[item.key];
         upsert(state, { type: item.type, id: res.id, key: item.key, fields: body }, now());
         await save(statePath, state);
         await applyParentEdges(client, state, res.id, item.changes);

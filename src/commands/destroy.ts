@@ -114,7 +114,16 @@ export function destroyCommand(): Command {
         }
         const path = spec.itemPath(managed.id);
         assertNotPeople(path);
-        await client.request("DELETE", path);
+        try {
+          await client.request("DELETE", path);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          error(
+            `Stopped at ${key}: ${message}. Already-deleted targets are removed from state — re-run with the remaining targets to resume.`,
+          );
+          process.exitCode = 1;
+          return;
+        }
         delete state.resources[key];
         await saveState(statePath, state);
         success(`Destroyed ${managed.type}.${key} (#${managed.id})`);

@@ -63,6 +63,45 @@ describe("executePlan", () => {
     });
   });
 
+  it("recreates a vanished resource: the new id takes over the key instead of colliding on the stale entry", async () => {
+    // Resource deleted out-of-band in CT but still in state → computePlan emits a create item
+    // while the stale entry (old id 5) is still under this key. The create must replace it.
+    const state = emptyState("h");
+    state.resources.zurich = {
+      type: "campus",
+      id: 5,
+      key: "zurich",
+      fields: { name: "Zürich", shorty: "ZH" },
+      adoptedAt: "t",
+      updatedAt: "t",
+    };
+    const { client } = recorder({ "POST /campuses": { id: 8 } });
+    const plan: Plan = {
+      items: [
+        {
+          type: "campus",
+          key: "zurich",
+          id: null,
+          action: "create",
+          changes: [
+            { field: "name", from: undefined, to: "Zürich" },
+            { field: "shorty", from: undefined, to: "ZH" },
+          ],
+        },
+      ],
+    };
+    const result = await executePlan(plan, {
+      client,
+      state,
+      statePath: "s.json",
+      save: noSave,
+      now: fixedNow,
+    });
+    expect(result.failed).toBeUndefined();
+    expect(result.created).toEqual(["zurich"]);
+    expect(state.resources.zurich).toMatchObject({ id: 8, key: "zurich" });
+  });
+
   it("updates a group via PATCH with the full managed snapshot", async () => {
     const state = emptyState("h");
     state.resources.team = {
