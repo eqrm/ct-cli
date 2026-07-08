@@ -54,8 +54,10 @@ export const RESOURCES: Record<string, AdoptableResource> = {
   campus: define({
     collectionPath: "/campuses",
     updateMethod: "PUT",
-    deriveKey: (r) => slug(str(r, "shortName") || str(r, "name")),
-    managedFields: (r) => ({ name: r.name, shortName: r.shortName }),
+    // CT's campus short name is `shorty` (1–10 chars, required on create) — verified
+    // live. `shortName` is a vestigial, usually-null sibling; do not use it for writes.
+    deriveKey: (r) => slug(str(r, "shorty") || str(r, "name")),
+    managedFields: (r) => ({ name: r.name, shorty: r.shorty }),
   }),
   group: define({
     collectionPath: "/groups",

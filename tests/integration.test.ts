@@ -8,7 +8,7 @@ import type { DesiredResource } from "../src/engine/types.js";
 /** A tiny in-memory ChurchTools: a campuses store supporting GET/POST/PUT; hierarchy is empty. */
 function fakeCt() {
   const campuses = new Map<number, Record<string, unknown>>([
-    [0, { id: 0, name: "Mainz", shortName: "MZ" }],
+    [0, { id: 0, name: "Mainz", shorty: "MZ" }],
   ]);
   let nextId = 1;
   return {
@@ -53,14 +53,14 @@ describe("apply → re-plan shows no drift", () => {
       type: "campus",
       id: 0,
       key: "mz",
-      fields: { name: "Mainz", shortName: "MZ" },
+      fields: { name: "Mainz", shorty: "MZ" },
       adoptedAt: "t",
       updatedAt: "t",
     };
 
     const desired: DesiredResource[] = [
-      { type: "campus", key: "mz", fields: { name: "Mainz City", shortName: "MZ" }, dependsOn: [] },
-      { type: "campus", key: "zh", fields: { name: "Zürich", shortName: "ZH" }, dependsOn: [] },
+      { type: "campus", key: "mz", fields: { name: "Mainz City", shorty: "MZ" }, dependsOn: [] },
+      { type: "campus", key: "zh", fields: { name: "Zürich", shorty: "ZH" }, dependsOn: [] },
     ];
 
     const first = await buildPlan(client, state, desired);

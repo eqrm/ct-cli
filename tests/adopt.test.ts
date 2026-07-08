@@ -3,7 +3,7 @@ import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const fakeCampus = { id: 0, name: "Mainz", shortName: "MZ" };
+const fakeCampus = { id: 0, name: "Mainz", shorty: "MZ" };
 const getMock = vi.fn(async () => fakeCampus);
 
 vi.mock("../src/api/session.js", () => ({
@@ -36,7 +36,7 @@ describe("ct adopt", () => {
       type: "campus",
       id: 0,
       key: "mz",
-      fields: { name: "Mainz", shortName: "MZ" },
+      fields: { name: "Mainz", shorty: "MZ" },
     });
   });
 

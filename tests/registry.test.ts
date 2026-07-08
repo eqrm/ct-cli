@@ -28,8 +28,8 @@ describe("resourceType", () => {
     expect(() => resourceType("nope")).toThrow(/Adoptable types/);
   });
 
-  it("derives a key from campus shortName", () => {
-    expect(RESOURCES.campus?.deriveKey({ name: "Mainz", shortName: "MZ" })).toBe("mz");
+  it("derives a key from campus shorty", () => {
+    expect(RESOURCES.campus?.deriveKey({ name: "Mainz", shorty: "MZ" })).toBe("mz");
   });
 
   it("snapshots group ids whether they are nested under information or top-level", () => {

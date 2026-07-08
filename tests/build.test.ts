@@ -23,17 +23,17 @@ describe("buildPlan", () => {
       type: "campus",
       id: 0,
       key: "mainz",
-      fields: { name: "Mainz", shortName: "MZ" },
+      fields: { name: "Mainz", shorty: "MZ" },
       adoptedAt: "t",
       updatedAt: "t",
     };
     const desired: DesiredResource[] = [
-      { type: "campus", key: "mainz", fields: { name: "Mainz City", shortName: "MZ" }, dependsOn: [] },
+      { type: "campus", key: "mainz", fields: { name: "Mainz City", shorty: "MZ" }, dependsOn: [] },
     ];
-    const client = fakeClient({ "/campuses/0": { name: "Mainz", shortName: "MZ" } });
+    const client = fakeClient({ "/campuses/0": { name: "Mainz", shorty: "MZ" } });
     const { plan, actual, fetchErrors } = await buildPlan(client, state, desired);
     expect(fetchErrors).toEqual([]);
-    expect(actual.get("mainz")).toEqual({ name: "Mainz", shortName: "MZ" });
+    expect(actual.get("mainz")).toEqual({ name: "Mainz", shorty: "MZ" });
     const item = plan.items.find((i) => i.key === "mainz")!;
     expect(item.action).toBe("update");
     expect(item.changes).toEqual([{ field: "name", from: "Mainz", to: "Mainz City" }]);

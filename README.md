@@ -83,7 +83,7 @@ default-exports a function receiving the DSL:
 
 ```ts
 export default (ct) => {
-  ct.campus({ key: "mainz", name: "Mainz", shortName: "MZ" });
+  ct.campus({ key: "mainz", name: "Mainz", shorty: "MZ" });
   ct.group({ key: "mainz_area", name: "Mainz · Bereiche", groupTypeId: 2 });
   // Hierarchy is opt-in and multi-parent: `parents` are managed group keys, each declared
   // in this config. Omit it to leave a group's hierarchy unmanaged; edges to unmanaged

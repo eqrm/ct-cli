@@ -3,7 +3,7 @@
  * context and declares resources:
  *
  *   export default (ct: ConfigContext) => {
- *     ct.campus({ key: "mainz", name: "Mainz", shortName: "MZ" });
+ *     ct.campus({ key: "mainz", name: "Mainz", shorty: "MZ" });
  *     ct.group({ key: "mainz_area", name: "Mainz · Bereiche", groupTypeId: 2 });
  *     ct.group({ key: "mainz_kids", name: "Mainz · Kids", groupTypeId: 2, parents: ["mainz_area"] });
  *   };
