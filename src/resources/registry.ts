@@ -77,29 +77,31 @@ export const RESOURCES: Record<string, AdoptableResource> = {
     collectionPath: "/group/agegroups",
     updateMethod: "PUT",
     deriveKey: (r) => slug(str(r, "name")),
-    managedFields: (r) => ({ name: r.name, sortKey: r.sortKey }),
+    managedFields: (r) => ({ name: r.name, nameTranslated: r.nameTranslated, sortKey: r.sortKey }),
   }),
   "target-group": define({
     collectionPath: "/group/targetgroups",
     updateMethod: "PUT",
     deriveKey: (r) => slug(str(r, "name")),
-    managedFields: (r) => ({ name: r.name, sortKey: r.sortKey }),
+    managedFields: (r) => ({ name: r.name, nameTranslated: r.nameTranslated, sortKey: r.sortKey }),
   }),
   "relationship-type": define({
     collectionPath: "/person/relationshiptypes",
     updateMethod: "PUT",
     deriveKey: (r) => slug(str(r, "name")),
+    // CT names the two ends degreeNameA/degreeNameB (verified live) — not degreeForward/Reverse.
     managedFields: (r) => ({
       name: r.name,
-      degreeForward: r.degreeForward,
-      degreeReverse: r.degreeReverse,
+      nameTranslated: r.nameTranslated,
+      degreeNameA: r.degreeNameA,
+      degreeNameB: r.degreeNameB,
     }),
   }),
   "group-role": define({
     collectionPath: "/group/roles",
     updateMethod: "PUT",
     deriveKey: (r) => slug(str(r, "name")),
-    managedFields: (r) => ({ name: r.name, groupTypeId: r.groupTypeId }),
+    managedFields: (r) => ({ name: r.name, nameTranslated: r.nameTranslated, groupTypeId: r.groupTypeId }),
   }),
 };
 

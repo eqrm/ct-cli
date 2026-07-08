@@ -82,4 +82,30 @@ describe("write specs", () => {
     expect(RESOURCES["group-role"]?.collectionPath).toBe("/group/roles");
     expect(RESOURCES["age-group"]?.itemPath(3)).toBe("/group/agegroups/3");
   });
+
+  // Field sets verified live against eqrm.church.tools (2026-07-08).
+  it("snapshots real relationship-type degree fields (degreeNameA/B, not degreeForward/Reverse)", () => {
+    const raw = {
+      name: "relationship.couple",
+      nameTranslated: "Couple",
+      degreeNameA: "spouse",
+      degreeNameB: "spouse",
+      securityLevelId: 1,
+    };
+    expect(RESOURCES["relationship-type"]?.managedFields(raw)).toEqual({
+      name: "relationship.couple",
+      nameTranslated: "Couple",
+      degreeNameA: "spouse",
+      degreeNameB: "spouse",
+    });
+  });
+
+  it("snapshots age-group / group-role fields that exist on the live payload", () => {
+    expect(
+      RESOURCES["age-group"]?.managedFields({ name: "NextGen", nameTranslated: "NextGen", sortKey: 8 }),
+    ).toEqual({ name: "NextGen", nameTranslated: "NextGen", sortKey: 8 });
+    expect(
+      RESOURCES["group-role"]?.managedFields({ name: "Mitglied", nameTranslated: "Mitglied", groupTypeId: 2 }),
+    ).toEqual({ name: "Mitglied", nameTranslated: "Mitglied", groupTypeId: 2 });
+  });
 });
