@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { CtClient } from "../api/ctClient.js";
 import { normalizeHost } from "../config.js";
-import { storeCredentials, readCredentials, clearCredentials } from "../auth/tokenStore.js";
+import { storeCredentials, readToken, clearCredentials } from "../auth/tokenStore.js";
 import { authedSession } from "../api/session.js";
 import { meetsMinVersion, MIN_CT_VERSION, type CtInfo } from "../api/version.js";
 import { success, error, info, warn, out } from "../ui.js";
@@ -50,7 +50,7 @@ export function authCommand(): Command {
     .command("status")
     .description("Show the currently authenticated user")
     .action(async () => {
-      if (!(await readCredentials()) && !process.env.CT_LOGINTOKEN?.trim()) {
+      if (!(await readToken())) {
         error("Not logged in. Run `ct auth login --host <url> --token <token>`.");
         process.exitCode = 1;
         return;

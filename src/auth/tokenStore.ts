@@ -21,6 +21,8 @@ import { promisify } from "node:util";
 const run = promisify(execFile);
 const KEYCHAIN_SERVICE = "ct-cli";
 const KEYCHAIN_ACCOUNT = "credentials";
+/** Pre-host account name; a bare token used to live here. Cleared on logout so no secret is orphaned. */
+const LEGACY_KEYCHAIN_ACCOUNT = "login-token";
 
 export interface Credentials {
   host: string;
@@ -78,9 +80,9 @@ async function keychainGet(): Promise<string | null> {
   }
 }
 
-async function keychainDelete(): Promise<void> {
+async function keychainDelete(account: string): Promise<void> {
   try {
-    await run("security", ["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT]);
+    await run("security", ["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account]);
   } catch {
     /* not present — nothing to delete */
   }
@@ -122,6 +124,8 @@ export async function readStoredHost(): Promise<string | null> {
 
 export async function clearCredentials(): Promise<void> {
   if (isMac()) {
-    await keychainDelete();
+    await keychainDelete(KEYCHAIN_ACCOUNT);
+    // Also drop the pre-host bare-token entry so an upgrade doesn't leave a secret behind.
+    await keychainDelete(LEGACY_KEYCHAIN_ACCOUNT);
   }
 }
