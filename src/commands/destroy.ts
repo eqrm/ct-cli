@@ -96,6 +96,23 @@ async function fetchParentEdges(
   }
 }
 
+/**
+ * Type-level teardown warnings for the targets of this run (#99 review) — one line per target whose
+ * resource type declares a `destroyWarning`. A non-empty result also means `--force` must NOT skip
+ * the typed confirmation: these are the deletes whose blast radius leaves the managed surface (today:
+ * `person-status`, whose deletion mutates every person carrying it), so an unattended `--force`
+ * teardown is exactly the run that should stop and ask.
+ */
+export function destroyWarnings(state: State, keys: string[]): string[] {
+  const out: string[] = [];
+  for (const key of keys) {
+    const type = state.resources[key]?.type;
+    const warning = type ? RESOURCES[type]?.destroyWarning : undefined;
+    if (warning) out.push(`${type}.${key}: ${warning}`);
+  }
+  return out;
+}
+
 export function destroyCommand(): Command {
   return new Command("destroy")
     .description("Explicitly delete managed resources (protected; never implicit)")
@@ -107,7 +124,10 @@ export function destroyCommand(): Command {
       "confirm a protected env non-interactively (must match --env exactly)",
     )
     .option("--backup-dir <path>", "directory for the pre-destroy backup (or set CT_BACKUP_DIR)")
-    .option("--force", "skip the typed confirmation (preventDestroy is still enforced)")
+    .option(
+      "--force",
+      "skip the typed confirmation (preventDestroy — and a type-level destroy warning, e.g. person-status — is still enforced)",
+    )
     .action(async (opts: DestroyOptions) => {
       const targets = parseTargets(opts.target ?? []);
       if (targets.length === 0) {
@@ -159,12 +179,21 @@ export function destroyCommand(): Command {
       info(`Backup written: ${backupPath}`);
 
       warn(`About to DELETE: ${ordered.join(", ")}`);
+      // Type-level risk (see `destroyWarnings`): surfaced before the prompt, and it takes `--force`
+      // away for this run so the delete cannot go through unattended.
+      const risky = destroyWarnings(state, ordered);
+      for (const line of risky) {
+        warn(`RISK — ${line}`);
+      }
+      if (risky.length > 0 && opts.force) {
+        warn("--force does NOT skip confirmation for the target(s) above. Confirm interactively.");
+      }
       // Protected env (#22): typed confirmation of the env NAME is mandatory and --force does NOT bypass
       // it (--confirm-env <name> substitutes in CI). Otherwise the usual per-target typed confirmation.
       const expected = targets.length === 1 ? targets[0]! : "destroy";
       const ok = cmdEnv.protected
         ? await confirmEnv(cmdEnv.name!, { confirmFlag: opts.confirmEnv })
-        : await confirmTyped(expected, { force: opts.force });
+        : await confirmTyped(expected, { force: opts.force && risky.length === 0 });
       if (!ok) {
         warn(
           cmdEnv.protected

@@ -279,6 +279,54 @@ describe("Resolver.resolveValue", () => {
   });
 });
 
+describe("catalogs are read PAGINATED (#99 review)", () => {
+  /**
+   * A client that also has `getAll`, like the real one. `get` returns only the first page — which is
+   * exactly what CT does for a plain list read (10 rows by default) — so a resolver that used `get`
+   * would report the page-2 row as non-existent while `ct get campuses` happily lists it.
+   */
+  function pagingClient(pages: Record<string, unknown[][]>) {
+    const calls: Record<string, number> = {};
+    return {
+      calls,
+      get: async <T>(path: string): Promise<T> => {
+        calls[path] = (calls[path] ?? 0) + 1;
+        return (pages[path]?.[0] ?? []) as T;
+      },
+      getAll: async <T>(path: string): Promise<{ data: T[] }> => {
+        calls[path] = (calls[path] ?? 0) + 1;
+        return { data: (pages[path] ?? []).flat() as T[] };
+      },
+    };
+  }
+
+  const campusPages = [
+    Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `Campus ${i + 1}` })),
+    [{ id: 42, name: "Koblenz" }], // page 2 — invisible to a single `get`
+  ];
+
+  it("resolves a campus that lives past CT's default first page", async () => {
+    const client = pagingClient({ "/campuses": campusPages });
+    const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });
+    expect(await r.resolve(ref.campus("koblenz"), "site")).toBe(42);
+    expect(client.calls["/campuses"]).toBe(1); // still fetched once per run
+  });
+
+  it("pages the per-group role list too", async () => {
+    const state = stateWith({
+      kids: { type: "group", id: 42, key: "kids", fields: {}, adoptedAt: "t", updatedAt: "t" },
+    });
+    const client = pagingClient({
+      "/groups/42/roles": [
+        Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `Rolle ${i + 1}` })),
+        [{ id: 2882, name: "Leiter" }],
+      ],
+    });
+    const r = new Resolver({ client, state, desired: NO_DESIRED });
+    expect(await r.resolve(ref.groupRole("kids", "Leiter"), "perm \"p\"")).toBe(2882);
+  });
+});
+
 describe("reresolvePendingValue", () => {
   it("replaces a pending marker with the id from post-execute state", () => {
     const state = stateWith({

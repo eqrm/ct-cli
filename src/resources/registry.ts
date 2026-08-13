@@ -35,6 +35,16 @@ export interface AdoptableResource {
    */
   createDefaults?: (body: Record<string, unknown>) => Record<string, unknown>;
   /**
+   * Extra teardown risk for this type, shown before `ct destroy` confirms — and, when set, `--force`
+   * does NOT skip the typed confirmation for a run touching it (#99 review).
+   *
+   * Set it only where the DELETE reaches past master data into records this tool otherwise never
+   * touches. `assertNotPeople` guards PATHS, and a type like `person-status` has a perfectly
+   * innocent one (`/statuses/{id}`) while its deletion still mutates every person carrying that
+   * status — a gap no path denylist can close.
+   */
+  destroyWarning?: string;
+  /**
    * DSL function name `configSnippet` emits for this type. Defaults to the camelCase of
    * the type name. Set it when the natural camelCase collides with another DSL surface
    * (e.g. `group-role` → `roleDefinition`, because `groupRole` is the permission function).
@@ -215,6 +225,14 @@ export const RESOURCES: Record<string, AdoptableResource> = {
     collectionPath: "/statuses",
     updateMethod: "PUT",
     tier: 0,
+    // The one managed type whose DELETE reaches person RECORDS (#99 review). `/statuses/{id}` is not
+    // a people path, so `assertNotPeople` cannot see the risk: deleting a status makes ChurchTools
+    // re-stamp every person who carries it. Drop the declaration and `ct destroy` would otherwise
+    // take it out behind a plain typed confirmation — or none at all under `--force`.
+    destroyWarning:
+      "deleting a person status MUTATES every person carrying it (ChurchTools re-stamps their " +
+      "status). `ct` never manages people, but this delete reaches them. Verify the status is " +
+      "unused first (`ct get statuses`, then check the status in ChurchTools).",
     deriveKey: (r) => slug(str(r, "name")),
     managedFields: (r) => ({
       name: r.name,

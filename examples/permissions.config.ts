@@ -88,8 +88,15 @@ export default (ct: ConfigContext): void => {
   // All six fields are declared because CT's `PUT /statuses/{id}` requires every one of them and is
   // a full replace — unlike every other managed type, a partial declaration here would 400 (and, if
   // it didn't, blank the omitted fields). `ct adopt person-status <id>` emits exactly this shape.
+  //
+  // The key is `slug(name)` on purpose. A `personStatus:` reference resolves against managed state
+  // FIRST and the live `/statuses` catalog second (which matches by `slug(name)`), so a key that
+  // does not slug from the name — `"core"` for "5 - Core" — can only ever match this declaration:
+  // on a host that already HAS a "5 - Core" status but has not adopted it, the plan would create a
+  // second, identically-named status and hang the grants off that one, leaving the real status
+  // ungranted. `ct adopt person-status <id>` emits `slug(name)` for the same reason.
   ct.personStatus({
-    key: "core",
+    key: "5_core",
     name: "5 - Core",
     shorty: "Core",
     isMember: true,
@@ -99,7 +106,7 @@ export default (ct: ConfigContext): void => {
   });
   ct.status({
     key: "core_external_login",
-    personStatus: "core",
+    personStatus: "5_core",
     grants: [{ right: "churchcore:login to external system", scope: [-1] }],
   });
 };

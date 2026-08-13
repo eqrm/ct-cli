@@ -97,7 +97,10 @@ function makeClient() {
 
   const getAll = vi.fn(async (path: string) => {
     if (path === "/groups") return { data: Object.values(groups) };
-    throw new CtApiError(`unmocked getAll ${path}`, 404, null);
+    // The Resolver reads master-data catalogs paginated (#99 review), so serve them here too —
+    // same rows as `get`, wrapped in the page envelope.
+    const single = await get(path);
+    return { data: Array.isArray(single) ? single : [single] };
   });
 
   return { get, getAll };

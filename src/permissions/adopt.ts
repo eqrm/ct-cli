@@ -27,15 +27,6 @@ const DSL_FN: Record<DomainType, string> = {
   status: "ct.status",
 };
 
-/**
- * Shared with the planner so adoption and reconciliation can never disagree about which dimensions
- * have a logical form: `GROUP_SCOPE_FIELD` is the group dimension (emitted as a bare string key),
- * `SCOPE_REF_KIND` maps every other dimension WITH a logical form (campus, group type — #98) to the
- * managed resource type its dataIds are looked up as. A dimension in neither (`cc_securitylevel`,
- * `cdb_bereich`, `oauth_client`, …) has no name to emit, so its dataIds pass through as the numeric
- * scope escape hatch (#49).
- */
-
 /** DSL sugar field name per managed scope type, for emitting `{ campus: "koblenz" }`-style refs. */
 const SCOPE_SUGAR_FIELD: Readonly<Record<string, string>> = {
   campus: "campus",
@@ -241,15 +232,22 @@ function grantLines(
       if (sugar && unmanaged.length > 0) {
         // Not a WARNING: the numeric line below IS valid, applicable config — it is just not portable
         // to another host. So this never counts into `omitted` (nothing would be revoked).
+        const one = unmanaged.length === 1;
+        // `ct adopt <type> <id>` takes exactly ONE id, so name every unmanaged id: telling the author
+        // to adopt `unmanaged[0]` alone would leave the rest numeric and the block still unportable.
+        const commands = unmanaged.map((id) => `\`ct adopt ${dimension!.type} ${id}\``).join(", ");
         out.push(
           `    // NOTE: "${entry.name}" scopes by "${entry.scopeField}" (${dimension!.type}). ${unmanaged.join(", ")} ` +
-            `${unmanaged.length === 1 ? "is" : "are"} not managed, so`,
+            `${one ? "is" : "are"} not managed, so`,
         );
         out.push(
-          `    //       ${unmanaged.length === 1 ? "it stays a" : "they stay"} host-specific number(s) — run ` +
-            `\`ct adopt ${dimension!.type} ${unmanaged[0]}\` and re-adopt to make ${unmanaged.length === 1 ? "it" : "them"} portable.`,
+          `    //       ${one ? "it stays a" : "they stay"} host-specific number(s) — run ${commands} ` +
+            `and re-adopt to make ${one ? "it" : "them all"} portable.`,
         );
-      } else if (!sugar) {
+      } else if (!dimension) {
+        // Reached only for a dimension with NO logical form at all (`cc_securitylevel`, `oauth_client`,
+        // …). A catalog-only dimension (`cdb_bereich`) already got its own NOTE above — emitting this
+        // line there too would contradict it ("not a group, use numbers" vs "portable form exists").
         out.push(`    // "${entry.name}" scopes by "${entry.scopeField}", not a group — using its numeric dataId(s) directly.`);
       }
       out.push(`    { right: ${JSON.stringify(entry.name)}, scope: [${entries.join(", ")}] },`);

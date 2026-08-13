@@ -97,7 +97,14 @@ interface CatalogRecord {
 }
 
 export interface ResolverDeps {
-  client: Pick<CtClient, "get">;
+  /**
+   * `getAll` is what the catalogs below are actually read with (#99 review): CT's list endpoints
+   * return only their default first page (10 rows) for a plain `get`, which would make a campus,
+   * group type or department past that page unresolvable by name on any real instance — exactly the
+   * portability #98 exists to give. It is optional so the many `{ get }` test doubles keep working;
+   * the real {@link CtClient} always provides it.
+   */
+  client: Pick<CtClient, "get"> & Partial<Pick<CtClient, "getAll">>;
   state: State;
   desired: DesiredResource[];
   /** Host label for error messages. Defaults to `state.host`. */
@@ -133,7 +140,7 @@ const GROUP_ROLE_ENDPOINT = (groupId: number): string => `/groups/${groupId}/rol
 const GROUP_ROLE_PAIRING_FIELD = "id";
 
 export class Resolver {
-  private readonly client: Pick<CtClient, "get">;
+  private readonly client: Pick<CtClient, "get"> & Partial<Pick<CtClient, "getAll">>;
   private readonly state: State;
   private readonly host: string;
   private readonly catalogs = new Map<RefKind, Promise<CatalogRecord[]>>();
@@ -189,11 +196,23 @@ export class Resolver {
     return deepMapRefs(value, (r) => byKey.get(refKey(r)));
   }
 
+  /**
+   * Fetch one master-data catalog, ONCE per run, paginated.
+   *
+   * Paginated deliberately (#99 review): a plain `GET /campuses` returns CT's default first page —
+   * 10 rows — so on an instance with more campuses/group types/departments than that, every ref
+   * naming a row on page 2+ would hard-error with "no live … matches key", and a `ct get campuses`
+   * (which pages) would list the very row this resolver claims does not exist. `getAll` is optional
+   * on the deps only so `{ get }` test doubles stay usable; the real client always has it.
+   */
   private catalog(kind: RefKind): Promise<CatalogRecord[]> {
     let p = this.catalogs.get(kind);
     if (!p) {
       const path = CATALOG_PATH[kind]!;
-      p = this.client.get<CatalogRecord[]>(path).then((rows) => (Array.isArray(rows) ? rows : []));
+      const rows = this.client.getAll
+        ? this.client.getAll<CatalogRecord>(path).then((page) => page.data)
+        : this.client.get<CatalogRecord[]>(path);
+      p = rows.then((r) => (Array.isArray(r) ? r : []));
       this.catalogs.set(kind, p);
     }
     return p;
@@ -333,9 +352,13 @@ export class Resolver {
   private groupRoleList(groupId: number): Promise<CatalogRecord[]> {
     let p = this.groupRoleLists.get(groupId);
     if (!p) {
-      p = this.client
-        .get<CatalogRecord[]>(GROUP_ROLE_ENDPOINT(groupId))
-        .then((rows) => (Array.isArray(rows) ? rows : []));
+      // Paginated for the same reason as `catalog()` above: a group with more than CT's default page
+      // of roles would otherwise hide its later ones behind "group #N has no role named …".
+      const path = GROUP_ROLE_ENDPOINT(groupId);
+      const rows = this.client.getAll
+        ? this.client.getAll<CatalogRecord>(path).then((page) => page.data)
+        : this.client.get<CatalogRecord[]>(path);
+      p = rows.then((r) => (Array.isArray(r) ? r : []));
       this.groupRoleLists.set(groupId, p);
     }
     return p;

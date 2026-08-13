@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseTargets, orderDestroy, runDeleteLoop } from "../src/commands/destroy.js";
+import { parseTargets, orderDestroy, runDeleteLoop, destroyWarnings } from "../src/commands/destroy.js";
 import { emptyState, type State } from "../src/state/state.js";
 import { CtApiError, type CtClient } from "../src/api/ctClient.js";
 
@@ -118,5 +118,20 @@ describe("runDeleteLoop", () => {
     expect(combined).toContain("no permission");
     errSpy.mockRestore();
     process.exitCode = prevExit;
+  });
+});
+
+describe("destroyWarnings (#99 review)", () => {
+  it("flags a person-status target — the one delete that reaches person records", () => {
+    const state = stateWith({ key: "core", type: "person-status", id: 5 });
+    const lines = destroyWarnings(state, ["core"]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("person-status.core");
+    expect(lines[0]).toMatch(/MUTATES every person carrying it/);
+  });
+
+  it("stays silent for ordinary master data (and for an unknown key)", () => {
+    const state = stateWith({ key: "mainz", type: "campus", id: 1 });
+    expect(destroyWarnings(state, ["mainz", "ghost"])).toEqual([]);
   });
 });

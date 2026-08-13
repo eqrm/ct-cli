@@ -5,7 +5,7 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: 9d10c1a6cab493f3
+sources_hash: 03c3ae24524afcc9
 reviewed: 2026-08-13
 ---
 
@@ -160,9 +160,26 @@ The two DSL functions manage two different ChurchTools "domain types," and
   Since #96 the status itself is also **declarable**, via `ct.personStatus`:
 
   ```ts
-  ct.personStatus({ key: "group_active", name: "3 - Group Active", shorty: "GA" });
-  ct.status({ key: "group_active_login", personStatus: "group_active", grants: [...] });
+  ct.personStatus({ key: "3_group_active", name: "3 - Group Active", shorty: "GA" });
+  ct.status({ key: "3_group_active_login", personStatus: "3_group_active", grants: [...] });
   ```
+
+  **Key it as `slug(name)`.** A `personStatus:` reference resolves against
+  managed state first and the live `/statuses` catalog second, and the catalog
+  matches by `slug(name)` — so a key that does not slug from the name (`"core"`
+  for `"5 - Core"`) can only ever match the declaration. On a host that already
+  has that status but has not adopted it, the plan then **creates a second,
+  identically-named status** and grants on the new one, leaving the real one
+  untouched. `ct adopt person-status <id>` emits `slug(name)` for this reason;
+  match it.
+
+  > **Teardown caveat.** A person status is the one managed type whose deletion
+  > reaches person *records*: dropping the declaration and running `ct destroy`
+  > deletes the status, and ChurchTools re-stamps every person carrying it.
+  > `assertNotPeople` cannot catch this (`/statuses/{id}` is not a people path),
+  > so `ct destroy` warns explicitly for this type and `--force` does **not**
+  > skip its confirmation. Set `preventDestroy: true` on the declaration if the
+  > status is load-bearing.
 
   That is what makes a config using the `status` domain self-sufficient across
   hosts. Before it, `personStatus: "…"` could only resolve against statuses that
@@ -297,7 +314,10 @@ Resolution mirrors the domain-reference rules: managed state first, the live
 master-data catalog second, and a target **declared in this same config**
 resolves to a *pending* scope re-resolved at apply time. A reference resolved
 through the catalog (not under management) carries an already-final id and is
-not re-resolved.
+not re-resolved. Catalogs are read **paginated** — ChurchTools returns only a
+first page (10 rows) for a plain list read, so an instance with more campuses,
+group types or departments than that would otherwise report a perfectly real
+name as unresolvable.
 
 Three things are hard errors at **plan** time, never a guessed `dataId`:
 
