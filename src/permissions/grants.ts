@@ -35,6 +35,13 @@ export interface GrantTuple {
    */
   scopeKey?: string;
   /**
+   * The MANAGED RESOURCE TYPE behind {@link scopeKey} — "group" for the historical group dimension,
+   * "campus" / "group-type" for a typed logical scope ref (#98). Read by `reresolveTuple` so the
+   * post-apply state lookup checks the right type; absent means "group" for backward compatibility
+   * with tuples built before typed scope refs existed.
+   */
+  scopeType?: string;
+  /**
    * True when `scopeKey` names a group DECLARED in this config but not yet created (absent from
    * state at plan time). Its real dataId is unknown until `executePlan` runs, so the plan renders
    * it as pending and it always diffs into `toPut`. Cleared once re-resolved at apply time.

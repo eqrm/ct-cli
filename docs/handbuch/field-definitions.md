@@ -3,8 +3,8 @@ title: Field definitions & security levels
 sources:
   - src/commands/get.ts
   - src/api/ctClient.ts
-sources_hash: 580645532edbdf9a
-reviewed: 2026-08-10
+sources_hash: 24ea82f0326ed7d5
+reviewed: 2026-08-13
 ---
 
 # Field definitions & security levels (#47, #48)
@@ -20,6 +20,17 @@ the data-field definitions ("Datenfelder") for both persons and groups.
 | What fields a person/group *has* (field definitions, types, field groups)   | The **value** of any field on an actual person or group record        |
 | The security-level model (levels + what visibility they gate)               | Which persons exist, their memberships, their master-data values      |
 | The person master-data model (sexes, titles, statuses, campuses, …)         | Assigning/reading a person's status, sex, campus, etc.                |
+
+> **Exception — person statuses are managed, not just read (#96).** The status
+> *enumeration* ("0 - First", "3 - Group Active", …) is a declarable resource:
+> `ct.personStatus({ key, name, shorty })`, adoptable with
+> `ct adopt person-status <id>` and listable with `ct get statuses`
+> (`/statuses`, full CRUD). That is what lets a config declare permission grants
+> on a status (`ct.status`) and still stand up on a fresh host. Which *person*
+> carries which status remains permanently out of scope, like every other
+> per-record value. Campuses are likewise managed (`ct.campus`); the rest of the
+> master-data model — sexes, titles, the security-level enumeration — stays
+> read-only.
 
 This mirrors the tool's permanent people boundary (README "People are never
 managed"; `assertNotPeople` in `src/engine/guard.ts`). The commands below read

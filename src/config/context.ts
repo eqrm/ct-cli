@@ -17,6 +17,7 @@ import type { DesiredResource, DynamicSpec, DynamicStatus } from "../engine/type
 import type { DomainType } from "../permissions/grants.js";
 import type { DesiredPermission, Grant } from "../permissions/types.js";
 import { GROUP_STATUS_NO_CATALOG, isRef, ref, refKey, type Ref } from "../resolve/refs.js";
+import { normalizeScopeEntry } from "../permissions/scope.js";
 import { conventionalRulesetRef, knownFields } from "../resources/registry.js";
 import { warn } from "../ui.js";
 // Re-exported so a config file can pull the query DSL from the same module as
@@ -212,6 +213,13 @@ export interface ConfigContext {
   ageGroup(input: ResourceInput): void;
   targetGroup(input: ResourceInput): void;
   relationshipType(input: ResourceInput): void;
+  /**
+   * A PERSON status (`/statuses` — "0 - First", "3 - Group Active", …), #96. Declaring one makes a
+   * config that grants ON a status self-sufficient across hosts: without it the status had to be
+   * created by hand on every target instance before `ct.status` could resolve `personStatus: "…"`.
+   * Master data, not people — a status is the enumeration, never a person or a membership.
+   */
+  personStatus(input: ResourceInput): void;
   /** Master-data group role (`/group/roles`). Named `roleDefinition` to avoid colliding
    *  with the `groupRole` permission function below. */
   roleDefinition(input: ResourceInput): void;
@@ -427,25 +435,23 @@ export function createContext(): {
     const domainId = resolveDomainInput(domainType, input);
     if (!Array.isArray(input.grants))
       throw new Error(`${domainType} "${input.key}": "grants" must be an array.`);
-    for (const g of input.grants) {
+    // Normalise each grant's scope at eval time: object sugar (`{ campus: "koblenz" }`) becomes the
+    // equivalent Ref, bare strings/numbers pass through (#98). Same sugar→Ref move `ID_SUGAR` makes
+    // for declaration id fields, and it produces a NEW array — the author's input is never mutated.
+    const grants: Grant[] = input.grants.map((g) => {
       const right = typeof g === "string" ? g : g?.right;
       if (typeof right !== "string" || !right.includes(":"))
         throw new Error(
           `${domainType} "${input.key}": each grant must be a "module:right" string or { right, scope }.`,
         );
-      if (typeof g === "object") {
-        if (!Array.isArray(g.scope))
-          throw new Error(`${domainType} "${input.key}": scoped grant needs "scope": (string | number)[].`);
-        // Each entry is a logical group key, or a raw numeric dataId (#49 escape hatch — for scope
-        // dimensions that aren't groups, e.g. security levels, which have no logical/managed form).
-        for (const s of g.scope) {
-          if (typeof s === "string" ? s.length === 0 : typeof s !== "number")
-            throw new Error(
-              `${domainType} "${input.key}": scope entries must be a non-empty string (logical group key) or a number (raw dataId), got ${JSON.stringify(s)}.`,
-            );
-        }
-      }
-    }
+      if (typeof g === "string") return g;
+      if (!Array.isArray(g.scope))
+        throw new Error(
+          `${domainType} "${input.key}": scoped grant needs "scope": (string | number | { campus | groupType | group })[].`,
+        );
+      const where = `${domainType} "${input.key}" grant "${right}"`;
+      return { right, scope: g.scope.map((s) => normalizeScopeEntry(s, where)) };
+    });
     if (seen.has(input.key)) throw new Error(`Duplicate logical key "${input.key}" in config.`);
     seen.add(input.key);
     // Duplicate-target guard, keyed by the canonical domain string (numeric id or Ref key). This
@@ -460,7 +466,7 @@ export function createContext(): {
       );
     }
     seenDomains.set(domainKey, input.key);
-    permissions.push({ key: input.key, domainType, domainId, grants: input.grants });
+    permissions.push({ key: input.key, domainType, domainId, grants });
   };
   const definePermission =
     (domainType: DomainType) =>
@@ -481,6 +487,7 @@ export function createContext(): {
     ageGroup: define("age-group"),
     targetGroup: define("target-group"),
     relationshipType: define("relationship-type"),
+    personStatus: define("person-status"),
     roleDefinition: define("group-role"),
     groupRole: definePermission("group_role"),
     groupTypeRole: definePermission("group_type_role"),

@@ -39,8 +39,8 @@ export default (ct: ConfigContext): void => {
   // pair instead of a numeric domainId. The group must be managed (declared
   // above / adopted) and already created; the resolver maps the pair to the
   // pairing domainId per host. Numeric escape hatch: `id: <domainId>` instead
-  // of `group`/`role`. (See docs/handbuch/permissions.md "domainId semantics" for the
-  // resolution assumption still to be confirmed live.)
+  // of `group`/`role`. (See docs/handbuch/permissions.md "domainId semantics" —
+  // the pairing-id resolution is verified live as of CT 3.135.2.)
   ct.groupRole({
     key: "kids_leiter_grant",
     group: "kids_area",
@@ -48,17 +48,58 @@ export default (ct: ConfigContext): void => {
     grants: [{ right: "churchgroup:edit group memberships of group", scope: ["kids_area"] }],
   });
 
-  // status (#90): the domain is a PERSON status, declared by name and resolved
-  // against the live `/statuses` catalog per host (numeric escape hatch:
-  // `id: <statusId>`). A grant here reaches EVERY person carrying that status,
-  // so this is the instance-wide lever — there is deliberately no per-person
-  // domain (people are never managed by this tool).
+  // Typed logical scope refs (#98): a scoped right whose dimension is NOT a
+  // group, but IS something this tool can name portably. Campus ids differ per
+  // host (Mainz is 0 on one instance, 6 on another), so the numeric literal that
+  // used to be the only option here was a cross-environment misgrant waiting to
+  // happen. `{ campus: "mainz" }` is sugar for `ref.campus("mainz")`.
+  //
+  // The reference's dimension is checked against the right's catalog `scopeField`
+  // at plan time, so a mismatched ref fails with both named — never a silent
+  // grant on the wrong dimension. Dimensions with no logical form (security
+  // levels, flow-manager categories, …) still take numeric dataIds.
+  ct.campus({ key: "mainz", name: "Mainz", shorty: "MZ" });
+  ct.groupRole({
+    key: "mainz_lead_grant",
+    group: "kids_area",
+    role: "Mitarbeiter",
+    grants: [
+      { right: "churchdb:view station", scope: [{ campus: "mainz" }] },
+      { right: "churchgroup:view groups of grouptype", scope: [{ groupType: "kids" }] },
+      // Bereiche/departments are a READ-ONLY catalog (`GET /departments`, no write verb), so a
+      // department is referenceable by name on every host but never declarable — an unknown name
+      // is a hard error, not a create. Discover them with `ct get departments`.
+      { right: "churchdb:view alldata", scope: [{ department: "outreach" }] },
+    ],
+  });
+
+  // status (#90): the domain is a PERSON status. Declared by name and resolved
+  // against managed state first, then the live `/statuses` catalog, per host
+  // (numeric escape hatch: `id: <statusId>`). A grant here reaches EVERY person
+  // carrying that status, so this is the instance-wide lever — there is
+  // deliberately no per-person domain (people are never managed by this tool).
+  //
+  // The status itself is declarable too (#96), which is what makes this config
+  // self-sufficient on a fresh instance: without it, every target host would
+  // need a byte-identically-named status created by hand first.
   //
   // `scope: [-1]` is ChurchTools' "all values of this dimension" sentinel — here
   // "every external system". CT reads -1 back verbatim, so it stays a no-op.
+  // All six fields are declared because CT's `PUT /statuses/{id}` requires every one of them and is
+  // a full replace — unlike every other managed type, a partial declaration here would 400 (and, if
+  // it didn't, blank the omitted fields). `ct adopt person-status <id>` emits exactly this shape.
+  ct.personStatus({
+    key: "core",
+    name: "5 - Core",
+    shorty: "Core",
+    isMember: true,
+    isSearchable: true,
+    sortKey: 50,
+    securityLevelId: 1,
+  });
   ct.status({
     key: "core_external_login",
-    personStatus: "5 - Core",
+    personStatus: "core",
     grants: [{ right: "churchcore:login to external system", scope: [-1] }],
   });
 };

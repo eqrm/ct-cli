@@ -5,7 +5,7 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: ffcfe8dc0516ccf3
+sources_hash: 9d10c1a6cab493f3
 reviewed: 2026-08-13
 ---
 
@@ -60,18 +60,17 @@ reference or a numeric `id`:
     or adopted into state) and already created — a same-run group is rejected
     (its pairing id is only known once it exists; pass a numeric `id` there).
     Declaring both a logical form and a numeric `id` is a conflict and throws.
-    See "domainId semantics" for the resolution assumption still to be
-    confirmed live.
+    See "domainId semantics" for how the pairing id is resolved.
   - `ct.status` — `personStatus: "<name>"` resolves against the live
     `/statuses` catalog per host, or `id: <statusId>` targets one directly.
     **Person** statuses ("0 - First", "3 - Group Active", …), not group statuses
     — see "domainId semantics".
 - **`grants`** — an array of `Grant`s, each either:
   - a bare string, `"module:right"` — an **unscoped** grant, or
-  - an object `{ right: "module:right", scope: (string | number)[] }` — a
-    **scoped** grant, where each `scope` entry is either a logical key of a
-    managed group, or a raw numeric `dataId` (the escape hatch, #49 — see
-    "Scope resolution" below).
+  - an object `{ right: "module:right", scope: [...] }` — a **scoped** grant,
+    where each `scope` entry is a logical key of a managed group, a typed
+    logical reference such as `{ campus: "koblenz" }` (#98), or a raw numeric
+    `dataId` (the escape hatch, #49). See "Scope resolution" below.
 
 ## Discovering right names — `ct get permissions-catalog`
 
@@ -158,18 +157,37 @@ The two DSL functions manage two different ChurchTools "domain types," and
   > array of `{id, name}` — live-verified 2026-08-10 on eqrm prod), so they
   > resolve by name like campuses and group types.
 
-  > **ASSUMPTION — verify once on a live instance (`eqrm-dev`).** The reference
-  > form resolves by reading the group's own role list
-  > (`GET /groups/{groupId}/roles`) and taking the matched role row's `id` as
-  > the pairing domainId. Neither the endpoint nor the field is confirmed
-  > against a live instance (the assumption is pinned in a unit test and in a
-  > prominent comment in `src/resolve/resolver.ts`). If a live check shows the
-  > pairing id lives in a different field or endpoint, change the two
-  > constants at the top of `resolver.ts` — call sites don't change. Until
-  > confirmed, the numeric `id:` escape hatch is the guaranteed-correct path:
-  > find the id via the ChurchTools permission editor / an existing
-  > `GET /permissions/group_role` response, and hardcode it like any other
-  > domainId.
+  Since #96 the status itself is also **declarable**, via `ct.personStatus`:
+
+  ```ts
+  ct.personStatus({ key: "group_active", name: "3 - Group Active", shorty: "GA" });
+  ct.status({ key: "group_active_login", personStatus: "group_active", grants: [...] });
+  ```
+
+  That is what makes a config using the `status` domain self-sufficient across
+  hosts. Before it, `personStatus: "…"` could only resolve against statuses that
+  already existed on the target instance, so a config that planned to a clean
+  no-op on prod died on dev with *"no managed resource and no live person-status
+  at /statuses matches key …"* — whose own advice ("Declare/adopt it") was not
+  actually possible. A status declared in the same config resolves to a pending
+  domain and converges in one `ct apply`, exactly like a same-run group type.
+
+  > **VERIFIED LIVE (2026-08-13, CT 3.135.2).** The reference form resolves by
+  > reading the group's own role list (`GET /groups/{groupId}/roles`) and taking
+  > the matched role row's `id` as the pairing domainId. Confirmed against two
+  > anchors on **different group types**, each chosen so the per-group `id` and
+  > the type-level `groupTypeRoleId` necessarily differ:
+  >
+  > - both role rows' `id`s appear in `GET /permissions/group_role` as live
+  >   `domainId`s carrying that role's authored grants;
+  > - neither row's `groupTypeRoleId` appears anywhere in the domainId set —
+  >   decisive, since a type-scoped key would have to;
+  > - roles with no authored rights have no domain at all, exactly as a
+  >   per-(group, role) pairing predicts.
+  >
+  > The numeric `id:` escape hatch remains fully supported: find the id via the
+  > ChurchTools permission editor or a `GET /permissions/group_role` response and
+  > hardcode it like any other domainId.
 
 Resolution runs in `buildPermissionPlan` (`src/permissions/plan.ts`): a numeric
 `id` passes straight through; a `groupType` reference resolves against the live
@@ -207,11 +225,16 @@ scenario).
 
 ## Scope resolution
 
-A scoped grant's `scope: [...]` is a list where each entry is either a
-**logical key of a group managed by this tool** (declared via `ct.group` or
-adopted into state), or a **raw numeric `dataId`** (the escape hatch — see
-below). String entries are resolved against **desired ∪ state**
-(`src/permissions/scope.ts`):
+A scoped grant's `scope: [...]` is a list where each entry is one of three
+forms (`src/permissions/scope.ts`):
+
+| Form | Example | Dimension |
+| --- | --- | --- |
+| **Logical group key** (string) | `scope: ["kids_area"]` | groups (`cdb_gruppe`) only |
+| **Typed logical reference** (#98) | `scope: [{ campus: "koblenz" }]` | campuses, group types — see below |
+| **Raw numeric `dataId`** (escape hatch, #49) | `scope: [1, 2, 3]` | any dimension |
+
+String entries are resolved against **desired ∪ state**:
 
 - A key already in state resolves to that group's `dataId`.
 - A key **declared in this config but not yet created** resolves to a *pending*
@@ -236,6 +259,81 @@ written (after the resource tier has run), each key is re-resolved against the
 post-execute state. This means a group *created* or *recreated* in the same
 apply always gets its grant written with its fresh `dataId`, never a pending
 placeholder or a stale, dangling id.
+
+### Typed logical scope references (#98)
+
+Not every scoped right scopes **by group**, and some of the other dimensions are
+resources this tool *can* name portably. Those take a typed reference:
+
+```ts
+ct.groupRole({
+  key: "campus_lead_grants",
+  group: "campus_lead",
+  role: "Leiter",
+  grants: [
+    { right: "churchdb:view station", scope: [{ campus: "koblenz" }] },
+    { right: "churchgroup:view groups of grouptype", scope: [{ groupType: "struktur" }] },
+  ],
+});
+```
+
+`{ campus: "koblenz" }` is sugar for `ref.campus("koblenz")` — the same `Ref`
+the rest of the DSL uses — so both spellings are interchangeable.
+
+| `scopeField` | Reference form | Resolved against |
+| --- | --- | --- |
+| `cdb_gruppe` | `{ group: "<key>" }` (or the bare string) | managed groups |
+| `cdb_station` | `{ campus: "<key>" }` | managed campuses, then `GET /campuses` |
+| `cdb_gruppentyp` | `{ groupType: "<key>" }` | managed group types, then `GET /group/grouptypes` |
+| `cdb_bereich` | `{ department: "<name-slug>" }` | `GET /departments` **only** — read-only, see below |
+
+**Why this matters:** campus ids are host-specific — Mainz is `0` on eqrm prod
+and `6` on eqrm dev. A campus-scoped grant written as a numeric literal is
+therefore a cross-environment misgrant, and because declaring a domain makes
+`ct` *own* it, the wrong-scope grant also revokes whatever is really there on
+the other host. The typed reference makes one config plan clean on both.
+
+Resolution mirrors the domain-reference rules: managed state first, the live
+master-data catalog second, and a target **declared in this same config**
+resolves to a *pending* scope re-resolved at apply time. A reference resolved
+through the catalog (not under management) carries an already-final id and is
+not re-resolved.
+
+Three things are hard errors at **plan** time, never a guessed `dataId`:
+
+- a reference whose dimension does not match the right's `scopeField` —
+  e.g. `{ groupType: … }` on `churchdb:view station` (a `cdb_station` right);
+- a reference on a dimension that has **no** logical form (`cc_securitylevel`,
+  `ccm_data_category`, `oauth_client`, … — values that are not resources at
+  all) — the message points at the numeric escape hatch;
+- a **bare string** on a non-group dimension. A string always means "managed
+  group", so on e.g. a `cdb_station` right it would either fail confusingly or —
+  worse — match an unrelated group that happens to carry that key.
+
+### Departments are referenceable, never declarable
+
+`cdb_bereich` (Bereiche) is the one dimension with a **read-only** catalog.
+Live-probed against the instance's own OpenAPI spec (eqrm prod, CT 3.135.2,
+2026-08-13): `GET /departments` exists, and **no** `POST`/`PUT`/`DELETE` on
+`/departments` does.
+
+So a department reference resolves by name on every host — which is what makes
+`churchdb:view alldata` ("Personen eines Bereiches sehen") declarable at all —
+but there is no `ct.department` resource, no `ct adopt department`, and a name
+that matches nothing is a **hard error** rather than a create:
+
+```
+Cannot resolve department:nope referenced at … : no live department at
+/departments matches key "nope". departments are a read-only catalog in
+ChurchTools — they cannot be declared or adopted, so fix the key/name
+(list them with `ct get departments`) or use a numeric id.
+```
+
+Discover the names with `ct get departments`. Because the id always comes from
+the live catalog, a department scope is never "pending" and is never re-resolved
+at apply time — it is host-correct the moment it resolves. A managed resource
+that happens to share the key does **not** shadow it (that would be exactly the
+misgrant this feature exists to prevent).
 
 ### Numeric scope escape hatch (#49)
 
@@ -276,8 +374,11 @@ Numeric entries pass straight through with no state lookup, no pending
 resolution, and no re-resolution at apply time (their `dataId` is already
 final). They can be freely mixed with logical group keys in the same `scope`
 array. `ct adopt grants` emits this form automatically for any scoped right
-whose `scopeField` is not the group dimension (see below) — never a `ct adopt
-group <id>` hint for a dataId that was never a group.
+whose `scopeField` has no logical form (see below) — never a `ct adopt group
+<id>` hint for a dataId that was never a group. For `cdb_station` /
+`cdb_gruppentyp` it emits a typed reference instead when the dataId names a
+managed campus / group type, and otherwise leaves the number with a `NOTE`
+naming the one `ct adopt …` command that makes it portable.
 
 ## Adopting existing grants — `ct adopt grants <domainType> <domainId>`
 

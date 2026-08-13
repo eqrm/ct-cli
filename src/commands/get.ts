@@ -35,6 +35,13 @@ const RESOURCE_PATHS: Record<string, ResourceSpec> = {
   "target-groups": { path: "/group/targetgroups" },
   "dynamic-groups": { path: "/dynamicgroups" },
   "relationship-types": { path: "/person/relationshiptypes" },
+  // Bereiche/departments — the `cdb_bereich` permission scope dimension. READ-ONLY in ChurchTools
+  // (GET only; no write verb exists), so this is the way to discover the names a
+  // `scope: [{ department: "…" }]` reference resolves against. Never adoptable.
+  departments: { path: "/departments" },
+  // PERSON statuses — master data (the enumeration), never person records. The domain a `ct.status`
+  // permission declaration hangs off, and an adoptable resource since #96.
+  statuses: { path: "/statuses" },
   // Schema/DEFINITIONS only — never person records or field VALUES (#47/#48; see docs/handbuch/field-definitions.md).
   // The person master-data MODEL: sexes/titles/statuses/campuses plus the security-level enumeration
   // that churchdb permission scopes (cc_securitylevel) reference. Single object → unpaginated.

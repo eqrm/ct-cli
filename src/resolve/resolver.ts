@@ -50,6 +50,12 @@ import {
 const REF_KIND_TYPE: Partial<Record<RefKind, string>> = {
   campus: "campus",
   "group-type": "group-type",
+  // Person statuses became an adoptable resource in #96, so a `personStatus: "…"` domain now
+  // resolves from managed state / this run's declarations FIRST and only falls through to the
+  // `/statuses` catalog for a status this config does not own. That ordering is what makes a
+  // status declared in the same config usable as a permission domain (it resolves to a PendingRef,
+  // which buildPermissionPlan carries as a pending domain, #69).
+  "person-status": "person-status",
   "role-def": "group-role",
   group: "group",
 };
@@ -70,6 +76,11 @@ const REF_KIND_TYPE: Partial<Record<RefKind, string>> = {
  */
 const CATALOG_PATH: Partial<Record<RefKind, string>> = {
   campus: "/campuses",
+  // Bereiche/departments — the `cdb_bereich` permission scope dimension (#98). Catalog-ONLY, with no
+  // REF_KIND_TYPE entry above: `GET /departments` exists but no POST/PUT/DELETE does (live-probed on
+  // eqrm prod, CT 3.135.2, 2026-08-13), so a department is resolvable by name on every host yet can
+  // never be declared, adopted or created. Rows carry {id, name, nameTranslated, sortKey, shorty}.
+  department: "/departments",
   "group-type": "/group/grouptypes",
   // PERSON statuses — the domain of a `status` permission declaration (#90). Unlike GROUP statuses
   // (see the note above), these DO have a flat REST catalog: `GET /statuses` returns
@@ -94,20 +105,29 @@ export interface ResolverDeps {
 }
 
 /**
- * ASSUMPTION (verify on eqrm-dev) — the pinned model for a `group_role` permission domain (#25):
+ * VERIFIED LIVE (2026-08-13, eqrm prod, CT 3.135.2) — the model for a `group_role` domain (#25):
  *
  *   1. A `group_role` domain is keyed by CT's internal (group, role) PAIRING id — one id per
  *      (this specific group, this specific role). It is NEITHER the group's id NOR the shared
- *      role-definition id (this matches the long-standing code/docs comment; docs/handbuch/permissions.md
- *      "domainId semantics").
+ *      role-definition id (docs/handbuch/permissions.md "domainId semantics").
  *   2. That pairing id is exposed on the group's OWN role list, `GET /groups/{groupId}/roles`, as
  *      each row's {@link GROUP_ROLE_PAIRING_FIELD} (`id`), and rows carry a `name` we match the
  *      declared role against (slug-primary, exact-name secondary — same as every master-data catalog).
  *
- * Neither the endpoint nor the field is confirmed against a live instance. If a live check shows the
- * pairing id lives in a different field (e.g. `groupRoleId`, `permissionId`) or a different endpoint,
- * change the two constants below — call sites do not change. Until confirmed, the numeric `id:` escape
- * hatch on `ct.groupRole` remains the safe path (and is unit-tested to still work).
+ * Evidence (two anchors on DIFFERENT group types, each a group whose type has many members, so the
+ * per-group `id` and the type-level `groupTypeRoleId` are guaranteed to differ):
+ *   - For both, the role row's `id` appears in `GET /permissions/group_role` as a live `domainId`
+ *     carrying that role's authored grants (1 row on one anchor, 35 on the other).
+ *   - For both, the row's `groupTypeRoleId` appears NOWHERE in the whole domainId set — decisive,
+ *     because a type-level key would have to appear if the domain were type-scoped.
+ *   - On one anchor, the two roles with no authored rights have no domain at all, which is exactly
+ *     what a per-(group, role) pairing predicts (a domain exists only where rights were written).
+ *
+ * A prior, cruder probe saw `groupTypeRoleId` values that also occur in the domainId set; those are
+ * numeric COLLISIONS with the low `id`s of long-existing role rows, not evidence of a type-level key.
+ *
+ * If a future CT release moves the pairing id to another field or endpoint, change the two constants
+ * below — call sites do not change. The numeric `id:` escape hatch on `ct.groupRole` remains supported.
  */
 const GROUP_ROLE_ENDPOINT = (groupId: number): string => `/groups/${groupId}/roles`;
 const GROUP_ROLE_PAIRING_FIELD = "id";
@@ -196,8 +216,8 @@ export class Resolver {
 
   /**
    * Resolve a `group_role` domain by its (group, role) pair to the numeric pairing domainId (#25).
-   * See the ASSUMPTION block above the {@link GROUP_ROLE_ENDPOINT} constant for the (unverified)
-   * model this implements. Returns a number — never a {@link PendingRef}: the pairing id only exists
+   * See the VERIFIED LIVE block above the {@link GROUP_ROLE_ENDPOINT} constant for the model this
+   * implements and the evidence for it. Returns a number — never a {@link PendingRef}: the pairing id only exists
    * once the group does, so a same-run-declared (not-yet-created) group is a hard error here (its id
    * cannot be known at plan time), telling the author to apply the group first or pass a numeric id.
    */
@@ -334,6 +354,18 @@ export class Resolver {
       );
     }
     const catalog = CATALOG_PATH[r.kind];
+    // A catalog-only kind has no managed resource type, so "Declare/adopt it" is advice the tool
+    // cannot honour (#96's exact complaint about the old person-status message). Departments are
+    // read-only in ChurchTools — GET /departments exists, no write verb does — so the only real
+    // fixes are correcting the name or falling back to a numeric id.
+    if (catalog && REF_KIND_TYPE[r.kind] === undefined) {
+      return new Error(
+        `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: no live ${r.kind} at ` +
+          `${catalog} matches key "${r.key}". ${r.kind}s are a read-only catalog in ChurchTools — they ` +
+          `cannot be declared or adopted, so fix the key/name (list them with \`ct get ${r.kind}s\`) or ` +
+          `use a numeric id.`,
+      );
+    }
     const where = catalog
       ? `no managed resource and no live ${r.kind} at ${catalog} matches key "${r.key}"`
       : `no managed ${r.kind} named "${r.key}" is declared or adopted`;

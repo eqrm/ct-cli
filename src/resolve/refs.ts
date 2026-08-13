@@ -20,6 +20,7 @@
 
 export type RefKind =
   | "campus"
+  | "department"
   | "group-type"
   | "group-status"
   | "person-status"
@@ -43,10 +44,10 @@ export const GROUP_STATUS_NO_CATALOG =
   `group statuses have no REST catalog (GET /group/memberstatus is a different dimension: member ` +
   `statuses, string ids — verified 2026-07-10). Declare a numeric "groupStatusId" instead (e.g. "groupStatusId: 1").`;
 
-/** Simple key-addressed reference: campus / group type / group status / person status / role definition / group. */
+/** Simple key-addressed reference: campus / department / group type / group status / person status / role definition / group. */
 export interface SimpleRef {
   __ctRef: true;
-  kind: "campus" | "group-type" | "group-status" | "person-status" | "role-def" | "group";
+  kind: "campus" | "department" | "group-type" | "group-status" | "person-status" | "role-def" | "group";
   key: string;
 }
 
@@ -98,6 +99,15 @@ function requireKey(kind: RefKind, value: unknown): string {
  */
 export const ref = {
   campus: (key: string): SimpleRef => ({ __ctRef: true, kind: "campus", key: requireKey("campus", key) }),
+  /**
+   * A Bereich/DEPARTMENT (`/departments`), the scope dimension of `cdb_bereich` rights such as
+   * `churchdb:view alldata` ("Personen eines Bereiches sehen") — #98. Unlike campuses and group
+   * types, departments are a READ-ONLY ref catalog: `GET /departments` exists but there is no POST /
+   * PUT / DELETE (live-probed against the instance OpenAPI spec, eqrm prod CT 3.135.2, 2026-08-13).
+   * So a department can be REFERENCED by name on any host, but never declared, adopted or created —
+   * an unresolvable name is a hard error, not a create.
+   */
+  department: (key: string): SimpleRef => ({ __ctRef: true, kind: "department", key: requireKey("department", key) }),
   groupType: (key: string): SimpleRef => ({ __ctRef: true, kind: "group-type", key: requireKey("group-type", key) }),
   status: (key: string): SimpleRef => ({ __ctRef: true, kind: "group-status", key: requireKey("group-status", key) }),
   /**

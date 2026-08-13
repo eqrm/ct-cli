@@ -51,7 +51,7 @@ describe("scope bootstrap: declare group + grant scoped to it in one config (#29
     const { items, fetchErrors } = await buildPermissionPlan(client, state, [scopedPerm], desiredKidsGroup);
     expect(fetchErrors).toEqual([]);
     // The scoped grant survives planning and lands in toPut as a pending tuple.
-    expect(items[0]?.diff.toPut).toEqual([{ authId: 1104, dataId: [], type: "grant", scopeKey: "kids", pending: true }]);
+    expect(items[0]?.diff.toPut).toEqual([{ authId: 1104, dataId: [], type: "grant", scopeKey: "kids", scopeType: "group", pending: true }]);
     // Read-only `ct plan` renders instead of aborting, and labels the pending scope.
     expect(renderPermissionPlan(items)).toContain("kids (created this apply)");
   });
@@ -80,7 +80,7 @@ describe("stale id after recreate (#33 item 3)", () => {
     }};
     const { items } = await buildPermissionPlan(client, state, [scopedPerm], desiredKidsGroup);
     // At plan time the tuple resolves to the OLD id 100…
-    expect(items[0]?.diff.toPut).toEqual([{ authId: 1104, dataId: [100], type: "grant", scopeKey: "kids" }]);
+    expect(items[0]?.diff.toPut).toEqual([{ authId: 1104, dataId: [100], type: "grant", scopeKey: "kids", scopeType: "group" }]);
 
     // …then a recreate mints id 777 in state.
     await executePlan(createKidsPlan, { client, state, statePath: "unused", save: async () => {} });

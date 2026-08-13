@@ -18,6 +18,7 @@ import type { State } from "../state/state.js";
 import { findByTypeId } from "../state/state.js";
 import { CATALOG } from "./catalog.js";
 import { normalizeActual, type DomainType, type GrantTuple, type RawPermission } from "./grants.js";
+import { GROUP_SCOPE_FIELD, SCOPE_REF_KIND } from "./scope.js";
 
 /** DSL function name for each domain type — the call the emitted block should be pasted as. */
 const DSL_FN: Record<DomainType, string> = {
@@ -27,13 +28,20 @@ const DSL_FN: Record<DomainType, string> = {
 };
 
 /**
- * The catalog `scopeField` value for rights that scope by GROUP. Only rights carrying this exact
- * scopeField have a logical/managed representation (`ct.group` / state) to resolve their dataIds
- * against — every other non-null scopeField (`cc_securitylevel`, `cdb_comment_viewer`, `cdb_station`,
- * …) names a different ChurchTools dimension with no group under management to look up, so their
- * dataIds pass through as the numeric scope escape hatch (#49) instead.
+ * Shared with the planner so adoption and reconciliation can never disagree about which dimensions
+ * have a logical form: `GROUP_SCOPE_FIELD` is the group dimension (emitted as a bare string key),
+ * `SCOPE_REF_KIND` maps every other dimension WITH a logical form (campus, group type — #98) to the
+ * managed resource type its dataIds are looked up as. A dimension in neither (`cc_securitylevel`,
+ * `cdb_bereich`, `oauth_client`, …) has no name to emit, so its dataIds pass through as the numeric
+ * scope escape hatch (#49).
  */
-const GROUP_SCOPE_FIELD = "cdb_gruppe";
+
+/** DSL sugar field name per managed scope type, for emitting `{ campus: "koblenz" }`-style refs. */
+const SCOPE_SUGAR_FIELD: Readonly<Record<string, string>> = {
+  campus: "campus",
+  "group-type": "groupType",
+  department: "department",
+};
 
 interface ReverseEntry {
   name: string;
@@ -186,12 +194,16 @@ function grantLines(
   // left is admin-authored DIRECT grants, INCLUDING the writable `authId >= 10000` group-member rights
   // Equippers curates on group_type_role. Those ARE declarable and are emitted as active grants.
   if (entry.scopeField != null && entry.scopeField !== GROUP_SCOPE_FIELD) {
-    // Scoped right whose scope dimension is NOT a group (e.g. "cc_securitylevel", "cdb_comment_viewer")
-    // — its dataIds name something this tool has no managed/logical representation for (a security
-    // level, a comment-viewer bucket, …), so `findByTypeId(state, "group", id)` would never find them
-    // (and could even collide with an unrelated group's id in a different namespace). There is nothing
-    // to "adopt" here: the numeric scope escape hatch (#49, src/permissions/scope.ts) declares these
-    // dataIds directly, so the grant is always emitted as an ACTIVE line, never a WARNING placeholder.
+    // Scoped right whose scope dimension is NOT a group. Two cases:
+    //
+    //  a) The dimension HAS a logical form (#98: `cdb_station` → campus, `cdb_gruppentyp` → group
+    //     type). Emit each dataId that names a MANAGED resource as a typed ref (`{ campus: "koblenz" }`)
+    //     — the whole point of #98, since these ids are host-specific (dev Mainz = 6, prod Mainz = 0),
+    //     so a numeric literal adopted from prod is a misgrant when replayed on dev. An unmanaged
+    //     dataId keeps its number and earns a NOTE pointing at the one command that fixes it.
+    //  b) The dimension has none (`cc_securitylevel`, `cdb_bereich`, `oauth_client`, …) — its dataIds
+    //     name something this tool has no managed representation for, so the numeric escape hatch
+    //     (#49) is the only honest output and the grant is always emitted as an ACTIVE line.
     const out: string[] = [];
     let omitted = false;
     if (g.hasUnscoped) {
@@ -201,9 +213,46 @@ function grantLines(
       omitted = true;
     }
     if (g.dataIds.length > 0) {
-      const scope = [...g.dataIds].sort((a, b) => a - b).join(", ");
-      out.push(`    // "${entry.name}" scopes by "${entry.scopeField}", not a group — using its numeric dataId(s) directly.`);
-      out.push(`    { right: ${JSON.stringify(entry.name)}, scope: [${scope}] },`);
+      const dimension = SCOPE_REF_KIND[entry.scopeField];
+      // A catalog-only dimension (departments) has no managed resource to look an id up in, and this
+      // emitter is deliberately pure — no client, no fetch — so it cannot turn the id into a name.
+      // Emit the number and point at the portable form the author can write by hand.
+      const sugar = dimension?.managed ? SCOPE_SUGAR_FIELD[dimension.type] : undefined;
+      if (dimension && !dimension.managed) {
+        const field = SCOPE_SUGAR_FIELD[dimension.type] ?? dimension.type;
+        out.push(
+          `    // NOTE: "${entry.name}" scopes by "${entry.scopeField}" (${dimension.type}), a read-only catalog —`,
+        );
+        out.push(
+          `    //       the id below is host-specific. Portable form: { ${field}: "<name>" } (\`ct get ${dimension.type}s\`).`,
+        );
+      }
+      const entries: string[] = [];
+      const unmanaged: number[] = [];
+      for (const id of [...g.dataIds].sort((a, b) => a - b)) {
+        const managed = dimension && sugar ? findByTypeId(state, dimension.type, id) : undefined;
+        if (managed && sugar) {
+          entries.push(`{ ${sugar}: ${JSON.stringify(managed.key)} }`);
+        } else {
+          entries.push(String(id));
+          unmanaged.push(id);
+        }
+      }
+      if (sugar && unmanaged.length > 0) {
+        // Not a WARNING: the numeric line below IS valid, applicable config — it is just not portable
+        // to another host. So this never counts into `omitted` (nothing would be revoked).
+        out.push(
+          `    // NOTE: "${entry.name}" scopes by "${entry.scopeField}" (${dimension!.type}). ${unmanaged.join(", ")} ` +
+            `${unmanaged.length === 1 ? "is" : "are"} not managed, so`,
+        );
+        out.push(
+          `    //       ${unmanaged.length === 1 ? "it stays a" : "they stay"} host-specific number(s) — run ` +
+            `\`ct adopt ${dimension!.type} ${unmanaged[0]}\` and re-adopt to make ${unmanaged.length === 1 ? "it" : "them"} portable.`,
+        );
+      } else if (!sugar) {
+        out.push(`    // "${entry.name}" scopes by "${entry.scopeField}", not a group — using its numeric dataId(s) directly.`);
+      }
+      out.push(`    { right: ${JSON.stringify(entry.name)}, scope: [${entries.join(", ")}] },`);
     }
     return { lines: out, omitted };
   }

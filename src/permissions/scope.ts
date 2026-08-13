@@ -1,14 +1,20 @@
 import type { State } from "../state/state.js";
 import type { GrantTuple } from "./grants.js";
+import type { DesiredPermission, ScopeEntry } from "./types.js";
+import type { Resolver } from "../resolve/resolver.js";
+import { isPendingRef, isRef, ref, refKey, refLabel, type Ref, type RefKind, type SimpleRef } from "../resolve/refs.js";
+import { resolveAuthId } from "./catalog.js";
 
 /**
  * One resolved scope entry: `id` is the concrete ChurchTools dataId, or `null` when it names a
- * group declared in the config but not yet created (pending). `numeric` marks an entry that came
- * from a raw numeric scope literal (the #49 escape hatch) rather than a logical group key — such an
- * entry carries no state-backed identity to re-resolve, only its already-known id (see
- * {@link reresolveTuple}, which passes a tuple through unchanged when it has no `scopeKey`).
+ * resource declared in the config but not yet created (pending). `numeric` marks an entry that has
+ * no state-backed identity to re-resolve — either a raw numeric scope literal (the #49 escape hatch)
+ * or a logical ref that resolved through a live master-data catalog rather than managed state — so
+ * it carries only its already-known id (see {@link reresolveTuple}, which passes a tuple through
+ * unchanged when it has no `scopeKey`). `type` is the MANAGED RESOURCE TYPE behind `key` (#98):
+ * "group" for the historical group dimension, "campus"/"group-type" for a typed logical scope ref.
  */
-export interface ScopeResolution { key: string; id: number | null; numeric?: boolean }
+export interface ScopeResolution { key: string; id: number | null; numeric?: boolean; type?: string }
 
 /**
  * ChurchTools' "every value of this dimension" dataId. CT both accepts it on write and reads it back
@@ -18,34 +24,243 @@ export interface ScopeResolution { key: string; id: number | null; numeric?: boo
 export const ALL_SCOPE_SENTINEL = -1;
 
 /**
- * Resolve a scope array against DESIRED ∪ STATE. Each entry is either:
+ * The catalog `scopeField` naming the GROUP dimension. The only dimension a bare string scope entry
+ * may address — every other one needs a typed ref (see {@link SCOPE_REF_KIND}) or a numeric dataId.
+ */
+export const GROUP_SCOPE_FIELD = "cdb_gruppe";
+
+/**
+ * Catalog `scopeField` → the {@link RefKind} a typed logical scope ref must carry for that dimension,
+ * and the managed resource type it resolves against (#98).
  *
- * - a **logical group key** (`string`) — resolved against managed groups, exactly as before, or
+ * Only dimensions whose values this tool can address by a HOST-INDEPENDENT name are listed:
+ *
+ *  - `cdb_gruppe`      → groups      (managed-only; the historical string-key form is the same dimension)
+ *  - `cdb_station`     → campuses    (`/campuses`) — the motivating case: campus ids are host-specific
+ *                        (dev Mainz = 6, prod Mainz = 0), so a numeric literal is a cross-environment
+ *                        misgrant waiting to happen
+ *  - `cdb_gruppentyp`  → group types (`/group/grouptypes`)
+ *  - `cdb_bereich`     → departments (`/departments`) — Bereiche, e.g. `churchdb:view alldata`
+ *                        ("Personen eines Bereiches sehen")
+ *
+ * `managed` is what separates the last one from the rest. Groups, campuses and group types are
+ * MANAGED resource kinds: a scope target can be declared in the same config (resolving pending, then
+ * re-resolved at apply time) and a state-backed id is worth re-resolving. Departments are a READ-ONLY
+ * ref catalog — `GET /departments` exists, but no POST/PUT/DELETE does (live-probed against the
+ * instance's own OpenAPI spec, eqrm prod CT 3.135.2, 2026-08-13) — so a department reference always
+ * resolves by NAME against the live catalog and hard-errors when the name is absent, which is
+ * strictly better than a silent numeric misgrant but is never a create.
+ *
+ * Every other scoped dimension (`cc_securitylevel`, `ccm_data_category`, `oauth_client`, …) stays
+ * numeric-only by nature rather than by omission: its values are not resources at all.
+ */
+export const SCOPE_REF_KIND: Readonly<Record<string, { kind: RefKind; type: string; managed: boolean }>> = {
+  [GROUP_SCOPE_FIELD]: { kind: "group", type: "group", managed: true },
+  cdb_station: { kind: "campus", type: "campus", managed: true },
+  cdb_gruppentyp: { kind: "group-type", type: "group-type", managed: true },
+  cdb_bereich: { kind: "department", type: "department", managed: false },
+};
+
+/** The DSL's object sugar for a typed scope ref: exactly one dimension field, e.g. `{ campus: "koblenz" }`. */
+const SCOPE_SUGAR: Readonly<Record<string, (key: string) => Ref>> = {
+  group: ref.group,
+  campus: ref.campus,
+  groupType: ref.groupType,
+  department: ref.department,
+};
+
+/**
+ * Normalise one authored scope entry into the three forms the resolver/planner speak: a bare string
+ * (logical group key), a number (raw dataId), or a {@link Ref}. The object sugar `{ campus: "koblenz" }`
+ * compiles to `ref.campus("koblenz")` here — the same eval-time sugar→Ref move `ID_SUGAR` makes for
+ * declaration id fields (src/config/context.ts), so both authoring forms converge before any host is
+ * involved. Shared by the config DSL and the planner so a programmatically built `DesiredPermission`
+ * behaves identically to an authored one.
+ */
+export function normalizeScopeEntry(entry: unknown, where: string): string | number | Ref {
+  if (typeof entry === "number") return entry;
+  if (typeof entry === "string") {
+    if (entry.length === 0) {
+      throw new Error(`${where}: a string scope entry must be a non-empty logical group key.`);
+    }
+    return entry;
+  }
+  if (isRef(entry)) return entry;
+  if (entry !== null && typeof entry === "object" && !Array.isArray(entry)) {
+    const fields = Object.entries(entry as Record<string, unknown>);
+    const dims = Object.keys(SCOPE_SUGAR).join(", ");
+    if (fields.length !== 1) {
+      throw new Error(
+        `${where}: a scope reference must name exactly one dimension (${dims}), got ${JSON.stringify(entry)}.`,
+      );
+    }
+    const [dim, value] = fields[0]!;
+    const make = SCOPE_SUGAR[dim];
+    if (!make) {
+      throw new Error(`${where}: unknown scope dimension "${dim}" — expected one of: ${dims}.`);
+    }
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error(`${where}: "${dim}" must be a non-empty logical key, got ${JSON.stringify(value)}.`);
+    }
+    return make(value);
+  }
+  throw new Error(
+    `${where}: scope entries must be a non-empty string (logical group key), a number (raw dataId), ` +
+      `or a logical reference such as { campus: "koblenz" }, got ${JSON.stringify(entry)}.`,
+  );
+}
+
+/**
+ * A typed scope ref resolved for THIS host. `id` is the concrete dataId, or `null` when the ref names
+ * a resource declared in this config but not yet created. `managedKey`/`managedType` are set only when
+ * the ref resolved against MANAGED state (or a same-run declaration) — i.e. when there is a
+ * state-backed identity to re-resolve at apply time. A ref that resolved through a live master-data
+ * catalog carries neither: its id is already final and host-correct.
+ */
+export interface ScopeRefResolution { id: number | null; managedKey?: string; managedType?: string }
+
+/** Typed scope refs resolved for this host, keyed by {@link refKey}. */
+export type ScopeRefMap = ReadonlyMap<string, ScopeRefResolution>;
+
+/**
+ * Pre-resolve every typed logical scope ref in `permissions` against this host (#98), and validate
+ * each one's DIMENSION against the right it scopes.
+ *
+ * Scope resolution itself ({@link resolveScope}) is synchronous — it is a pure state lookup, called
+ * per grant deep inside `desiredTuples`. Typed refs may need a live catalog fetch, so their
+ * resolution is hoisted here into one async pass over the whole permission set, and the sync path
+ * consumes the resulting map. Same shape as `resolveDomainIds` (src/permissions/plan.ts).
+ *
+ * Validation (all HARD errors at plan time, never a silently-guessed dataId):
+ *  - a ref on a right that takes no scope, or on a dimension with no logical form → rejected with
+ *    the dimension named, so the author reaches for the numeric escape hatch deliberately;
+ *  - a ref whose kind does not match the right's `scopeField` dimension → rejected naming BOTH
+ *    (a `{campus:…}` ref on a `cc_securitylevel` right is a config bug, not a runtime surprise);
+ *  - a ref that cannot resolve at all → the resolver's own hard error propagates.
+ *
+ * A right the catalog does not know is skipped here so `desiredTuples` raises its own (better)
+ * unknown-right error rather than being pre-empted by a less specific one.
+ */
+export async function resolveScopeRefs(
+  permissions: readonly DesiredPermission[],
+  resolver: Resolver,
+  state: State,
+): Promise<ScopeRefMap> {
+  const out = new Map<string, ScopeRefResolution>();
+  for (const p of permissions) {
+    for (const g of p.grants) {
+      if (typeof g === "string") continue;
+      const where = `${p.domainType} "${p.key}" grant "${g.right}"`;
+      let scopeField: string | null;
+      try {
+        scopeField = resolveAuthId(g.right).scopeField;
+      } catch {
+        continue; // unknown right — desiredTuples reports it with the catalog's own hint
+      }
+      for (const raw of g.scope) {
+        const entry = normalizeScopeEntry(raw, where);
+        if (!isRef(entry)) continue;
+        const dimension = expectedDimension(entry, scopeField, where);
+        const k = refKey(entry);
+        if (out.has(k)) continue;
+        const resolved = await resolver.resolve(entry, `${where} scope`);
+        if (isPendingRef(resolved)) {
+          out.set(k, { id: null, managedKey: dimension.ref.key, managedType: dimension.type });
+          continue;
+        }
+        // Mirror the resolver's own precedence: it consults managed state BEFORE the live catalog, so
+        // a key that names a managed resource of this type is exactly the case where the id came from
+        // state — and only then is there a state-backed identity worth re-resolving at apply time.
+        // A catalog-only dimension (departments) has no managed kind at all, so it never takes this path.
+        const managed = dimension.managed ? state.resources[dimension.ref.key] : undefined;
+        out.set(
+          k,
+          managed && managed.type === dimension.type
+            ? { id: resolved, managedKey: dimension.ref.key, managedType: dimension.type }
+            : { id: resolved },
+        );
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The dimension a typed scope ref must match, or a hard error naming both sides. Also narrows the ref
+ * to the simple (single-`key`) kinds — the compound `group-role` / `group-type-role` refs address
+ * permission DOMAINS, never scope values, so they can only ever be a dimension mismatch here — and
+ * hands the narrowed ref back so callers can read its `key` without a cast.
+ */
+function expectedDimension(
+  entry: Ref,
+  scopeField: string | null,
+  where: string,
+): { kind: RefKind; type: string; managed: boolean; ref: SimpleRef } {
+  if (scopeField == null) {
+    throw new Error(
+      `${where}: "${refLabel(entry)}" is a logical scope reference, but this right takes no scope ` +
+        `(no scopeField in the permission catalog) — remove the scope, or use a scoped right.`,
+    );
+  }
+  const dimension = SCOPE_REF_KIND[scopeField];
+  if (!dimension) {
+    const supported = Object.entries(SCOPE_REF_KIND)
+      .map(([field, d]) => `${field} (${d.kind})`)
+      .join(", ");
+    throw new Error(
+      `${where}: scope reference ${refLabel(entry)} cannot be used here — this right scopes by ` +
+        `"${scopeField}", which has no logical reference form. Declare its scope as a numeric dataId. ` +
+        `Dimensions with a logical form: ${supported}.`,
+    );
+  }
+  if (entry.kind !== dimension.kind) {
+    throw new Error(
+      `${where}: scope reference ${refLabel(entry)} does not match this right's scope dimension ` +
+        `"${scopeField}", which takes a ${dimension.kind} reference. Use a ${dimension.kind} reference, ` +
+        `or a numeric dataId.`,
+    );
+  }
+  // Every kind in SCOPE_REF_KIND is a simple, key-addressed one, so matching `dimension.kind` above
+  // has already excluded the compound refs (which carry no `key`).
+  return { ...dimension, ref: entry as SimpleRef };
+}
+
+/**
+ * Resolve a scope array against DESIRED ∪ STATE. Each entry is one of:
+ *
+ * - a **logical group key** (`string`) — resolved against managed groups. Valid only on the group
+ *   dimension (`cdb_gruppe`): a bare string on any other dimension is rejected, because it would
+ *   otherwise be looked up among GROUPS and either hard-error confusingly or — worse — match an
+ *   unrelated group that happens to carry that key and write a silent misgrant (#98).
+ * - a **typed logical ref** ({@link Ref}, #98) — `{ campus: "koblenz" }` / `ref.campus("koblenz")`,
+ *   pre-resolved for this host by {@link resolveScopeRefs} and read out of `refs` here. This is what
+ *   makes a campus-scoped grant portable: campus ids differ per host (dev Mainz = 6, prod Mainz = 0).
  * - a **raw numeric dataId** (`number`, #49) — an escape hatch that passes straight through with no
- *   state lookup at all. This is required for scoped rights whose `scopeField` is NOT the group
- *   dimension (`cdb_gruppe`) — e.g. `cc_securitylevel`, `cdb_comment_viewer` — where the dataId
- *   names something this tool has no managed representation for (a security level, not a group),
- *   so a logical key can never be offered for it.
+ *   lookup at all. Still the only form for dimensions whose values are not resources this tool can
+ *   name (`cc_securitylevel`, `cdb_bereich`, `oauth_client`, …).
  *
- * A logical key that names a managed group in state resolves to its id. A logical key that names a
- * group DECLARED in this config but not yet in state (`declaredGroupKeys`) resolves to `null`
- * (pending) — its id is only known after the resource tier applies, so it is re-resolved at apply
- * time (see {@link reresolveTuple}). This is what lets a config declare a group AND a grant scoped
- * to it and still plan/apply in one run (#29). A logical key that is neither in state nor declared
- * stays a hard error.
+ * A logical key that names a managed resource in state resolves to its id. A logical key that names a
+ * resource DECLARED in this config but not yet in state (`declaredGroupKeys` for the string form; the
+ * resolver's pending marker for a typed ref) resolves to `null` (pending) — its id is only known after
+ * the resource tier applies, so it is re-resolved at apply time (see {@link reresolveTuple}). This is
+ * what lets a config declare a group AND a grant scoped to it and still plan/apply in one run (#29). A
+ * logical key that is neither in state nor declared stays a hard error.
  *
- * Resolved (in-state or numeric) entries sort ascending by id — ChurchTools reads scoped grants
- * back one row per dataId, so a stable order keeps multi-scope grants idempotent. Pending keys
+ * Resolved (in-state, catalog or numeric) entries sort ascending by id — ChurchTools reads scoped
+ * grants back one row per dataId, so a stable order keeps multi-scope grants idempotent. Pending keys
  * follow, sorted by key.
  */
 export function resolveScope(
-  scopeKeys: (string | number)[],
+  scopeKeys: readonly ScopeEntry[],
   state: State,
   declaredGroupKeys: ReadonlySet<string> = new Set(),
+  opts: { refs?: ScopeRefMap; scopeField?: string | null; where?: string } = {},
 ): ScopeResolution[] {
+  const { refs, scopeField, where = "scope" } = opts;
   const resolved: ScopeResolution[] = [];
   const pending: ScopeResolution[] = [];
-  for (const key of scopeKeys) {
+  for (const raw of scopeKeys) {
+    const key = normalizeScopeEntry(raw, where);
     if (typeof key === "number") {
       // `-1` is ChurchTools' ALL sentinel (verified live 2026-08-10: `churchcore:login to external
       // system` with `dataId: -1` reads back through `/permissions/global` expanded to every external
@@ -59,11 +274,43 @@ export function resolveScope(
       resolved.push({ key: String(key), id: key, numeric: true });
       continue;
     }
+    if (isRef(key)) {
+      const hit = refs?.get(refKey(key));
+      if (!hit) {
+        // resolveScopeRefs pre-resolves every ref in the permission set before any diffing, so a miss
+        // here means a caller built tuples without that pass — an internal wiring bug, not a config error.
+        throw new Error(
+          `Scope reference ${refLabel(key)} was not pre-resolved for this host — build the plan through ` +
+            `buildPermissionPlan (or pass the map from resolveScopeRefs) so logical scopes can resolve.`,
+        );
+      }
+      if (hit.id === null) {
+        pending.push({ key: hit.managedKey ?? refKey(key), id: null, type: hit.managedType });
+      } else if (hit.managedKey !== undefined) {
+        resolved.push({ key: hit.managedKey, id: hit.id, type: hit.managedType });
+      } else {
+        // Catalog-resolved: host-correct already and with no managed identity to re-resolve against,
+        // so it behaves exactly like the numeric escape hatch from here on.
+        resolved.push({ key: String(hit.id), id: hit.id, numeric: true });
+      }
+      continue;
+    }
+    if (scopeField != null && scopeField !== GROUP_SCOPE_FIELD) {
+      const dimension = SCOPE_REF_KIND[scopeField];
+      const hint = dimension
+        ? `use a ${dimension.kind} reference (e.g. { ${sugarFieldFor(dimension.kind)}: "${key}" })`
+        : "declare its scope as a numeric dataId";
+      throw new Error(
+        `${where}: scope entry "${key}" is a bare string, which names a managed GROUP — but this right ` +
+          `scopes by "${scopeField}", not by group. A bare string here would silently grant on the wrong ` +
+          `dimension, so ${hint}.`,
+      );
+    }
     const m = state.resources[key];
     if (m && m.type === "group") {
-      resolved.push({ key, id: m.id });
+      resolved.push({ key, id: m.id, type: "group" });
     } else if (declaredGroupKeys.has(key)) {
-      pending.push({ key, id: null });
+      pending.push({ key, id: null, type: "group" });
     } else {
       throw new Error(
         `Scope key "${key}" does not resolve to a managed group. Declare/adopt it, use a group already under management, or pass a raw numeric dataId if this right's scope is not a group (see the catalog's scopeField).`,
@@ -75,19 +322,29 @@ export function resolveScope(
   return [...resolved, ...pending];
 }
 
+/** The DSL sugar field name for a scope {@link RefKind} — for error hints only. */
+function sugarFieldFor(kind: RefKind): string {
+  const hit = Object.entries(SCOPE_SUGAR).find(([, make]) => make("x").kind === kind);
+  return hit?.[0] ?? kind;
+}
+
 /**
  * Re-resolve a scoped grant tuple's dataId against the current (post-execute) state, using the
  * symbolic scopeKey retained on the tuple. Fixes stale ids after a recreate and fills in the id of
- * a group created in the same apply. Unscoped tuples (no scopeKey) pass through unchanged. Throws
- * if the scope key no longer resolves to a managed group — which should be impossible once the
- * resource tier has applied, so it signals a real inconsistency rather than being silently skipped.
+ * a resource created in the same apply. Unscoped tuples, numeric scopes and catalog-resolved refs
+ * (no `scopeKey`) pass through unchanged. `scopeType` names the managed resource type behind the key
+ * — "group" for the historical group dimension, "campus"/"group-type" for a typed scope ref (#98).
+ * Throws if the scope key no longer resolves to a managed resource of that type — which should be
+ * impossible once the resource tier has applied, so it signals a real inconsistency rather than
+ * being silently skipped.
  */
 export function reresolveTuple(t: GrantTuple, state: State): GrantTuple {
   if (t.scopeKey == null) return t;
+  const type = t.scopeType ?? "group";
   const m = state.resources[t.scopeKey];
-  if (!m || m.type !== "group") {
+  if (!m || m.type !== type) {
     throw new Error(
-      `Scope key "${t.scopeKey}" did not resolve to a managed group after apply — cannot write its grant with a valid dataId.`,
+      `Scope key "${t.scopeKey}" did not resolve to a managed ${type} after apply — cannot write its grant with a valid dataId.`,
     );
   }
   return { ...t, dataId: [m.id], pending: false };

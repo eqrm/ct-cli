@@ -10,7 +10,7 @@ import type { State } from "../state/state.js";
 import type { DesiredResource } from "../engine/types.js";
 import { resolveAuthId, CATALOG_META, KNOWN_AUTH_IDS } from "./catalog.js";
 import { compareVersions } from "../api/version.js";
-import { resolveScope } from "./scope.js";
+import { resolveScope, resolveScopeRefs, type ScopeRefMap } from "./scope.js";
 import { normalizeActual, diffGrants, type GrantTuple, type GrantDiff, type DomainType, type RawPermission } from "./grants.js";
 import type { DesiredPermission } from "./types.js";
 import { Resolver } from "../resolve/resolver.js";
@@ -39,6 +39,7 @@ export function desiredTuples(
   p: DesiredPermission,
   state: State,
   declaredGroupKeys: ReadonlySet<string> = new Set(),
+  scopeRefs: ScopeRefMap = new Map(),
 ): GrantTuple[] {
   return p.grants.flatMap((g): GrantTuple[] => {
     const name = typeof g === "string" ? g : g.right;
@@ -56,17 +57,23 @@ export function desiredTuples(
     if (entry.scopeField == null) {
       throw new Error(`${p.domainType} "${p.key}": "${name}" is not a scoped right (no scopeField) — remove "scope" or use a scoped right.`);
     }
-    // Retain the symbolic scopeKey on every scoped tuple so its dataId is re-resolved against
-    // post-execute state at apply time. `id === null` means the group is declared but not yet
-    // created (pending); it renders in the plan and always diffs into toPut (#29, #33.3). A `numeric`
-    // resolution (#49 escape hatch) carries no state-backed key to re-resolve — its dataId is already
-    // final, so no scopeKey is retained (apply.ts's `reresolveTuple` passes such a tuple through as-is).
-    return resolveScope(g.scope, state, declaredGroupKeys).map(({ key, id, numeric }) =>
+    // Retain the symbolic scopeKey (and its managed resource type, #98) on every scoped tuple so its
+    // dataId is re-resolved against post-execute state at apply time. `id === null` means the target is
+    // declared but not yet created (pending); it renders in the plan and always diffs into toPut (#29,
+    // #33.3). A `numeric` resolution — the #49 escape hatch, or a typed ref that resolved through a live
+    // master-data catalog rather than managed state — carries no state-backed key to re-resolve: its
+    // dataId is already final, so no scopeKey is retained (apply.ts's `reresolveTuple` passes it as-is).
+    const scoped = resolveScope(g.scope, state, declaredGroupKeys, {
+      refs: scopeRefs,
+      scopeField: entry.scopeField,
+      where: `${p.domainType} "${p.key}" grant "${name}"`,
+    });
+    return scoped.map(({ key, id, numeric, type }) =>
       id === null
-        ? { authId: entry.authId, dataId: [], type: "grant" as const, scopeKey: key, pending: true }
+        ? { authId: entry.authId, dataId: [], type: "grant" as const, scopeKey: key, scopeType: type, pending: true }
         : numeric
           ? { authId: entry.authId, dataId: [id], type: "grant" as const }
-          : { authId: entry.authId, dataId: [id], type: "grant" as const, scopeKey: key },
+          : { authId: entry.authId, dataId: [id], type: "grant" as const, scopeKey: key, scopeType: type },
     );
   });
 }
@@ -148,7 +155,11 @@ export async function buildPermissionPlan(
   }
   // Resolve logical domainIds (#20) up front. Shares the command layer's resolver so master-data
   // catalogs are fetched once across buildPlan + buildPermissionPlan; falls back to a private one.
-  const resolved = await resolveDomainIds(permissions, resolver ?? new Resolver({ client, state, desired }));
+  const refResolver = resolver ?? new Resolver({ client, state, desired });
+  const resolved = await resolveDomainIds(permissions, refResolver);
+  // Typed logical scope refs (#98) resolve — and are dimension-checked against each right's
+  // scopeField — in one async pass here, so the per-grant `resolveScope` below stays synchronous.
+  const scopeRefs = await resolveScopeRefs(permissions, refResolver, state);
   // Keys declared as groups in the config — valid scope targets even before they are created.
   const declaredGroupKeys = new Set(desired.filter((r) => r.type === "group").map((r) => r.key));
   // one bulk fetch per distinct domainType — but only for CONCRETE domains. A pending domain (#69)
@@ -178,7 +189,7 @@ export async function buildPermissionPlan(
         pendingDomain: p.pendingDomain,
         // domainId is irrelevant to desiredTuples (it only reads key/domainType/grants); pass the
         // pending Ref through so the shape stays a valid DesiredPermission.
-        diff: diffGrants(desiredTuples({ ...p, domainId: p.pendingDomain }, state, declaredGroupKeys), []),
+        diff: diffGrants(desiredTuples({ ...p, domainId: p.pendingDomain }, state, declaredGroupKeys, scopeRefs), []),
       });
       continue;
     }
@@ -213,7 +224,7 @@ export async function buildPermissionPlan(
           `(\`npm run regenerate:permission-catalog\`) if this right should be manageable.`,
       );
     }
-    items.push({ key: p.key, domainType: p.domainType, domainId: p.domainId, diff: diffGrants(desiredTuples(p, state, declaredGroupKeys), knownActual) });
+    items.push({ key: p.key, domainType: p.domainType, domainId: p.domainId, diff: diffGrants(desiredTuples(p, state, declaredGroupKeys, scopeRefs), knownActual) });
   }
   return { items, fetchErrors, warnings };
 }

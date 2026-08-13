@@ -120,7 +120,7 @@ confirmation — and a declaration marked `preventDestroy: true` blocks even tha
 | --- | --- | --- |
 | Campuses | `ct.campus` | [config guide](docs/configuration.md) |
 | Groups (fields, campus, multi-parent hierarchy) | `ct.group` | [config guide](docs/configuration.md) |
-| Group types, roles, age/target groups, relationship types | `ct.groupType`, `ct.roleDefinition`, `ct.ageGroup`, `ct.targetGroup`, `ct.relationshipType` | reusable building blocks |
+| Group types, roles, age/target groups, relationship types, person statuses | `ct.groupType`, `ct.roleDefinition`, `ct.ageGroup`, `ct.targetGroup`, `ct.relationshipType`, `ct.personStatus` | reusable building blocks |
 | Permissions (group-role, group-type-role, person-status) | `ct.groupRole`, `ct.groupTypeRole`, `ct.status` | [permissions](docs/handbuch/permissions.md) |
 | Auto-groups (dynamic groups) | the `dynamic` block on a group | [dynamic groups](docs/handbuch/dynamic-groups.md) |
 | Repeated structure, parametrized | a plain function over the DSL | [blueprints](docs/handbuch/blueprints.md) |

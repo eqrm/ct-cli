@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { emitAdoptedGrants } from "../src/permissions/adopt.js";
 import { diffGrants, normalizeActual, type DomainType, type RawPermission } from "../src/permissions/grants.js";
 import { desiredTuples } from "../src/permissions/plan.js";
-import type { Grant } from "../src/permissions/types.js";
+import type { Grant, ScopeEntry } from "../src/permissions/types.js";
 import type { State } from "../src/state/state.js";
 
 const HOST = "https://mychurch.church.tools";
@@ -42,7 +42,10 @@ function parseEmittedGrants(block: string): Grant[] {
     }
     const m = /^\{ right: ("(?:[^"\\]|\\.)*"), scope: \[(.*)\] \}$/.exec(entry);
     if (!m?.[1] || m[2] == null) throw new Error(`Unparseable emitted grant line: ${line}`);
-    grants.push({ right: JSON.parse(m[1]) as string, scope: JSON.parse(`[${m[2]}]`) as (string | number)[] });
+    // Scope entries are JSON except for a typed logical ref (#98), whose object key is an unquoted
+    // TS identifier (`{ campus: "koblenz" }`) — quote it so the whole array parses as JSON.
+    const scopeJson = m[2].replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, '$1"$2"$3');
+    grants.push({ right: JSON.parse(m[1]) as string, scope: JSON.parse(`[${scopeJson}]`) as ScopeEntry[] });
   }
   return grants;
 }
@@ -288,6 +291,46 @@ describe("emitAdoptedGrants", () => {
     ];
     const block = emitAdoptedGrants({ domainType: "group_type_role", domainId: 42, rows, state: emptyState() });
     expect(block).toContain("ct adopt group 777");
+  });
+
+  it("campus-dimension scope whose dataId is a MANAGED campus → emits a logical ref, not a number (#98)", () => {
+    // churchdb:view station (authId 124) scopes by cdb_station. Campus ids are host-specific, so an
+    // adopted numeric literal is a misgrant when the block is replayed on the other instance.
+    const state = stateWithKids();
+    state.resources.koblenz = { type: "campus", id: 23, key: "koblenz", fields: {}, adoptedAt: "t", updatedAt: "t" };
+    const rows: RawPermission[] = [
+      { authId: 124, dataId: 23, type: "grant", domainId: 42, meta: { modifiedPid: 5 } },
+    ];
+    const block = emitAdoptedGrants({ domainType: "group_role", domainId: 42, rows, state });
+
+    expect(block).toContain('{ right: "churchdb:view station", scope: [{ campus: "koblenz" }] }');
+    expect(block).not.toContain("scope: [23]");
+    expect(block).not.toContain("WARNING");
+  });
+
+  it("campus-dimension scope on an UNMANAGED campus stays numeric with a NOTE, and is still applicable (#98)", () => {
+    const rows: RawPermission[] = [
+      { authId: 124, dataId: 23, type: "grant", domainId: 42, meta: { modifiedPid: 5 } },
+    ];
+    const block = emitAdoptedGrants({ domainType: "group_role", domainId: 42, rows, state: emptyState() });
+
+    expect(block).toContain('{ right: "churchdb:view station", scope: [23] }');
+    expect(block).toContain("ct adopt campus 23");
+    // A NOTE, not a WARNING: the numeric line IS valid config, just not portable — nothing is at
+    // risk of being revoked, so the block-level "will REVOKE" header must stay off.
+    expect(block).not.toContain("WARNING");
+    expect(block).not.toContain("REVOKE");
+  });
+
+  it("mixes managed (logical) and unmanaged (numeric) campus scopes in one grant", () => {
+    const state = emptyState();
+    state.resources.koblenz = { type: "campus", id: 23, key: "koblenz", fields: {}, adoptedAt: "t", updatedAt: "t" };
+    const rows: RawPermission[] = [
+      { authId: 124, dataId: 23, type: "grant", domainId: 42, meta: { modifiedPid: 5 } },
+      { authId: 124, dataId: 99, type: "grant", domainId: 42, meta: { modifiedPid: 5 } },
+    ];
+    const block = emitAdoptedGrants({ domainType: "group_role", domainId: 42, rows, state });
+    expect(block).toContain('scope: [{ campus: "koblenz" }, 99]');
   });
 
   it("round trip — every emitted grant passes the real desiredTuples, for any mix of rows", () => {
