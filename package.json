@@ -1,6 +1,6 @@
 {
   "name": "@eqrm/ct-cli",
-  "version": "0.1.0",
+  "version": "3.0.0-bwl",
   "description": "ChurchTools structure-as-code CLI — declarative plan/apply for the overarching, rights-bearing structure (campuses, groups, hierarchies, permissions, auto-groups). Never manages people.",
   "license": "MIT",
   "type": "module",

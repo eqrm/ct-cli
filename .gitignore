@@ -20,6 +20,9 @@ src/api/schema.d.ts
 /coverage/
 .vitest/
 
+# Generated permission reports (may contain person names and instance-specific data)
+/reports/
+
 # MkDocs output for docs/handbuch/ (built by .github/workflows/docs.yml, never committed)
 site/
 # …and the venv docs/README.md tells you to create here to build the section locally
