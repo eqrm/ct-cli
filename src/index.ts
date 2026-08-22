@@ -10,6 +10,7 @@ import { refreshCommand } from "./commands/refresh.js";
 import { planCommand } from "./commands/plan.js";
 import { applyCommand } from "./commands/apply.js";
 import { destroyCommand } from "./commands/destroy.js";
+import { initCommand } from "./commands/init.js";
 import { plannedCommands } from "./commands/placeholders.js";
 import { isMainModule } from "./isMain.js";
 import { error, formatError } from "./ui.js";
@@ -24,6 +25,7 @@ export function buildProgram(): Command {
     )
     .version("0.0.0");
 
+  program.addCommand(initCommand());
   program.addCommand(authCommand());
   program.addCommand(getCommand());
   program.addCommand(adoptCommand());

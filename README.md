@@ -96,6 +96,26 @@ commands.
 
 ## First run
 
+Create a config repository without having to assemble its files by hand:
+
+```bash
+mkdir bgk-ct-config
+cd bgk-ct-config
+ct init
+```
+
+In an interactive terminal, `ct init` can collect the ChurchTools URL, the first environment name,
+and whether to initialize Git. For scripts, pass the answers explicitly:
+
+```bash
+ct init --host https://example.church.tools --env prod --git --yes
+ct auth login --host https://example.church.tools --token ...
+ct coverage --env prod
+```
+
+The command creates `ct.config.ts`, `ct.envs.json`, `.gitignore`, `config/`, and `blueprints/`. It
+refuses to overwrite existing scaffold files.
+
 ```bash
 # The host is captured at login and stored with the token; CT_HOST overrides it for CI.
 ct auth login --host https://mychurch.church.tools --token <personal-login-token>
