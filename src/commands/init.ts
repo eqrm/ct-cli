@@ -1,7 +1,11 @@
 import { createInterface } from "node:readline";
 import { Command } from "commander";
+import { loginWithToken } from "../auth/login.js";
+import { supportsCredentialStorage } from "../auth/tokenStore.js";
 import { initializeConfigRepository } from "../init.js";
+import { askSecret } from "../ui/prompt.js";
 import { info, success } from "../ui.js";
+import { reportLogin } from "./auth.js";
 
 interface InitCommandOptions {
   host?: string;
@@ -45,9 +49,26 @@ export function initCommand(): Command {
           "Next: add an environment to ct.envs.json, then run `ct auth login --host <url> --token <token>`.",
         );
       } else {
-        info(
-          `Next: run \`ct auth login --host ${result.host} --token <token>\`, then \`ct coverage --env ${result.environment}\`.`,
-        );
+        if (process.stdin.isTTY && !opts.yes && supportsCredentialStorage()) {
+          const token = (
+            await askSecret("Personal login token (input hidden; leave empty to log in later): ")
+          ).trim();
+          if (token) {
+            reportLogin(await loginWithToken(result.host!, token));
+            info(`Next: run \`ct coverage --env ${result.environment}\`.`);
+            return;
+          }
+        }
+        if (supportsCredentialStorage()) {
+          info(
+            `Next: run \`ct auth login --host ${result.host}\`, then \`ct coverage --env ${result.environment}\`.`,
+          );
+        } else {
+          info(
+            `Next: set \`CT_HOST=${result.host}\` and \`CT_LOGINTOKEN\` in your environment, ` +
+              `then run \`ct coverage --env ${result.environment}\`.`,
+          );
+        }
       }
     });
 }

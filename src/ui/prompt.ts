@@ -4,6 +4,7 @@
  * the process's TTY state and a readline question on stdin.
  */
 import { createInterface } from "node:readline";
+import { Writable } from "node:stream";
 
 export interface PromptOptions {
   isTTY?: boolean;
@@ -22,6 +23,32 @@ function realAsk(question: string): Promise<string> {
 
 function ttyState(opts: PromptOptions): boolean {
   return opts.isTTY ?? Boolean(process.stdin.isTTY);
+}
+
+export interface SecretPromptOptions {
+  input?: NodeJS.ReadableStream;
+  output?: NodeJS.WritableStream;
+}
+
+/** Read a secret from the terminal without echoing its characters. */
+export function askSecret(message: string, opts: SecretPromptOptions = {}): Promise<string> {
+  const input = opts.input ?? process.stdin;
+  const output = opts.output ?? process.stderr;
+  const mutedOutput = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  const rl = createInterface({ input, output: mutedOutput, terminal: true });
+
+  output.write(message);
+  return new Promise<string>((resolve) => {
+    rl.question("", (answer) => {
+      rl.close();
+      output.write("\n");
+      resolve(answer);
+    });
+  });
 }
 
 /** Yes/No confirmation. `assumeYes` skips the prompt (for `-y`/CI). */

@@ -1,7 +1,13 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { readToken, parseCredentials } from "../src/auth/tokenStore.js";
+import { readToken, parseCredentials, supportsCredentialStorage } from "../src/auth/tokenStore.js";
 
 const original = process.env.CT_LOGINTOKEN;
+
+it("supports the macOS Keychain but not unsupported platform stores", () => {
+  expect(supportsCredentialStorage("darwin")).toBe(true);
+  expect(supportsCredentialStorage("linux")).toBe(false);
+  expect(supportsCredentialStorage("win32")).toBe(false);
+});
 
 afterEach(() => {
   if (original === undefined) {

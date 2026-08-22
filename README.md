@@ -104,12 +104,16 @@ cd bgk-ct-config
 ct init
 ```
 
-In an interactive terminal, `ct init` can collect the ChurchTools URL, the first environment name,
-and whether to initialize Git. For scripts, pass the answers explicitly:
+In an interactive terminal, `ct init` collects the ChurchTools URL, the first environment name,
+whether to initialize Git, and optionally a personal login token. The token input is hidden; when
+provided on macOS, it is verified immediately and stored in the Keychain. On platforms without
+supported secure credential storage, `ct init` does not request a token and explains how to use
+`CT_HOST` and `CT_LOGINTOKEN` instead. For scripts, pass the non-secret answers explicitly and log
+in through environment variables:
 
 ```bash
 ct init --host https://example.church.tools --env prod --git --yes
-ct auth login --host https://example.church.tools --token ...
+CT_LOGINTOKEN=... ct auth login --host https://example.church.tools
 ct coverage --env prod
 ```
 

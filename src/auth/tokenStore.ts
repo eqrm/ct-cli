@@ -37,8 +37,8 @@ export interface Credentials {
   token: string;
 }
 
-function isMac(): boolean {
-  return platform() === "darwin";
+export function supportsCredentialStorage(currentPlatform: NodeJS.Platform = platform()): boolean {
+  return currentPlatform === "darwin";
 }
 
 /** Parse the stored blob. Returns null for anything that is not a well-formed {host, token}. */
@@ -117,7 +117,7 @@ async function keychainDelete(account: string): Promise<void> {
  * with no `--env` — keeps working, and this login becomes the default).
  */
 export async function storeCredentials(creds: Credentials): Promise<string> {
-  if (!isMac()) {
+  if (!supportsCredentialStorage()) {
     throw new Error(
       "Credential storage requires the macOS Keychain. On other platforms, set CT_HOST and CT_LOGINTOKEN instead.",
     );
@@ -136,7 +136,7 @@ export async function storeCredentials(creds: Credentials): Promise<string> {
  * another). With no `host`, return the default / last-login blob (single-host path).
  */
 export async function readCredentials(host?: string): Promise<Credentials | null> {
-  if (!isMac()) {
+  if (!supportsCredentialStorage()) {
     return null;
   }
   if (host === undefined) {
@@ -174,7 +174,7 @@ export async function readStoredHost(): Promise<string | null> {
  * OTHER hosts are left in place; re-login overwrites them.)
  */
 export async function clearCredentials(): Promise<void> {
-  if (isMac()) {
+  if (supportsCredentialStorage()) {
     const current = await readCredentials(); // default blob → its host's per-host account
     if (current) {
       await keychainDelete(current.host);
