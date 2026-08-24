@@ -1,13 +1,20 @@
 import { Command } from "commander";
 import { CtClient } from "../api/ctClient.js";
 import { normalizeHost, resolveConfig } from "../config.js";
-import { storeCredentials, readToken, clearCredentials } from "../auth/tokenStore.js";
+import {
+  storeCredentials,
+  readToken,
+  clearCredentials,
+  isSecureStorageAvailable,
+} from "../auth/tokenStore.js";
+import { bootstrapLoginToken } from "../auth/login.js";
+import { askVisible } from "../ui/prompt.js";
 import { checkAllEnvAuth, renderEnvAuth, allEnvsAuthenticated } from "../auth/status.js";
 import { authedSession } from "../api/session.js";
 import { prepareEnvHost } from "../env/context.js";
 import { loadEnvProfile, loadEnvProfiles, resolveEnvsPath } from "../env/envs.js";
 import { meetsMinVersion, MIN_CT_VERSION, type CtInfo } from "../api/version.js";
-import { success, error, info, warn, out } from "../ui.js";
+import { success, error, info, warn, out, formatError } from "../ui.js";
 
 /**
  * The `--all` preflight: one line per environment, resolving each env's host and
@@ -36,23 +43,58 @@ export function authCommand(): Command {
 
   cmd
     .command("login")
-    .description("Store and verify a ChurchTools host + personal login token")
+    .description(
+      "Store and verify a ChurchTools host + personal login token (prompts when --token is omitted)",
+    )
     .option("-H, --host <url>", "ChurchTools host, e.g. https://mychurch.church.tools (or set CT_HOST)")
     .option("-t, --token <token>", "personal login token (or set CT_LOGINTOKEN)")
     .action(async (opts: { host?: string; token?: string }) => {
-      const rawHost = opts.host?.trim() || process.env.CT_HOST?.trim();
+      const interactive = Boolean(process.stdin.isTTY);
+      let rawHost = opts.host?.trim() || process.env.CT_HOST?.trim();
+      if (!rawHost && interactive && isSecureStorageAvailable()) {
+        rawHost = (await askVisible("ChurchTools host (e.g. https://mychurch.church.tools): ")).trim();
+      }
       if (!rawHost) {
         error("No host provided. Pass --host <url> or set CT_HOST.");
         process.exitCode = 1;
         return;
       }
-      const token = opts.token?.trim() || process.env.CT_LOGINTOKEN?.trim();
-      if (!token) {
+      const config = { host: normalizeHost(rawHost) };
+
+      // The non-interactive contract is unchanged: a token from --token or
+      // CT_LOGINTOKEN is verified and stored exactly as before, and nothing
+      // prompts. Only the absence of one opens the guided flow (#138).
+      let token = opts.token?.trim() || process.env.CT_LOGINTOKEN?.trim();
+      if (!token && !interactive) {
         error("No token provided. Pass --token <token> or set CT_LOGINTOKEN.");
         process.exitCode = 1;
         return;
       }
-      const config = { host: normalizeHost(rawHost) };
+      if (!token) {
+        let outcome;
+        try {
+          outcome = await bootstrapLoginToken(config.host);
+        } catch (err) {
+          // formatError never sees a secret: LoginError carries a status and a
+          // redacted message, never the request body that was sent.
+          error(formatError(err));
+          process.exitCode = 1;
+          return;
+        }
+        if (outcome.kind === "unsupported") {
+          error(
+            "Credential storage requires the macOS Keychain. " + `On this platform, ${outcome.hint} instead.`,
+          );
+          process.exitCode = 1;
+          return;
+        }
+        if (outcome.kind === "skipped") {
+          info(`Skipped — no credentials stored. To log in later: ${outcome.hint}`);
+          return;
+        }
+        token = outcome.token;
+      }
+
       const client = new CtClient(config);
       const me = await client.authenticate(token);
       const location = await storeCredentials({ host: config.host, token });
