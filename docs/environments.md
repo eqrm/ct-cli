@@ -55,7 +55,7 @@ login` stores credentials **per host**, so one machine can hold logins for `dev`
 and `prod` at once (a pre-existing single login still works as a fallback).
 
 `ct auth status --all` is stricter about the bare `CT_LOGINTOKEN` fallback than
-an `--env` command is, because it walks *every* host: an ambient
+an `--env` command is, because it walks _every_ host: an ambient
 `CT_LOGINTOKEN` is offered only to the host it is bound to (`CT_HOST`, else the
 stored default login's host). Give each env its own `tokenEnv` to authenticate
 more than one host in CI — the alternative would post one instance's token to
@@ -85,7 +85,7 @@ one an `apply` would refuse. Tokens are never printed — only where each one ca
 from.
 
 `ct auth logout --env <name>` removes just that host's credentials and leaves
-your other logins in place. If that host also happened to be your *default*
+your other logins in place. If that host also happened to be your _default_
 login, the shared entry goes with it and the command says so — commands without
 `--env` then need a `ct auth login` again.
 
