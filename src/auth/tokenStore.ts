@@ -21,12 +21,19 @@
  * Note: `security ... -w <value>` passes the value as an argv, briefly visible
  * to `ps`. Acceptable for a local developer CLI; the value never touches git.
  */
-import { platform } from "node:os";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { clearSession } from "./sessionStore.js";
+import {
+  isMac,
+  keychainDelete,
+  keychainGet,
+  keychainSet,
+  resetKeychainCache,
+  KEYCHAIN_SERVICE,
+} from "./keychain.js";
 
-const run = promisify(execFile);
-const KEYCHAIN_SERVICE = "ct-cli";
+/** Re-exported so callers (and tests) keep one entry point for invalidating stored reads. */
+export { resetKeychainCache };
+
 /** The "default / last login" account — a single blob, also the single-host (pre-#22) location. */
 const DEFAULT_ACCOUNT = "credentials";
 /** Pre-host account name; a bare token used to live here. Cleared on logout so no secret is orphaned. */
@@ -37,8 +44,16 @@ export interface Credentials {
   token: string;
 }
 
-function isMac(): boolean {
-  return platform() === "darwin";
+/**
+ * Whether this platform has a credential store `ct` can write to — today, the
+ * macOS Keychain and nothing else. Exported because callers need to know BEFORE
+ * they collect anything: an interactive login that gathered a password on Linux
+ * could only throw it away again at {@link storeCredentials}, having handled a
+ * secret for nothing. Those platforms keep the `CT_HOST` / `CT_LOGINTOKEN`
+ * guidance instead (#138).
+ */
+export function isSecureStorageAvailable(): boolean {
+  return isMac();
 }
 
 /** Parse the stored blob. Returns null for anything that is not a well-formed {host, token}. */
@@ -57,57 +72,6 @@ export function parseCredentials(raw: string): Credentials | null {
     return null;
   }
   return { host, token };
-}
-
-async function keychainSet(account: string, value: string): Promise<void> {
-  await run("security", ["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", account, "-w", value]);
-}
-
-/**
- * Memoized keychain reads for this process, keyed by account. A single run
- * resolves the host (via `resolveConfig`) AND the token (via `authedSession`) —
- * each of which reaches for the stored credentials — so without this cache the
- * same entry is fetched multiple times per command, spawning
- * `security find-generic-password` (and prompting to unlock a locked Keychain)
- * every time. A cached value of `null` = read and absent. Invalidated wholesale
- * on any write (`resetKeychainCache`).
- */
-const cachedBlobs = new Map<string, string | null>();
-
-/** Drop the memoized keychain reads. Called after every store/clear; exported for tests. */
-export function resetKeychainCache(): void {
-  cachedBlobs.clear();
-}
-
-async function keychainGet(account: string): Promise<string | null> {
-  const cached = cachedBlobs.get(account);
-  if (cached !== undefined) {
-    return cached;
-  }
-  let value: string | null;
-  try {
-    const { stdout } = await run("security", [
-      "find-generic-password",
-      "-s",
-      KEYCHAIN_SERVICE,
-      "-a",
-      account,
-      "-w",
-    ]);
-    value = stdout.trim() || null;
-  } catch {
-    value = null;
-  }
-  cachedBlobs.set(account, value);
-  return value;
-}
-
-async function keychainDelete(account: string): Promise<void> {
-  try {
-    await run("security", ["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account]);
-  } catch {
-    /* not present — nothing to delete */
-  }
 }
 
 /**
@@ -168,20 +132,54 @@ export async function readStoredHost(): Promise<string | null> {
 }
 
 /**
- * Remove stored credentials. Clears the default blob, the pre-host bare-token
- * entry, and — for the current default login — its per-host account, so a
- * single-host logout leaves no secret behind. (Additional per-host logins for
- * OTHER hosts are left in place; re-login overwrites them.)
+ * Remove stored credentials.
+ *
+ * With no `host`: clears the default blob, the pre-host bare-token entry, and —
+ * for the current default login — its per-host account, so a single-host logout
+ * leaves no secret behind. (Additional per-host logins for OTHER hosts are left
+ * in place; re-login overwrites them.)
+ *
+ * With a `host` (already normalized — `ct auth logout --env <name>`, #117):
+ * clears only that host's per-host account, leaving other hosts logged in. The
+ * default blob is dropped too when it points at that same host, since it holds a
+ * copy of the very token being removed — which also un-sets the host that
+ * commands WITHOUT `--env` fall back to. That is reported back in
+ * `clearedDefault` so the caller can say so instead of promising, wrongly, that
+ * nothing else changed.
+ *
+ * Either way the host's **cached session** goes with its credentials (#145): the
+ * session cookie is a live authenticated handle on the instance, so leaving it
+ * behind would mean `ct auth logout` had not actually logged anything out.
  */
-export async function clearCredentials(): Promise<void> {
+export interface ClearCredentialsResult {
+  /** True when the default (unqualified) login was removed along with the host's. */
+  clearedDefault: boolean;
+}
+
+export async function clearCredentials(host?: string): Promise<ClearCredentialsResult> {
+  let clearedDefault = false;
   if (isMac()) {
-    const current = await readCredentials(); // default blob → its host's per-host account
-    if (current) {
-      await keychainDelete(current.host);
+    if (host !== undefined) {
+      await keychainDelete(host);
+      await clearSession(host);
+      const fallback = await readCredentials(); // the default blob may hold the same token
+      if (fallback?.host === host) {
+        await keychainDelete(DEFAULT_ACCOUNT);
+        await keychainDelete(LEGACY_KEYCHAIN_ACCOUNT);
+        clearedDefault = true;
+      }
+    } else {
+      clearedDefault = true;
+      const current = await readCredentials(); // default blob → its host's per-host account
+      if (current) {
+        await keychainDelete(current.host);
+        await clearSession(current.host);
+      }
+      await keychainDelete(DEFAULT_ACCOUNT);
+      // Also drop the pre-host bare-token entry so an upgrade doesn't leave a secret behind.
+      await keychainDelete(LEGACY_KEYCHAIN_ACCOUNT);
     }
-    await keychainDelete(DEFAULT_ACCOUNT);
-    // Also drop the pre-host bare-token entry so an upgrade doesn't leave a secret behind.
-    await keychainDelete(LEGACY_KEYCHAIN_ACCOUNT);
   }
   resetKeychainCache(); // a later read in the same process must not return the cleared secret
+  return { clearedDefault };
 }

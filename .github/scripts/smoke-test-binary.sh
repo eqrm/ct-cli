@@ -27,6 +27,21 @@ chmod +x "$bin"
 echo "== ct --help =="
 "$bin" --help
 
+# The version constant is injected at compile time (bun --define, see
+# build-binaries.sh). If that injection ever stops working the binary falls back
+# to reading package.json, which does not exist inside the compiled bundle — so
+# it would silently ship "0.0.0-unknown", the exact dishonest answer #116 removed.
+# Nothing else in CI executes `--version` on the compiled path, so assert it here.
+echo
+echo "== ct --version =="
+version_line="$("$bin" --version)"
+echo "$version_line"
+expected="$(node -p 'require("./package.json").version')"
+if ! grep -Eq "^${expected} \(" <<<"$version_line"; then
+  echo "FAIL: expected --version to start with the package.json version ${expected}; got '${version_line}' (build-time version injection is broken)" >&2
+  exit 1
+fi
+
 echo
 echo "== ct plan (config-load exercise, no network/creds) =="
 set +e

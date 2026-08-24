@@ -38,25 +38,42 @@ function backoffMs(base: number, attempt: number): number {
   return clampDelay(exp + Math.floor(Math.random() * base));
 }
 
-function retryAfterMs(res: Response): number | null {
+/**
+ * The wait a response's `Retry-After` header asks for, in ms — `null` when the
+ * header is absent or unusable, and deliberately NOT clamped: this is the
+ * server's actual ask. Exported so a caller that has run out of retries can
+ * still *tell the user* how long to wait (see the 429 login message in
+ * `ctClient.authenticate`), where clamping to the sleep cap would understate it.
+ */
+export function parseRetryAfterMs(res: Response): number | null {
   const header = res.headers.get("retry-after")?.trim();
   if (!header) {
     return null;
   }
   // `Retry-After` is either a non-negative delta-seconds count or an HTTP-date.
   if (/^\d+$/.test(header)) {
-    return clampDelay(Number.parseInt(header, 10) * 1000);
+    return Number.parseInt(header, 10) * 1000;
   }
   // Only treat it as a date when it actually looks like one — `Date.parse` is
   // lax enough to accept e.g. "-5" as a year, which must not become a 0ms wait.
   if (/[a-zA-Z]/.test(header)) {
     const dateMs = Date.parse(header);
     if (Number.isFinite(dateMs)) {
-      return clampDelay(dateMs - Date.now());
+      return dateMs - Date.now();
     }
   }
   // Unparseable (e.g. a negative or malformed value): fall back to backoff.
   return null;
+}
+
+/**
+ * The `Retry-After` wait clamped to what this client is willing to sleep for —
+ * an outsized (or already-elapsed) value can neither hang the CLI nor turn into
+ * a busy retry.
+ */
+function retryAfterMs(res: Response): number | null {
+  const ms = parseRetryAfterMs(res);
+  return ms === null ? null : clampDelay(ms);
 }
 
 function shouldRetryStatus(status: number, isIdempotent: boolean): boolean {

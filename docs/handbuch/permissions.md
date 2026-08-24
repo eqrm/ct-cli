@@ -5,7 +5,7 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: 87fe6c847d70d89c
+sources_hash: 3ce80118edd98c48
 reviewed: 2026-08-17
 ---
 
@@ -462,6 +462,15 @@ the rest of the DSL uses — so both spellings are interchangeable.
 | `cdb_bereich`        | `{ department: "<name-slug>" }`           | managed Bereiche, then `GET /departments` (#108)           |
 | `cc_securitylevel`   | `{ securityLevel: "<name-slug>" }`        | managed security levels, then `GET /securitylevels` (#110) |
 | `cdb_comment_viewer` | `{ commentViewer: "<name-slug>" }`        | `GET /person/commentviewers` **only** (#102)               |
+
+Two `Ref` kinds are deliberately **not** in that table because no permission
+dimension scopes by them: `group-type-role` (a `groupTypeRoleId`, addressed by
+its `(group type, role name)` pair — #76) and `group-member-field` (a
+group-scoped member-field definition, addressed by its portable
+`(group key, local field key)` pair — #135). They share this file's resolver and
+its "managed state first, then live lookup, else a hard error at plan time"
+rules, but they are referenced from **dynamic-group rulesets**, not from grant
+scopes. See [Group member fields](group-member-fields.md).
 
 **Why this matters:** campus ids are host-specific — Mainz is `0` on eqrm prod
 and `6` on eqrm dev. A campus-scoped grant written as a numeric literal is

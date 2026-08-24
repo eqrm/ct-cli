@@ -16,13 +16,19 @@ import { CtApiError, type CtClient } from "../api/ctClient.js";
 import { resolveConfig } from "../config.js";
 import { prepareEnv } from "../env/context.js";
 import { normalizeRuleset } from "../engine/dynamic.js";
+import {
+  groupScopedRows,
+  localKeyOf,
+  MEMBER_FIELD_PROPS,
+  memberFieldsReadPath,
+} from "../engine/member-fields.js";
 import type { DynamicStatus } from "../engine/types.js";
 import { RESOURCES, configSnippet, fromInformation, slug } from "../resources/registry.js";
 import { ReverseResolver, type RoleCatalogEntry } from "../resolve/reverse.js";
 import type { RefKind } from "../resolve/refs.js";
 import { formatPortablizeWarnings, portablizeRuleset, scanUnportablized } from "../config/query-refs.js";
 import { chooseAdoptKey, loadState, saveState, upsert, type State } from "../state/state.js";
-import { success, info, warn, out } from "../ui.js";
+import { success, info, warn, out, formatError } from "../ui.js";
 
 interface AdoptGroupOptions {
   key?: string;
@@ -32,6 +38,8 @@ interface AdoptGroupOptions {
   type?: string;
   childrenOf?: string;
   withDynamic?: boolean;
+  /** Opt in to capturing the group's group-scoped member-field definitions (#135). Never the default. */
+  withMemberFields?: boolean;
   /** Opt in to changing an already-managed group's logical key (#123). Never the default. */
   rekey?: boolean;
   /** Commander's negatable `--no-portable-rulesets`: true unless the flag was passed (#101). */
@@ -102,27 +110,65 @@ async function resolveGroupId(
 }
 
 /**
+ * Resolve one `/groups/{id}/children` row to the group id it points at.
+ *
+ * CT answers this endpoint with either plain group rows (`{ id }`) or domain resources
+ * (`{ domainType: "group", domainIdentifier, apiUrl }`). For a domain resource the authoritative
+ * group id is `domainIdentifier` — a sibling `id`, if CT ever emits one, is the hierarchy edge's
+ * own id — so `domainIdentifier` is read first and `id` only backs it up. `apiUrl` is the last
+ * resort. `parentId` is threaded in purely so the error names the group that actually failed:
+ * `--children-of` walks whole subtrees, and "some group somewhere" is not actionable.
+ */
+function childId(raw: unknown, parentId: number): number {
+  let candidate: unknown = raw;
+  if (raw !== null && typeof raw === "object") {
+    const child = raw as Record<string, unknown>;
+    candidate = child.domainIdentifier ?? child.id;
+    if (candidate == null && typeof child.apiUrl === "string") {
+      candidate = /\/groups\/(\d+)(?:[/?#]|$)/.exec(child.apiUrl)?.[1];
+    }
+  }
+
+  const id =
+    typeof candidate === "number"
+      ? candidate
+      : typeof candidate === "string" && /^\d+$/.test(candidate.trim())
+        ? Number.parseInt(candidate, 10)
+        : Number.NaN;
+  if (!Number.isSafeInteger(id) || id < 0) {
+    const shape =
+      raw !== null && typeof raw === "object"
+        ? `{ ${Object.keys(raw as Record<string, unknown>).join(", ")} }`
+        : JSON.stringify(raw);
+    throw new Error(
+      `GET /groups/${parentId}/children returned a child without a usable id (${shape}); ` +
+        `expected a number or an object with id, domainIdentifier, or apiUrl.`,
+    );
+  }
+  return id;
+}
+
+/**
  * Recursively collect a group's full hierarchy subtree via `/groups/{id}/children`, in
  * parent-before-child (pre-order) sequence, excluding the root itself. Guards against a cyclic
  * hierarchy (a live-API bug, not a valid DAG state) with a `visited` set — never re-descends into
  * an id already seen, so a back-reference to an ancestor cannot loop forever.
+ *
+ * `/groups/{id}/children` is a paginated list endpoint, so it is read with `getAll`, never a plain
+ * `get` (#101): a plain GET returns only CT's default first page, which would silently drop the
+ * tail of a wide Bereich and every subtree hanging off it. `getAll` also absorbs CT's inconsistent
+ * page shapes (bare array vs. `{ data: [...] }`) and an empty 204 body, which for a leaf group is
+ * simply "no children".
  */
-async function collectSubtreeIds(rootId: number, client: Pick<CtClient, "get">): Promise<number[]> {
+async function collectSubtreeIds(rootId: number, client: Pick<CtClient, "getAll">): Promise<number[]> {
   const visited = new Set<number>([rootId]);
   const order: number[] = [];
 
   async function walk(id: number): Promise<void> {
-    let raw: unknown;
-    try {
-      raw = await client.get(`/groups/${id}/children`);
-    } catch (err) {
-      if (err instanceof CtApiError && err.status === 404) return; // no children (leaf, or unknown group)
-      throw err;
-    }
-    const children = Array.isArray(raw) ? raw : [];
-    for (const c of children) {
-      const cid = typeof c === "number" ? c : Number((c as Record<string, unknown> | null)?.id);
-      if (!Number.isFinite(cid) || visited.has(cid)) continue;
+    const page = await client.getAll<unknown>(`/groups/${id}/children`);
+    for (const c of page.data) {
+      const cid = childId(c, id);
+      if (visited.has(cid)) continue;
       visited.add(cid);
       order.push(cid);
       await walk(cid);
@@ -146,6 +192,53 @@ async function collectByGroupType(groupTypeId: number, client: Pick<CtClient, "g
 interface DynamicCapture {
   status: DynamicStatus;
   normalizedRuleset: Record<string, unknown>;
+}
+
+/**
+ * Capture a group's group-scoped member-field DEFINITIONS as portable declarations (#135).
+ *
+ * Emits `{ key, ...managed properties }` per field and **never a ChurchTools id** — the field's
+ * identity in config is the group key plus its local key (`ojbp_2026_27_praktikum_1::wahl`), so the
+ * same blueprint applied to another group, or another host, mints its own fields rather than
+ * resolving against this host's numbering. The local key comes from CT's own `referenceName`
+ * (slugged), falling back to the slugged name for a field created in the ChurchTools UI.
+ *
+ * Opt-in only (`--with-member-fields`) — and that opt-in is TRANSITIONAL, not a statement that
+ * member fields are optional: they are a category-2 owned structural child, so the flip to
+ * default-on is a follow-up governed by the promotion policy in docs/adoption-contract.md (the flag
+ * survives as a no-op, and `--no-member-fields` ships in the same release as the flip).
+ */
+async function captureMemberFields(
+  id: number,
+  client: Pick<CtClient, "get">,
+): Promise<Array<Record<string, unknown>> | undefined> {
+  let raw: unknown;
+  try {
+    raw = await client.get(memberFieldsReadPath(id));
+  } catch (err) {
+    // A group whose member fields cannot be read is not a reason to abort a bulk adoption of a whole
+    // subtree — say so and adopt the group without them. That holds for EVERY failure, not just the
+    // 404: a 403 on one group the token may not read the fields of, or a transient 429, would
+    // otherwise abort `--children-of` partway with the earlier groups already written to state.
+    // Silence is the one thing that is not allowed here, because "no member fields" and "could not
+    // read them" produce the same config.
+    if (!(err instanceof CtApiError && err.status === 404)) {
+      warn(
+        `group #${id}: member fields could not be read (${formatError(err)}) — adopted WITHOUT them. ` +
+          `Re-run \`ct adopt group ${id} --with-member-fields\` once the read succeeds.`,
+      );
+    }
+    return undefined;
+  }
+  const rows = groupScopedRows(raw);
+  if (rows.length === 0) return undefined;
+  return rows.map((row) => {
+    const declaration: Record<string, unknown> = { key: localKeyOf(row) };
+    for (const prop of MEMBER_FIELD_PROPS) {
+      if (row[prop] !== undefined) declaration[prop] = row[prop];
+    }
+    return declaration;
+  });
 }
 
 /** Fetch + normalize a group's ruleset and status. `undefined` (never throws) if the group isn't dynamic. */
@@ -189,6 +282,14 @@ export function adoptGroupCommand(): Command {
     .option(
       "--with-dynamic",
       "also capture each dynamic group's ruleset to rulesets/<key>.json and emit the dynamic: block",
+    )
+    .option(
+      "--with-member-fields",
+      "also capture each group's group-scoped member-field definitions and emit the memberFields: " +
+        "block (portable: no ChurchTools field ids are ever emitted). TRANSITIONAL: member fields " +
+        "are an owned part of a group, so this becomes the default in a later release (with a " +
+        "--no-member-fields escape hatch, and this flag kept working as a no-op) — see " +
+        "docs/adoption-contract.md",
     )
     .option(
       "--portable-rulesets",
@@ -312,6 +413,12 @@ export function adoptGroupCommand(): Command {
         // captured `dynamic` block (if any) is appended AFTER, so it is not treated as an id field.
         const { fields: sugared, todos } = await reverse.sugarFields(fields);
         const snippetFields: Record<string, unknown> = sugared;
+        // Emitted BEFORE `dynamic` so the snippet reads in apply order — the fields a ruleset may
+        // reference are declared above the ruleset that references them (#135).
+        if (opts.withMemberFields) {
+          const memberFields = await captureMemberFields(id, client);
+          if (memberFields) snippetFields.memberFields = memberFields;
+        }
         if (opts.withDynamic) {
           const captured = await captureDynamic(id, client);
           if (captured) {

@@ -2,14 +2,10 @@ import { describe, it, expect } from "vitest";
 import { buildProgram } from "../src/index.js";
 
 describe("ct program", () => {
-  it("exposes the package version", () => {
-    expect(buildProgram().version()).toBe("3.0.0-bwl");
-  });
-
   it("registers the core command surface", () => {
     const names = buildProgram().commands.map((c) => c.name());
     expect(names).toEqual(
-      expect.arrayContaining(["auth", "get", "adopt", "report", "plan", "apply", "destroy"]),
+      expect.arrayContaining(["auth", "get", "adopt", "report", "plan", "apply", "destroy", "completion"]),
     );
   });
 
@@ -34,6 +30,24 @@ describe("ct program", () => {
       const cmd = buildProgram().commands.find((c) => c.name() === name)!;
       expect(cmd.options.some((o) => o.long === "--env")).toBe(true);
     }
+  });
+
+  it("registers --env on auth status and auth logout (#117)", () => {
+    const auth = buildProgram().commands.find((c) => c.name() === "auth")!;
+    for (const name of ["status", "logout"]) {
+      const sub = auth.commands.find((c) => c.name() === name)!;
+      expect(sub.options.some((o) => o.long === "--env" && o.short === "-e")).toBe(true);
+    }
+  });
+
+  it("registers --all on auth status as the every-environment preflight (#117)", () => {
+    const auth = buildProgram().commands.find((c) => c.name() === "auth")!;
+    const status = auth.commands.find((c) => c.name() === "status")!;
+    expect(status.options.some((o) => o.long === "--all")).toBe(true);
+  });
+
+  it("reports a real version, not the 0.0.0 literal (#116)", () => {
+    expect(buildProgram().version()).not.toBe("0.0.0");
   });
 
   it("registers --confirm-env on apply and destroy (protected-env CI path, #22)", () => {

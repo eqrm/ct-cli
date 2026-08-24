@@ -17,6 +17,14 @@ impact, the things worth knowing:
   backend on Linux or Windows — those platforms must use `CT_LOGINTOKEN`. `ct.envs.json`
   stores only the _name_ of a token env var, never a value, which is why it is safe to
   commit.
+- **The session is cached, and treated as a second secret.** Since #145, the session cookie
+  and CSRF token a login yields are kept per host so a one-shot CLI does not re-run the
+  login handshake on every command (which trips ChurchTools' login rate limit). A live
+  session cookie is as powerful as the token, so it is stored the same way — in the
+  **macOS Keychain**, under a separate `session:<host>` entry, never in a file — and
+  therefore not at all on Linux/Windows, which keep handshaking per invocation. It is
+  bound to the host it was captured against and to a hash of the token that bought it,
+  never logged or printed, and removed by `ct auth logout` along with the token.
 - **Storing a token exposes it briefly to `ps`.** `ct auth login` shells out to
   `security add-generic-password -w <token>`, so the value sits in that process's argv for
   the duration of the call. On a shared machine, assume another local user could observe

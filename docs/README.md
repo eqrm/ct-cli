@@ -48,9 +48,10 @@ A page with no code behaviour to track declares `sources: []` plus a
 
 ## Everything else — developer- and operator-facing, unpublished
 
-| Page                                                     | About                                                                                             |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| [`api-coverage.md`](api-coverage.md)                     | Which ChurchTools endpoints support which CRUD verbs                                              |
-| [`group-field-decisions.md`](group-field-decisions.md)   | Which group fields are managed vs. left to the CT UI, and why                                     |
-| [`runbook-manual-surface.md`](runbook-manual-surface.md) | What `ct` cannot automate today — where the write path is missing, and the manual steps around it |
-| `superpowers/`                                           | Historical implementation plans; kept as a record, never published                                |
+| Page                                                     | About                                                                                              |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| [`adoption-contract.md`](adoption-contract.md)           | What else comes along when `ct adopt` adopts one resource — the five categories and their defaults |
+| [`api-coverage.md`](api-coverage.md)                     | Which ChurchTools endpoints support which CRUD verbs                                               |
+| [`group-field-decisions.md`](group-field-decisions.md)   | Which group fields are managed vs. left to the CT UI, and why                                      |
+| [`runbook-manual-surface.md`](runbook-manual-surface.md) | What `ct` cannot automate today — where the write path is missing, and the manual steps around it  |
+| `superpowers/`                                           | Historical implementation plans; kept as a record, never published                                 |

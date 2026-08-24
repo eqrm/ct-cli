@@ -243,6 +243,7 @@ describe("dynamic synthetic field — apply", () => {
       client: { request } as unknown as Pick<CtClient, "request">,
       state,
       id: 5,
+      key: "g",
       change: {
         field: "dynamic",
         from: undefined,
@@ -266,6 +267,7 @@ describe("dynamic synthetic field — apply", () => {
       client: { request } as unknown as Pick<CtClient, "request">,
       state,
       id: 5,
+      key: "g",
       change: {
         field: "dynamic",
         from: { status: "active", ruleset }, // same ruleset, only the status flips
@@ -286,6 +288,7 @@ describe("dynamic synthetic field — apply", () => {
       client: { request } as unknown as Pick<CtClient, "request">,
       state,
       id: 5,
+      key: "g",
       change: {
         field: "dynamic",
         from: { status: "active", ruleset: { description: "old", query: {}, process: {} } },
@@ -307,6 +310,7 @@ describe("dynamic synthetic field — apply", () => {
       client: { request } as unknown as Pick<CtClient, "request">,
       state,
       id: 5,
+      key: "g",
       change: {
         field: "dynamic",
         from: { status: "active", ruleset: {} },
@@ -330,6 +334,7 @@ describe("dynamic synthetic field — apply", () => {
         client: { request } as unknown as Pick<CtClient, "request">,
         state,
         id: 5,
+        key: "g",
         change: { field: "dynamic", from: undefined, to: { status: "none", ruleset: {} } },
       }),
     ).resolves.toBeUndefined(); // 404 swallowed — apply does not abort
@@ -350,6 +355,7 @@ describe("dynamic synthetic field — apply", () => {
         client: { request } as unknown as Pick<CtClient, "request">,
         state,
         id: 5,
+        key: "g",
         change: { field: "dynamic", from: undefined, to: { status: "none", ruleset: {} } },
       }),
     ).rejects.toThrow(/Server Error/);

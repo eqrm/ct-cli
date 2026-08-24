@@ -30,6 +30,13 @@ import type { State } from "../state/state.js";
 import type { DesiredResource } from "../engine/types.js";
 import { slug } from "../resources/registry.js";
 import {
+  groupScopedRows,
+  memberFieldStateKey,
+  matchesLocalKey,
+  memberFieldRowId,
+  memberFieldsReadPath,
+} from "../engine/member-fields.js";
+import {
   collectRefs,
   deepMapRefs,
   GROUP_STATUS_NO_CATALOG,
@@ -38,6 +45,7 @@ import {
   pendingRef,
   refKey,
   refLabel,
+  type GroupMemberFieldRef,
   type GroupRoleRef,
   type GroupTypeRoleRef,
   type PendingRef,
@@ -201,6 +209,14 @@ export class Resolver {
    * Ref resolved lazily at check time.
    */
   private readonly declaredRoleDefTypes = new Map<string, (number | Ref)[]>();
+  /**
+   * Group key → the slugged LOCAL member-field keys that group declares (#135). A member field is
+   * group-scoped, so "does this config declare it?" can only be answered per group — the same local
+   * key on two groups is two independent fields. Drives the pending decision below.
+   */
+  private readonly declaredMemberFields = new Map<string, Set<string>>();
+  /** Per-group member-field list cache, keyed by group id, fetched at most once per run. */
+  private readonly memberFieldLists = new Map<number, Promise<Record<string, unknown>[]>>();
 
   constructor(deps: ResolverDeps) {
     this.client = deps.client;
@@ -223,6 +239,9 @@ export class Resolver {
           else this.declaredRoleDefTypes.set(name, [gt]);
         }
       }
+      if (d.type === "group" && d.memberFields !== undefined) {
+        this.declaredMemberFields.set(d.key, new Set(d.memberFields.map((f) => slug(f.key))));
+      }
     }
   }
 
@@ -230,6 +249,7 @@ export class Resolver {
   async resolve(r: Ref, site: string, opts: ResolveOptions = {}): Promise<number | PendingRef> {
     if (r.kind === "group-role") return this.resolveGroupRole(r, site, opts);
     if (r.kind === "group-type-role") return this.resolveGroupTypeRole(r, site);
+    if (r.kind === "group-member-field") return this.resolveGroupMemberField(r, site);
     // (1) managed desired ∪ state by logical key
     const type = REF_KIND_TYPE[r.kind];
     if (type !== undefined) {
@@ -456,6 +476,82 @@ export class Resolver {
     );
   }
 
+  /**
+   * Resolve a group-scoped member field (#135) by its portable `(group, field)` pair to this host's
+   * numeric field id — the reference a dynamic-group ruleset uses so it never freezes one host's
+   * field id into a file that is applied elsewhere.
+   *
+   * Three outcomes, in order:
+   *  1. The owning group is managed AND the live `GET /groups/{id}/memberfields` carries the field →
+   *     its numeric id. (>1 match is a hard error: the local key would be ambiguous on this host.)
+   *  2. The field is DECLARED by this config for that group but does not exist on this host yet →
+   *     a {@link PendingRef}. Fields are created by the owning group's own apply item, before that
+   *     group's dynamic ruleset is installed, so the pending marker is completed from state during
+   *     apply (see `pendingIdFromState` and engine/synthetic.ts).
+   *  3. Neither → a hard error naming the portable identity. This is the check #135 asks for: a
+   *     ruleset naming a field that does not exist and is not declared FAILS AT PLAN TIME, before
+   *     anything is written.
+   */
+  private async resolveGroupMemberField(r: GroupMemberFieldRef, site: string): Promise<number | PendingRef> {
+    const declaresField = this.declaredMemberFields.get(r.group)?.has(slug(r.field)) === true;
+    const managed = this.state.resources[r.group];
+    if (!managed || managed.type !== "group") {
+      if (declaresField) return pendingRef(r);
+      const declaresGroup = this.declaredByType.get("group")?.has(r.group) === true;
+      throw new Error(
+        `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: ` +
+          (declaresGroup
+            ? `group "${r.group}" is declared but does not declare a member field "${r.field}". ` +
+              `Add it to that group's "memberFields" — a member field belongs to exactly one group, ` +
+              `so it can only be named through the group that owns it.`
+            : `no managed group named "${r.group}" is declared or adopted. Declare/adopt it, or fix the key.`),
+      );
+    }
+    const rows = await this.memberFieldList(managed.id);
+    const matches = rows.filter((row) => matchesLocalKey(row, r.field));
+    if (matches.length > 1) {
+      const list = matches
+        .map((row) => `${JSON.stringify(row.name ?? row.referenceName)} (#${String(memberFieldRowId(row))})`)
+        .join(", ");
+      throw new Error(
+        `Ambiguous ${refLabel(r)} referenced at ${site} on ${this.host}: ${matches.length} member ` +
+          `fields on group #${managed.id} match — ${list}. Rename one in ChurchTools so the local key ` +
+          `is unique within the group.`,
+      );
+    }
+    if (matches.length === 1) {
+      const id = memberFieldRowId(matches[0]!);
+      if (id === undefined) {
+        throw new Error(
+          `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: the matched member ` +
+            `field row carries no numeric id.`,
+        );
+      }
+      return id;
+    }
+    if (declaresField) return pendingRef(r);
+    const available = rows
+      .map((row) => (typeof row.name === "string" ? JSON.stringify(row.name) : "?"))
+      .join(", ");
+    throw new Error(
+      `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: group #${managed.id} has ` +
+        `no member field "${r.field}"${available ? ` (available: ${available})` : ""}, and this config ` +
+        `does not declare one. Declare it in that group's "memberFields", or fix the key.`,
+    );
+  }
+
+  /** One group's member-field list, fetched at most once per run (several refs may name one group). */
+  private memberFieldList(groupId: number): Promise<Record<string, unknown>[]> {
+    let p = this.memberFieldLists.get(groupId);
+    if (!p) {
+      p = this.client
+        .get<unknown>(memberFieldsReadPath(groupId))
+        .then((raw) => groupScopedRows(raw)) as Promise<Record<string, unknown>[]>;
+      this.memberFieldLists.set(groupId, p);
+    }
+    return p;
+  }
+
   private groupRoleList(groupId: number): Promise<CatalogRecord[]> {
     let p = this.groupRoleLists.get(groupId);
     if (!p) {
@@ -650,6 +746,23 @@ function pendingIdFromState(r: Ref, state: State): number {
       `Pending ${refLabel(r)} reached the state-only re-resolver — a group_role pairing id needs a ` +
         `live /groups/{id}/roles fetch, so it can only be completed by applyPermissionPlan (#106).`,
     );
+  }
+  if (r.kind === "group-member-field") {
+    // Completed from the OWNING GROUP's state entry (#135): the member-field apply records each
+    // field's freshly minted id under `memberFields` there, and it runs before the same group's
+    // dynamic ruleset (engine/synthetic.ts orders the pseudo-fields ahead of `dynamic`, and
+    // `applySyntheticFields` re-resolves each change immediately before applying it). So by the time
+    // a ruleset carrying this marker is written, the id is already in state.
+    const group = state.resources[r.group];
+    const id = group?.memberFields?.[memberFieldStateKey(r.field)];
+    if (typeof id !== "number") {
+      throw new Error(
+        `Pending ${refLabel(r)} did not resolve after its group applied — no member field "${r.field}" ` +
+          `was created for group "${r.group}" in this run. This usually means the group's create, or ` +
+          `that field's create, failed earlier.`,
+      );
+    }
+    return id;
   }
   if (r.kind === "group-type-role") {
     // A group-type-role ref resolves to a concrete /group/roles id at plan time (the catalog id exists

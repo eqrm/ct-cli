@@ -93,15 +93,32 @@ function snapshotFromChanges(base: Record<string, unknown>, changes: FieldChange
   return snap;
 }
 
+/**
+ * Apply every synthetic sub-resource field of one item, IN CHANGE ORDER.
+ *
+ * Each change's pending references are re-resolved immediately BEFORE that change is applied, not
+ * once up front (#135). That matters because synthetic fields on one resource can depend on each
+ * other: a group's member fields are created here, and the same group's dynamic ruleset — the next
+ * change in the same loop — may name one of them by its portable `<group>::<field>` identity. Up-front
+ * re-resolution would look for an id that the very next statement is about to mint. The write BODY is
+ * still built from the up-front re-resolved changes in `executePlan`; only synthetic writes are late-bound.
+ */
 async function applySyntheticFields(
   client: Pick<CtClient, "request">,
   state: State,
   id: number,
+  key: string,
   changes: FieldChange[],
 ): Promise<void> {
+  // One read cache per ITEM, so a group's N member-field changes share a single
+  // `GET /groups/{id}/memberfields` instead of issuing N identical ones. Deliberately not longer-
+  // lived than the item: the next apply must see the rows this one wrote.
+  const reads = new Map<string, Promise<unknown>>();
   for (const c of changes) {
     const f = syntheticField(c.field);
-    if (f) await f.apply({ client, state, id, change: c });
+    if (!f) continue;
+    const change = hasPendingRef(c.to) ? { ...c, to: reresolvePendingValue(c.to, state) } : c;
+    await f.apply({ client, state, id, key, change, reads });
   }
 }
 
@@ -112,8 +129,17 @@ export async function executePlan(plan: Plan, deps: ExecuteDeps): Promise<Execut
   // reference a same-run resource) see real ids, never a pending sentinel. Tier ordering guarantees a
   // referenced target (e.g. a same-run campus, tier 0) is already in state by the time its referencer
   // (a group, tier 1) applies. No-op when nothing is pending.
+  // SYNTHETIC fields are deliberately excluded here and late-bound instead (#135): their writes can
+  // depend on state an earlier synthetic write on the SAME item produces (a group's dynamic ruleset
+  // naming a member field created moments earlier in that item), so resolving them up front would
+  // look for an id that has not been minted yet. `applySyntheticFields` re-resolves each of them
+  // immediately before applying it.
   const reresolveChanges = (changes: FieldChange[]): FieldChange[] =>
-    changes.map((c) => (hasPendingRef(c.to) ? { ...c, to: reresolvePendingValue(c.to, state) } : c));
+    changes.map((c) =>
+      !isSyntheticField(c.field) && hasPendingRef(c.to)
+        ? { ...c, to: reresolvePendingValue(c.to, state) }
+        : c,
+    );
   const now = deps.now ?? (() => new Date().toISOString());
   const save = deps.save ?? saveState;
   const created: string[] = [];
@@ -190,7 +216,12 @@ export async function executePlan(plan: Plan, deps: ExecuteDeps): Promise<Execut
         upsert(state, { type: item.type, id: res.id, key: item.key, fields: body }, now());
         mirrorPreventDestroy(state.resources[item.key]!, item.preventDestroy);
         await save(statePath, state);
-        await applySyntheticFields(client, state, res.id, changes);
+        // Raw `item.changes`, not the up-front re-resolved copy: synthetic writes are late-bound so
+        // one can see state another just produced (see applySyntheticFields).
+        await applySyntheticFields(client, state, res.id, item.key, item.changes);
+        // Synthetic writes can add to the state entry (member-field ids, #135) — persist that too,
+        // so a crash after this point does not lose the id↔identity mapping.
+        await save(statePath, state);
         created.push(item.key);
       } else {
         const id = item.id;
@@ -222,7 +253,8 @@ export async function executePlan(plan: Plan, deps: ExecuteDeps): Promise<Execut
         upsert(state, { type: item.type, id, key: item.key, fields: snapshot }, now());
         mirrorPreventDestroy(state.resources[item.key]!, item.preventDestroy);
         await save(statePath, state);
-        await applySyntheticFields(client, state, id, changes);
+        await applySyntheticFields(client, state, id, item.key, item.changes);
+        await save(statePath, state);
         updated.push(item.key);
       }
     } catch (err) {

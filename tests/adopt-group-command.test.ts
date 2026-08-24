@@ -15,7 +15,9 @@ import type { CtClient } from "../src/api/ctClient.js";
  *  - `/group/grouptypes` (for --type's logical-key resolution)
  *  - `/dynamicgroups/{id}/ruleset` + `/status` (for --with-dynamic; #31 is deliberately NOT dynamic)
  */
-function makeClient() {
+type ChildrenResponse = "array" | "envelope" | "domain-envelope" | "root-404";
+
+function makeClient(childrenResponse: ChildrenResponse = "array") {
   const groups: Record<number, Record<string, unknown>> = {
     10: { id: 10, name: "Area A", information: { groupTypeId: 5, groupStatusId: 1 } },
     11: { id: 11, name: "Area B", information: { groupTypeId: 5, groupStatusId: 1 } },
@@ -70,6 +72,23 @@ function makeClient() {
     },
   };
   const statuses: Record<number, string> = { 30: "active", 33: "active" };
+  // Group-scoped member fields (#135). Group 31 has two custom fields plus a row sourced elsewhere
+  // (`type: "person"`), which must NOT be adopted — only `/memberfields/group` rows are manageable.
+  const memberFields: Record<number, Array<Record<string, unknown>>> = {
+    31: [
+      {
+        id: 701,
+        type: "group",
+        referenceName: "wahl",
+        name: "Wahl",
+        fieldTypeCode: "text",
+        requiredInRegistrationForm: true,
+        sortKey: 1,
+      },
+      { id: 702, type: "group", referenceName: "notiz", name: "Notiz", fieldTypeCode: "textarea" },
+      { id: 703, type: "person", referenceName: "vorname", name: "Vorname", fieldTypeCode: "text" },
+    ],
+  };
 
   const get = vi.fn(async (path: string): Promise<unknown> => {
     let m = /^\/groups\/(\d+)$/.exec(path);
@@ -79,7 +98,26 @@ function makeClient() {
       return g;
     }
     m = /^\/groups\/(\d+)\/children$/.exec(path);
-    if (m) return (children[Number(m[1])] ?? []).map((id) => ({ id }));
+    if (m) {
+      const parentId = Number(m[1]);
+      if (childrenResponse === "root-404" && parentId === 40) {
+        throw new CtApiError("not found", 404, null);
+      }
+      const rows = (children[parentId] ?? []).map((id) => ({ id }));
+      if (childrenResponse === "envelope") return { data: rows };
+      if (childrenResponse === "domain-envelope") {
+        return {
+          data: rows.map(({ id }) => ({
+            domainIdentifier: String(id),
+            domainType: "group",
+            apiUrl: `/groups/${id}`,
+          })),
+        };
+      }
+      return rows;
+    }
+    m = /^\/groups\/(\d+)\/memberfields$/.exec(path);
+    if (m) return memberFields[Number(m[1])] ?? [];
     if (path === "/group/grouptypes") return groupTypes;
     if (path === "/campuses") return campuses;
     if (path === "/group/roles") return roles;
@@ -97,10 +135,13 @@ function makeClient() {
 
   const getAll = vi.fn(async (path: string) => {
     if (path === "/groups") return { data: Object.values(groups) };
-    // The Resolver reads master-data catalogs paginated (#99 review), so serve them here too —
-    // same rows as `get`, wrapped in the page envelope.
+    // The Resolver reads master-data catalogs paginated (#99 review), and `--children-of` reads
+    // `/groups/{id}/children` paginated (#101), so serve them here too — same rows as `get`, with
+    // the real client's envelope normalization (bare array or `{ data: [...] }` -> page items).
     const single = await get(path);
-    return { data: Array.isArray(single) ? single : [single] };
+    if (Array.isArray(single)) return { data: single };
+    const inner = (single as { data?: unknown }).data;
+    return { data: Array.isArray(inner) ? inner : [single] };
   });
 
   return { get, getAll };
@@ -246,6 +287,10 @@ describe("ct adopt group --children-of", () => {
     // 41 (child of root) must be adopted before 43 (child of 41).
     const order = Object.values(state.resources).map((r) => r.id);
     expect(order.indexOf(41)).toBeLessThan(order.indexOf(43));
+    // `/groups/{id}/children` is a paginated list endpoint: read via `getAll`, never a plain `get`
+    // (#101), or a wide Bereich silently loses everything past CT's default first page.
+    expect(client.getAll).toHaveBeenCalledWith("/groups/40/children");
+    expect(client.getAll).toHaveBeenCalledWith("/groups/41/children");
   });
 
   it("terminates on a cyclic hierarchy instead of looping forever (cycle guard)", async () => {
@@ -253,6 +298,29 @@ describe("ct adopt group --children-of", () => {
     const state = await loadState(statePath, HOST);
     const ids = Object.values(state.resources).map((r) => r.id);
     expect(ids).toEqual([51]); // 50 -> 51 -> 50: only 51 is a new descendant
+  });
+
+  it("accepts the raw { data: [...] } collection envelope", async () => {
+    client = makeClient("envelope");
+    await run(["group", "--children-of", "40", "--state", statePath]);
+
+    const state = await loadState(statePath, HOST);
+    expect(Object.values(state.resources).map((r) => r.id)).toEqual([41, 43, 42]);
+  });
+
+  it("reads ids from the domain resources documented by the live ChurchTools OpenAPI", async () => {
+    client = makeClient("domain-envelope");
+    await run(["group", "--children-of", "40", "--state", statePath]);
+
+    const state = await loadState(statePath, HOST);
+    expect(Object.values(state.resources).map((r) => r.id)).toEqual([41, 43, 42]);
+  });
+
+  it("propagates a children endpoint 404 instead of treating the group as a leaf", async () => {
+    client = makeClient("root-404");
+    await expect(run(["group", "--children-of", "40", "--state", statePath])).rejects.toMatchObject({
+      status: 404,
+    });
   });
 
   it("resolves --children-of by an already-adopted state key", async () => {
@@ -484,5 +552,93 @@ describe("ct adopt group — idiomatic snippet round-trips to a no-op (#52 item 
       configDir: workDir,
     });
     expect(plan.items.every((i) => i.action === "no-op")).toBe(true);
+  });
+});
+
+describe("ct adopt group --with-member-fields (#135)", () => {
+  /** Grab the `--dry-run` payload, which carries the generated config snippet verbatim. */
+  async function snippetFor(args: string[]): Promise<string> {
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s) => {
+      writes.push(String(s));
+      return true;
+    });
+    try {
+      await run(args);
+    } finally {
+      spy.mockRestore();
+    }
+    const payload = JSON.parse(writes.join("")) as { config?: string } | Array<{ config?: string }>;
+    return Array.isArray(payload) ? payload.map((p) => p.config).join("\n") : (payload.config ?? "");
+  }
+
+  it("is opt-in: a plain adopt emits no memberFields block and never reads the endpoint", async () => {
+    const snippet = await snippetFor(["group", "31", "--dry-run", "--state", statePath]);
+    expect(snippet).not.toContain("memberFields");
+    expect(client.get).not.toHaveBeenCalledWith("/groups/31/memberfields");
+  });
+
+  it("emits every group-scoped field WITHOUT any ChurchTools id", async () => {
+    const snippet = await snippetFor([
+      "group",
+      "31",
+      "--with-member-fields",
+      "--dry-run",
+      "--state",
+      statePath,
+    ]);
+    expect(snippet).toContain("memberFields:");
+    expect(snippet).toContain('key: "wahl"');
+    expect(snippet).toContain('name: "Wahl"');
+    expect(snippet).toContain('fieldTypeCode: "text"');
+    expect(snippet).toContain("requiredInRegistrationForm: true");
+    expect(snippet).toContain('key: "notiz"');
+    // The whole portability guarantee: no host-specific field id anywhere in the emitted config.
+    expect(snippet).not.toContain("701");
+    expect(snippet).not.toContain("702");
+    expect(snippet).not.toMatch(/\bid:/);
+    // …and a row that is not group-scoped is not manageable through /memberfields/group.
+    expect(snippet).not.toContain("vorname");
+  });
+
+  it("a 403 on one group's fields does not abort a bulk adoption — it warns and adopts without them", async () => {
+    const warnings: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      warnings.push(String(chunk));
+      return true;
+    });
+    const original = client.get.getMockImplementation()!;
+    client.get.mockImplementation((async (path: string) => {
+      if (path === "/groups/31/memberfields") throw new CtApiError("forbidden", 403, null);
+      return original(path);
+    }) as never);
+    try {
+      const snippet = await snippetFor([
+        "group",
+        "31",
+        "--with-member-fields",
+        "--dry-run",
+        "--state",
+        statePath,
+      ]);
+      expect(snippet).toContain('key: "'); // the group itself was still adopted
+      expect(snippet).not.toContain("memberFields");
+      expect(warnings.join("")).toMatch(/member fields could not be read/);
+    } finally {
+      client.get.mockImplementation(original as never);
+      spy.mockRestore();
+    }
+  });
+
+  it("emits no memberFields block for a group that has none", async () => {
+    const snippet = await snippetFor([
+      "group",
+      "10",
+      "--with-member-fields",
+      "--dry-run",
+      "--state",
+      statePath,
+    ]);
+    expect(snippet).not.toContain("memberFields");
   });
 });

@@ -82,6 +82,7 @@ curl -L -o ct https://github.com/eqrm/ct-cli/releases/latest/download/ct-linux-x
 chmod +x ct
 sudo mv ct /usr/local/bin/ct   # or anywhere on your PATH
 ct --help
+ct --version                   # e.g. 1.7.0 (/usr/local/bin/ct) — version AND which binary
 ```
 
 With Node ≥ 20 already installed, the npm-pack tarball works too:
@@ -94,12 +95,43 @@ You also need a ChurchTools **personal login token** (ChurchTools → your user
 settings). Each release additionally attaches an `INSTALL.md` with the exact
 commands.
 
+### Tab completion
+
+`ct completion <shell>` prints a small hook that calls `ct` back on every Tab, so the
+candidates always match the binary you actually have — including things a generated
+script could not know: the environments in your `ct.envs.json`, the keys in your state
+file, and paths for options like `--config`. It only ever reads local files: completion
+never contacts ChurchTools and never touches your token.
+
+Add the hook to your shell startup file:
+
+```zsh
+# zsh — after `compinit` has run
+echo '. <(ct completion zsh)' >> ~/.zshrc
+```
+
+```bash
+# bash
+echo '. <(ct completion bash)' >> ~/.bashrc     # macOS: ~/.bash_profile
+```
+
+The bash hook runs on the bash macOS ships (3.2); the `bash-completion` package is
+not required.
+
+```fish
+# fish
+ct completion fish > ~/.config/fish/completions/ct.fish
+```
+
+Open a new shell, then try `ct sta<Tab>`, `ct state rm <Tab>` or `ct plan --env <Tab>`.
+
 ## First run
 
 ```bash
 # The host is captured at login and stored with the token; CT_HOST overrides it for CI.
 ct auth login --host https://mychurch.church.tools --token <personal-login-token>
-ct auth status                # who am I?
+ct auth login                 # or: prompt for host, then username+password (+2FA), token, or skip
+ct auth status                # who am I? (`--env <name>` asks on another instance)
 
 ct get groups                 # JSON to stdout — pipe into jq (every page, not just the first)
 ct adopt campus 0             # bring ONE existing resource under management
@@ -110,6 +142,15 @@ ct plan                       # diff the config against ChurchTools (read-only)
 ct apply                      # create + update in dependency order (confirm + backup first)
 ct refresh --group <key>      # make ChurchTools re-evaluate one auto-group now
 ```
+
+Run without `--token`, `ct auth login` asks how you want to authenticate: **username and
+password** (completing a 2FA code when the instance asks for one, then fetching your
+personal login token over the API), an **existing login token**, or **skip**. Password,
+code and token prompts do not echo, and none of the three is ever stored, logged or
+printed — only the login token and its host reach the Keychain. There is deliberately no
+`--password` flag, so a password can never land in shell history or in `ps`. On Linux and
+Windows there is no Keychain to store anything in, so the prompt is not offered at all:
+export `CT_HOST` and `CT_LOGINTOKEN` there.
 
 `state rm` is the inverse of `adopt`, and only of `adopt`: it removes the entry
 from the state file, makes no HTTP call, and leaves the resource in place in
@@ -128,14 +169,15 @@ confirmation — and a declaration marked `preventDestroy: true` blocks even tha
 
 ## What it manages
 
-| Resource                                                                   | DSL                                                                                                            | Guide                                             |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Campuses                                                                   | `ct.campus`                                                                                                    | [config guide](docs/configuration.md)             |
-| Groups (fields, campus, multi-parent hierarchy)                            | `ct.group`                                                                                                     | [config guide](docs/configuration.md)             |
-| Group types, roles, age/target groups, relationship types, person statuses | `ct.groupType`, `ct.roleDefinition`, `ct.ageGroup`, `ct.targetGroup`, `ct.relationshipType`, `ct.personStatus` | reusable building blocks                          |
-| Permissions (group-role, group-type-role, person-status)                   | `ct.groupRole`, `ct.groupTypeRole`, `ct.status`                                                                | [permissions](docs/handbuch/permissions.md)       |
-| Auto-groups (dynamic groups)                                               | the `dynamic` block on a group                                                                                 | [dynamic groups](docs/handbuch/dynamic-groups.md) |
-| Repeated structure, parametrized                                           | a plain function over the DSL                                                                                  | [blueprints](docs/handbuch/blueprints.md)         |
+| Resource                                                                   | DSL                                                                                                            | Guide                                                       |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Campuses                                                                   | `ct.campus`                                                                                                    | [config guide](docs/configuration.md)                       |
+| Groups (fields, campus, multi-parent hierarchy)                            | `ct.group`                                                                                                     | [config guide](docs/configuration.md)                       |
+| Group types, roles, age/target groups, relationship types, person statuses | `ct.groupType`, `ct.roleDefinition`, `ct.ageGroup`, `ct.targetGroup`, `ct.relationshipType`, `ct.personStatus` | reusable building blocks                                    |
+| Permissions (group-role, group-type-role, person-status)                   | `ct.groupRole`, `ct.groupTypeRole`, `ct.status`                                                                | [permissions](docs/handbuch/permissions.md)                 |
+| Auto-groups (dynamic groups)                                               | the `dynamic` block on a group                                                                                 | [dynamic groups](docs/handbuch/dynamic-groups.md)           |
+| Group member field definitions (group-scoped, never deleted implicitly)    | the `memberFields` block on a group                                                                            | [group member fields](docs/handbuch/group-member-fields.md) |
+| Repeated structure, parametrized                                           | a plain function over the DSL                                                                                  | [blueprints](docs/handbuch/blueprints.md)                   |
 
 Read-only by design: the person master-data model, security levels and
 custom-field _definitions_ (`ct get person-masterdata`, `ct get data-fields`) —

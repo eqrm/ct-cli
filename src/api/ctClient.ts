@@ -14,7 +14,7 @@
  * here can be swapped for `openapi-fetch` while keeping this class's surface.
  */
 import { type CtConfig } from "../config.js";
-import { fetchWithRetry } from "./http.js";
+import { fetchWithRetry, parseRetryAfterMs } from "./http.js";
 import { meetsMinVersion, MIN_CT_VERSION, type CtInfo } from "./version.js";
 
 export interface WhoAmI {
@@ -66,12 +66,61 @@ export interface CtPage<T> {
 const MAX_PAGES = 1000;
 const DEFAULT_PAGE_LIMIT = 100;
 
+/**
+ * A place to keep the session (cookie + CSRF token) BETWEEN `ct` invocations, so
+ * a one-shot CLI does not have to re-run the login handshake — and trip
+ * ChurchTools' login rate limit — on every single command (#145).
+ *
+ * The client only ever asks for a session for `host` and hands back one captured
+ * against `host`, so the store cannot leak a session across instances (#30). The
+ * implementation lives in `src/auth/sessionStore.ts`; it is injected rather than
+ * imported so a client without one (tests, `ct auth status`' preflight) behaves
+ * exactly as it always has.
+ */
+export interface SessionCache {
+  load(host: string, token: string): Promise<{ cookie: string; csrfToken: string } | null>;
+  save(host: string, token: string, session: { cookie: string; csrfToken: string }): Promise<void>;
+  drop(host: string): Promise<void>;
+}
+
+export interface CtClientOptions {
+  sessionCache?: SessionCache;
+}
+
+/** Human-readable "wait this long" for a 429, from `Retry-After` when the server sent one. */
+function describeRetryAfter(res: Response): string {
+  const ms = parseRetryAfterMs(res);
+  if (ms === null) {
+    return "about a minute";
+  }
+  const seconds = Math.ceil(ms / 1000);
+  return seconds >= 120
+    ? `about ${Math.ceil(seconds / 60)} minutes`
+    : `about ${Math.max(seconds, 1)} seconds`;
+}
+
 export class CtClient {
   private cookie: string | null = null;
   private csrfToken: string | null = null;
   private ctVersion: string | null = null;
+  /** Kept so an expired session can be re-bought without the caller having to notice (#145). */
+  private loginToken: string | null = null;
+  /** Re-entrancy guards: no self-heal while a login (or a resume probe) is already in flight. */
+  private loggingIn = false;
+  private resuming = false;
+  /**
+   * At most ONE automatic re-login per *unrecovered* 401 — a server that always 401s must not
+   * become a login storm. Reset once a re-login actually produced a successful replay, so the
+   * budget is a guard against a hopeless loop rather than a lifetime cap: a long `apply` whose
+   * session dies twice (or that burned the budget on a 401 that was never about the session —
+   * CT answers 401 for a CSRF failure too) can still self-heal.
+   */
+  private reauthAttempts = 0;
 
-  constructor(private readonly config: CtConfig) {}
+  constructor(
+    private readonly config: CtConfig,
+    private readonly options: CtClientOptions = {},
+  ) {}
 
   get host(): string {
     return this.config.host;
@@ -117,8 +166,82 @@ export class CtClient {
     }
   }
 
+  /**
+   * Become an authenticated client — reusing the cached session for this host
+   * when there is one, and only otherwise running the login handshake (#145).
+   *
+   * `fresh: true` forces the handshake (`ct auth login`, which exists precisely
+   * to prove the credential works, must not be answered from a cache).
+   */
+  async authenticate(loginToken: string, opts: { fresh?: boolean } = {}): Promise<WhoAmI> {
+    this.loginToken = loginToken;
+    if (!opts.fresh) {
+      const resumed = await this.resumeCachedSession(loginToken);
+      if (resumed) {
+        return resumed;
+      }
+    }
+    return this.login(loginToken);
+  }
+
+  /**
+   * Try the cached session: adopt the cookie + CSRF token and confirm them with
+   * a plain `GET /whoami`.
+   *
+   * That GET carries no `login_token`, so it is an ordinary authenticated read —
+   * it does NOT count against ChurchTools' *login* rate limit, which is the
+   * whole point of the cache. It also keeps the identity honest: `me` still
+   * comes from the server rather than from a stale local copy.
+   *
+   * A session the server no longer accepts (401/403) is dropped and `null` is
+   * returned, so the caller falls through to a real handshake. Anything else
+   * (network trouble, a 500) is a real failure and propagates.
+   */
+  private async resumeCachedSession(loginToken: string): Promise<WhoAmI | null> {
+    const cache = this.options.sessionCache;
+    if (!cache) {
+      return null;
+    }
+    let cached: { cookie: string; csrfToken: string } | null = null;
+    try {
+      cached = await cache.load(this.config.host, loginToken);
+    } catch {
+      return null; // an unreadable cache is never a reason to fail a command
+    }
+    if (!cached) {
+      return null;
+    }
+    this.cookie = cached.cookie;
+    this.csrfToken = cached.csrfToken;
+    this.resuming = true;
+    try {
+      return await this.get<WhoAmI>("/whoami");
+    } catch (err) {
+      if (!isSessionRejection(err)) {
+        throw err;
+      }
+      this.cookie = null;
+      this.csrfToken = null;
+      await cache.drop(this.config.host).catch(() => {});
+      return null;
+    } finally {
+      this.resuming = false;
+    }
+  }
+
   /** Run the login-token handshake and cache the session cookie + CSRF token. */
-  async authenticate(loginToken: string): Promise<WhoAmI> {
+  private async login(loginToken: string): Promise<WhoAmI> {
+    this.loggingIn = true;
+    this.cookie = null;
+    this.csrfToken = null;
+    try {
+      return await this.performLogin(loginToken);
+    } finally {
+      this.loggingIn = false;
+    }
+  }
+
+  private async performLogin(loginToken: string): Promise<WhoAmI> {
     // The token rides as a URL query param (it lands in the server's access logs). This is
     // unavoidable for this token class: the handshake above is documented to require the
     // `login_token` query param — an `Authorization` header yields a null CSRF token and breaks
@@ -132,16 +255,52 @@ export class CtClient {
     );
     this.captureCookie(res);
     if (!res.ok) {
+      if (res.status === 429) {
+        // Not a credential problem, and saying "Login failed" reads like one. CT
+        // throttles LOGINS per instance, so this fires after a burst of short `ct`
+        // invocations — the very thing the session cache exists to stop.
+        throw new CtApiError(
+          `ChurchTools is rate-limiting logins on ${this.config.host} — your token was not rejected. ` +
+            `Wait ${describeRetryAfter(res)} and try again.`,
+          res.status,
+          await safeBody(res),
+        );
+      }
       throw new CtApiError(`Login failed (whoami)`, res.status, await safeBody(res));
     }
     if (!this.cookie) {
       throw new CtApiError("Login succeeded but no session cookie was returned", res.status, null);
     }
     await this.refreshCsrfToken();
+    // Keep the freshly bought session for the NEXT invocation. Best-effort: a store
+    // that refuses (no Keychain, locked Keychain) must not fail the command.
+    if (this.cookie && this.csrfToken) {
+      await this.options.sessionCache
+        ?.save(this.config.host, loginToken, { cookie: this.cookie, csrfToken: this.csrfToken })
+        .catch(() => {});
+    }
     // Same tolerant unwrap as request(): prefer `.data`, but fall back to the raw body if the
     // envelope is absent, so authenticate and request() agree on the shape.
     const body = (await res.json()) as { data?: WhoAmI };
     return (body.data ?? body) as WhoAmI;
+  }
+
+  /**
+   * Recover from a 401 on a real request: drop the cached session, log in again,
+   * and let the caller retry once. Returns false when re-authentication is not
+   * available or not appropriate, in which case the 401 surfaces as usual.
+   *
+   * A 401 means the request was rejected before it was processed, so the retry is
+   * safe for writes too.
+   */
+  private async reauthenticate(): Promise<boolean> {
+    if (this.loginToken === null || this.loggingIn || this.resuming || this.reauthAttempts >= 1) {
+      return false;
+    }
+    this.reauthAttempts++;
+    await this.options.sessionCache?.drop(this.config.host).catch(() => {});
+    await this.login(this.loginToken);
+    return true;
   }
 
   async get<T = unknown>(path: string): Promise<T> {
@@ -322,6 +481,22 @@ export class CtClient {
       { isIdempotent: method === "GET" || method === "HEAD" },
     );
     this.captureCookie(res);
+    if (res.status === 401) {
+      // The session died (expired, or invalidated server-side — a logout elsewhere,
+      // a restart). Buy a new one once and replay the request, so a stale cached
+      // session self-heals instead of surfacing as "Not authenticated" (#145).
+      if (await this.reauthenticate()) {
+        // Drain the response we're discarding so its socket isn't left buffered.
+        await res.body?.cancel().catch(() => {});
+        const replayed = await this.requestEnvelope(method, path, body);
+        // The replay went through, so the self-heal worked and the budget it spent is
+        // available again for a later expiry in the same run. A re-login whose replay
+        // 401s again throws from the line above with the budget still spent, which is
+        // what stops an always-401 server from becoming a login storm.
+        this.reauthAttempts = 0;
+        return replayed;
+      }
+    }
     if (!res.ok) {
       throw new CtApiError(`${method} ${path} failed`, res.status, await safeBody(res));
     }
@@ -419,6 +594,11 @@ export class CtClient {
     }
     this.cookie = [...jar].map(([k, v]) => `${k}=${v}`).join("; ");
   }
+}
+
+/** True when an error says "this session is no longer good" rather than "the request was bad". */
+function isSessionRejection(err: unknown): boolean {
+  return err instanceof CtApiError && (err.status === 401 || err.status === 403);
 }
 
 async function safeBody(res: Response): Promise<unknown> {

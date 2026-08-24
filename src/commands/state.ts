@@ -138,6 +138,9 @@ async function declaredKeys(configOpt: string | undefined): Promise<Set<string> 
     const addRef = (r: Ref): void => {
       if (r.kind === "group-role") keys.add(r.group);
       else if (r.kind === "group-type-role") keys.add(r.groupType);
+      // A group-scoped member field (#135) is owned by a group, so the key it keeps alive is that
+      // group's — the field itself has no state entry of its own.
+      else if (r.kind === "group-member-field") keys.add(r.group);
       else keys.add(r.key);
     };
     for (const ref of collectRefs(permissions)) addRef(ref);
