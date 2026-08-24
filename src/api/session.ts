@@ -4,6 +4,7 @@
  */
 import { CtClient, type WhoAmI } from "./ctClient.js";
 import { readCredentials } from "../auth/tokenStore.js";
+import { keychainSessionCache } from "../auth/sessionStore.js";
 import { normalizeHost, resolveConfig } from "../config.js";
 
 export interface AuthedSession {
@@ -45,7 +46,9 @@ export async function authedSession(): Promise<AuthedSession> {
     );
   }
 
-  const client = new CtClient(config);
+  // The session cache is keyed by the SAME host the binding check above just cleared,
+  // so a cached session can only ever be replayed against the instance it came from (#30/#145).
+  const client = new CtClient(config, { sessionCache: keychainSessionCache() });
   const me = await client.authenticate(token);
   // Hard-fail below the minimum CT version before any command reads or writes —
   // a stale instance half-applies (tier-0 writes succeed, hierarchy endpoints 404).

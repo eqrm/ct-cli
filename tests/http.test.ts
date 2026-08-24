@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { fetchWithRetry } from "../src/api/http.js";
+import { fetchWithRetry, parseRetryAfterMs } from "../src/api/http.js";
 
 const noSleep = () => Promise.resolve();
 
@@ -47,6 +47,21 @@ describe("fetchWithRetry", () => {
     expect(sleep.mock.calls[0]?.[0] ?? 0).toBeGreaterThanOrEqual(500);
   });
 
+  it("waits out a 429 on a write too — the server rejected it before processing", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(res(429, { "retry-after": "3" }))
+      .mockResolvedValueOnce(res(200));
+    const sleep = vi.fn(() => Promise.resolve());
+    const out = await fetchWithRetry(
+      "https://x/api/campuses",
+      { method: "POST" },
+      { sleep, fetchImpl, isIdempotent: false },
+    );
+    expect(out.status).toBe(200);
+    expect(sleep).toHaveBeenCalledWith(3000);
+  });
+
   it("retries idempotent GET on 500", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(res(500)).mockResolvedValueOnce(res(200));
     const out = await fetchWithRetry(
@@ -86,5 +101,18 @@ describe("fetchWithRetry", () => {
       ),
     ).rejects.toThrow("ECONNRESET");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("parseRetryAfterMs", () => {
+  it("reports the server's full ask, unclamped, so a message can quote it", () => {
+    // fetchWithRetry clamps its own sleep to 60s; the *message* must not claim
+    // "wait about a minute" when the server asked for an hour.
+    expect(parseRetryAfterMs(res(429, { "retry-after": "3600" }))).toBe(3_600_000);
+  });
+
+  it("returns null when the header is missing or malformed", () => {
+    expect(parseRetryAfterMs(res(429))).toBeNull();
+    expect(parseRetryAfterMs(res(429, { "retry-after": "-5" }))).toBeNull();
   });
 });
