@@ -18,6 +18,7 @@ import {
   isManagedMemberFieldProp,
   MEMBER_FIELD_FORBIDDEN_PROPS,
   MEMBER_FIELD_PROPS,
+  memberFieldStateKey,
 } from "../engine/member-fields.js";
 import { collectRefs } from "../resolve/refs.js";
 import type { DomainType } from "../permissions/grants.js";
@@ -420,13 +421,18 @@ function normalizeMemberFields(
     if (typeof localKey !== "string" || localKey.length === 0) {
       throw new Error(`group "${key}": each entry of "memberFields" needs a non-empty string "key".`);
     }
-    if (seen.has(localKey)) {
+    // Compared in the CANONICAL spelling, because that is what identity means here: `matchesLocalKey`
+    // slugs both sides, so "Wahl" and "wahl" would resolve to the same live row and two declarations
+    // would fight over it — each apply PATCHing the row the other just wrote.
+    const canonical = memberFieldStateKey(localKey);
+    if (seen.has(canonical)) {
       throw new Error(
         `group "${key}": duplicate member field key "${localKey}". Local keys must be unique within ` +
-          `a group — they are half of the portable "${key}::${localKey}" identity.`,
+          `a group — they are half of the portable "${key}::${localKey}" identity, and are compared ` +
+          `in their normalised form ("Wahl" and "wahl" are the same key).`,
       );
     }
-    seen.add(localKey);
+    seen.add(canonical);
     for (const forbidden of MEMBER_FIELD_FORBIDDEN_PROPS) {
       if (props[forbidden] !== undefined) {
         throw new Error(
@@ -662,7 +668,9 @@ function validateMemberFieldRefs(resources: DesiredResource[], byKey: Map<string
             `does not manage member fields. Add a "memberFields" list declaring "${ref.field}" to it.`,
         );
       }
-      if (!target.memberFields.some((f) => f.key === ref.field)) {
+      // Normalised on both sides, exactly as the live row is matched (`matchesLocalKey`) and as the
+      // created id is keyed in state (`memberFieldStateKey`) — one spelling of identity everywhere.
+      if (!target.memberFields.some((f) => memberFieldStateKey(f.key) === memberFieldStateKey(ref.field))) {
         const declared = target.memberFields.map((f) => f.key).join(", ");
         throw new Error(
           `"${r.key}" references member field "${ref.group}::${ref.field}", which group "${ref.group}" ` +

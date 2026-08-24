@@ -601,6 +601,35 @@ describe("ct adopt group --with-member-fields (#135)", () => {
     expect(snippet).not.toContain("vorname");
   });
 
+  it("a 403 on one group's fields does not abort a bulk adoption — it warns and adopts without them", async () => {
+    const warnings: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      warnings.push(String(chunk));
+      return true;
+    });
+    const original = client.get.getMockImplementation()!;
+    client.get.mockImplementation((async (path: string) => {
+      if (path === "/groups/31/memberfields") throw new CtApiError("forbidden", 403, null);
+      return original(path);
+    }) as never);
+    try {
+      const snippet = await snippetFor([
+        "group",
+        "31",
+        "--with-member-fields",
+        "--dry-run",
+        "--state",
+        statePath,
+      ]);
+      expect(snippet).toContain('key: "'); // the group itself was still adopted
+      expect(snippet).not.toContain("memberFields");
+      expect(warnings.join("")).toMatch(/member fields could not be read/);
+    } finally {
+      client.get.mockImplementation(original as never);
+      spy.mockRestore();
+    }
+  });
+
   it("emits no memberFields block for a group that has none", async () => {
     const snippet = await snippetFor([
       "group",

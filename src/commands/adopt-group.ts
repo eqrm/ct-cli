@@ -28,7 +28,7 @@ import { ReverseResolver, type RoleCatalogEntry } from "../resolve/reverse.js";
 import type { RefKind } from "../resolve/refs.js";
 import { formatPortablizeWarnings, portablizeRuleset, scanUnportablized } from "../config/query-refs.js";
 import { chooseAdoptKey, loadState, saveState, upsert, type State } from "../state/state.js";
-import { success, info, warn, out } from "../ui.js";
+import { success, info, warn, out, formatError } from "../ui.js";
 
 interface AdoptGroupOptions {
   key?: string;
@@ -203,8 +203,10 @@ interface DynamicCapture {
  * resolving against this host's numbering. The local key comes from CT's own `referenceName`
  * (slugged), falling back to the slugged name for a field created in the ChurchTools UI.
  *
- * Opt-in only (`--with-member-fields`). Whether owned child resources are adopted by default is a
- * project-wide contract, deliberately left to #141.
+ * Opt-in only (`--with-member-fields`) — and that opt-in is TRANSITIONAL, not a statement that
+ * member fields are optional: they are a category-2 owned structural child, so the flip to
+ * default-on is a follow-up governed by the promotion policy in docs/adoption-contract.md (the flag
+ * survives as a no-op, and `--no-member-fields` ships in the same release as the flip).
  */
 async function captureMemberFields(
   id: number,
@@ -215,9 +217,18 @@ async function captureMemberFields(
     raw = await client.get(memberFieldsReadPath(id));
   } catch (err) {
     // A group whose member fields cannot be read is not a reason to abort a bulk adoption of a whole
-    // subtree — say so and adopt the group without them.
-    if (err instanceof CtApiError && err.status === 404) return undefined;
-    throw err;
+    // subtree — say so and adopt the group without them. That holds for EVERY failure, not just the
+    // 404: a 403 on one group the token may not read the fields of, or a transient 429, would
+    // otherwise abort `--children-of` partway with the earlier groups already written to state.
+    // Silence is the one thing that is not allowed here, because "no member fields" and "could not
+    // read them" produce the same config.
+    if (!(err instanceof CtApiError && err.status === 404)) {
+      warn(
+        `group #${id}: member fields could not be read (${formatError(err)}) — adopted WITHOUT them. ` +
+          `Re-run \`ct adopt group ${id} --with-member-fields\` once the read succeeds.`,
+      );
+    }
+    return undefined;
   }
   const rows = groupScopedRows(raw);
   if (rows.length === 0) return undefined;
@@ -275,7 +286,10 @@ export function adoptGroupCommand(): Command {
     .option(
       "--with-member-fields",
       "also capture each group's group-scoped member-field definitions and emit the memberFields: " +
-        "block (portable: no ChurchTools field ids are ever emitted)",
+        "block (portable: no ChurchTools field ids are ever emitted). TRANSITIONAL: member fields " +
+        "are an owned part of a group, so this becomes the default in a later release (with a " +
+        "--no-member-fields escape hatch, and this flag kept working as a no-op) — see " +
+        "docs/adoption-contract.md",
     )
     .option(
       "--portable-rulesets",

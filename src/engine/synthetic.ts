@@ -20,6 +20,7 @@ import { slug } from "../resources/registry.js";
 import {
   actualMemberFieldProps,
   groupScopedRows,
+  memberFieldStateKey,
   localKeyOf,
   matchesLocalKey,
   memberFieldIdentity,
@@ -63,6 +64,13 @@ export interface SyntheticApplyCtx {
    */
   key: string;
   change: FieldChange;
+  /**
+   * Per-ITEM read cache, keyed by request path. One apply item is one resource, so a group with N
+   * declared member fields would otherwise issue N identical `GET /groups/{id}/memberfields` — one
+   * per pseudo-field change — against an API that rate-limits (#145). Scoped to the item rather
+   * than the process on purpose: a later apply in the same process must see its own live rows.
+   */
+  reads?: Map<string, Promise<unknown>>;
 }
 export interface SyntheticPostApplyCtx {
   client: Pick<CtClient, "request">;
@@ -166,12 +174,30 @@ async function readMemberFields(client: Pick<CtClient, "get">, groupId: number):
   return groupScopedRows(await client.get<unknown>(memberFieldsReadPath(groupId)));
 }
 
-/** Read them through the write client (apply only has `request`; `GET` goes through it just fine). */
+/**
+ * Read them through the write client (apply only has `request`; `GET` goes through it just fine),
+ * reusing the item's cached read when one is offered (see {@link SyntheticApplyCtx.reads}).
+ *
+ * Sharing one list across an item's member-field changes is safe because each change matches it by
+ * its OWN local key, and a local key is unique within the group: a row created for one key can
+ * never be the row another key was looking for.
+ */
 async function readMemberFieldsForWrite(
   client: Pick<CtClient, "request">,
   groupId: number,
+  reads?: Map<string, Promise<unknown>>,
 ): Promise<MemberFieldRow[]> {
-  return groupScopedRows(await client.request<unknown>("GET", memberFieldsReadPath(groupId)));
+  const path = memberFieldsReadPath(groupId);
+  const cached = reads?.get(path);
+  if (cached) return groupScopedRows(await cached);
+  const pending = client.request<unknown>("GET", path);
+  reads?.set(path, pending);
+  try {
+    return groupScopedRows(await pending);
+  } catch (err) {
+    reads?.delete(path); // a failed read must not be remembered as this item's answer
+    throw err;
+  }
 }
 
 /**
@@ -262,7 +288,7 @@ const memberFieldsField: SyntheticField = {
     });
     return { desired: augmented, errors, unreadable };
   },
-  async apply({ client, state, id, key, change }) {
+  async apply({ client, state, id, key, change, reads }) {
     const local = memberFieldLocalKey(change.field);
     if (local === undefined) return;
     const props = change.to as Record<string, unknown> | undefined;
@@ -270,7 +296,7 @@ const memberFieldsField: SyntheticField = {
     // (it walks the desired side), so this is belt-and-braces: apply never deletes a member field.
     if (props === undefined || props === null) return;
 
-    const rows = await readMemberFieldsForWrite(client, id);
+    const rows = await readMemberFieldsForWrite(client, id, reads);
     const matches = rows.filter((row) => matchesLocalKey(row, local));
     if (matches.length > 1) {
       throw new Error(
@@ -285,7 +311,7 @@ const memberFieldsField: SyntheticField = {
       // reference in a ruleset applied later in this very item can be completed (#135).
       const managed = state.resources[key];
       if (!managed) return;
-      managed.memberFields = { ...managed.memberFields, [local]: fieldId };
+      managed.memberFields = { ...managed.memberFields, [memberFieldStateKey(local)]: fieldId };
     };
 
     if (matches.length === 1) {

@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { rm } from "node:fs/promises";
+import { CtApiError } from "../src/api/ctClient.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -192,6 +193,41 @@ describe("ct destroy --member-field (#135)", () => {
       runDestroy(["--member-field", "nope::wahl", "--state", statePath, "--force"]),
     ).rejects.toThrow(/no managed group "nope"/);
     expect(calls).toEqual([]);
+  });
+
+  it("a field that could not be deleted holds back its owning group's destroy", async () => {
+    // Otherwise the group destroy takes the field with it as collateral — right after the run
+    // printed "Nothing further was deleted" — and the failure the user was told about becomes an
+    // irreversible delete they were told did not happen.
+    const state = emptyState(HOST);
+    state.resources.area = group("area", 1, { memberFields: { wahl: 701 } });
+    await saveState(statePath, state);
+    requestMock.mockImplementationOnce((async (method: string, path: string) => {
+      calls.push({ method, path });
+      throw new CtApiError("boom", 500, null);
+    }) as never);
+
+    await runDestroy(["--member-field", "area::wahl", "--target", "area", "--state", statePath, "--force"]);
+
+    expect(calls).toEqual([{ method: "DELETE", path: "/groups/1/memberfields/group/701" }]);
+    expect(process.exitCode).toBe(1);
+    const after = await loadState(statePath, HOST);
+    expect(after.resources.area).toBeDefined(); // the group was NOT destroyed
+    process.exitCode = 0;
+  });
+
+  it("matches the state entry in its normalised spelling, so no stale id is left behind", async () => {
+    const state = emptyState(HOST);
+    state.resources.area = group("area", 1, { memberFields: { wahl: 701 } });
+    await saveState(statePath, state);
+
+    // `--member-field area::Wahl` matches the live row (matchesLocalKey slugs), so it must also
+    // match the state entry the apply wrote under the slugged key.
+    await runDestroy(["--member-field", "area::Wahl", "--state", statePath, "--force"]);
+
+    expect(calls).toEqual([{ method: "DELETE", path: "/groups/1/memberfields/group/701" }]);
+    const after = await loadState(statePath, HOST);
+    expect(after.resources.area!.memberFields).toBeUndefined();
   });
 
   it("still refuses to delete anything with neither --target nor --member-field", async () => {

@@ -107,6 +107,29 @@ export interface MemberFieldSpec {
 /** A row as ChurchTools returns it from `GET /groups/{groupId}/memberfields`. */
 export type MemberFieldRow = Record<string, unknown>;
 
+/** Row keys that have, across CT versions, carried the field's scope/source. */
+const SCOPE_KEYS = ["type", "fieldCategory", "source", "fieldSource"] as const;
+
+/**
+ * Values that positively mark a row as sourced OUTSIDE the group — the only thing that excludes a
+ * row. Kept as an explicit vocabulary so an unfamiliar value (a field type, a new CT spelling)
+ * falls through to "group-scoped" rather than silently emptying the list.
+ */
+const NON_GROUP_SCOPES = new Set([
+  "person",
+  "persons",
+  "personmasterdata",
+  "master",
+  "masterdata",
+  "db",
+  "dbfield",
+  "grouptype",
+  "group_type",
+  "grouptypedefault",
+  "global",
+  "system",
+]);
+
 /**
  * Is this live row a GROUP-SCOPED custom member field — i.e. one of the rows the
  * `/memberfields/group` write endpoints own?
@@ -116,17 +139,49 @@ export type MemberFieldRow = Record<string, unknown>;
  * (person master data, group-type defaults). Only the first kind can be created or updated through
  * `/memberfields/group`, so only the first kind is adoptable or manageable here.
  *
- * The discriminator is read leniently, because CT has spelled this differently across versions:
- * a `type`/`fieldCategory`/`source` of `"group"` marks a group-scoped row. A row that carries NO
- * discriminator at all is treated as group-scoped — the endpoint is the group's own, so "we cannot
- * tell" errs towards showing the field rather than silently hiding one an author needs.
+ * The discriminator is read leniently, because CT has spelled this differently across versions —
+ * and because the candidate keys are not all unambiguously about SCOPE. `type` in particular may
+ * carry a field TYPE (`"text"`, `"date"`) rather than a source on some versions; the managed
+ * property for that is `fieldTypeCode`, but a live row is not obliged to agree. So the row is
+ * classified by VALUE, not by which key happened to appear first:
+ *
+ *  - any candidate saying `"group"` → group-scoped;
+ *  - otherwise, a candidate naming a known non-group SOURCE ({@link NON_GROUP_SCOPES}) → excluded;
+ *  - otherwise (no discriminator, or an unrecognised value like a field type) → group-scoped.
+ *
+ * The last rule is the important one. The endpoint is the group's own, so "we cannot tell" errs
+ * towards showing the field rather than silently hiding one an author needs — and an unrecognised
+ * value must never be read as "not a group field", because that would make `groupScopedRows` empty
+ * for every group: adopt would emit nothing, and apply would find no match and POST a fresh field
+ * on every single run, duplicating the group's member fields. Over-inclusion fails loudly instead
+ * (a write against a row `/memberfields/group` does not own is rejected by CT).
+ *
+ * Worth pinning against a live response when one is at hand; until then this errs on the side of
+ * the loud failure.
  */
 export function isGroupScopedMemberField(row: MemberFieldRow): boolean {
-  for (const name of ["type", "fieldCategory", "source", "fieldSource"]) {
+  let sawNonGroup = false;
+  for (const name of SCOPE_KEYS) {
     const value = row[name];
-    if (typeof value === "string") return value.toLowerCase() === "group";
+    if (typeof value !== "string") continue;
+    const normalized = value.toLowerCase().replace(/[\s-]/g, "");
+    if (normalized === "group") return true;
+    if (NON_GROUP_SCOPES.has(normalized)) sawNonGroup = true;
   }
-  return true;
+  return !sawNonGroup;
+}
+
+/**
+ * The key a member-field id is stored under in the owning group's `memberFields` state map.
+ *
+ * SLUGGED, because every other comparison in this feature is: `matchesLocalKey` slugs both sides,
+ * so a declaration keyed `wahl` and a `ref.groupMemberField("g", "Wahl")` are deliberately the same
+ * field. If the state map were keyed by the raw string instead, the write (`wahl`) and the pending
+ * read (`Wahl`) would miss each other and apply would hard-fail mid-run — after the group and the
+ * field had already been created. One canonical spelling, used by writer and reader alike (#135).
+ */
+export function memberFieldStateKey(localKey: string): string {
+  return slug(localKey);
 }
 
 /**

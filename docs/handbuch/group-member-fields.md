@@ -113,11 +113,20 @@ Rows the group's member form shows but that are not group-scoped (person master
 data, group-type defaults) are not emitted: only `/memberfields/group` rows can
 be created or updated.
 
-!!! note "Why opt-in, and not the default"
+!!! note "Why opt-in, and not the default — and why that is temporary"
 Whether an owned child resource is adopted automatically is a project-wide
-contract, not a per-feature choice. That decision lives on
-[ct-cli#141](https://github.com/eqrm/ct-cli/issues/141); until it lands,
-member fields are captured only when you ask for them.
+contract, not a per-feature choice. That contract now exists
+([ct-cli#141](https://github.com/eqrm/ct-cli/issues/141)), and it classes
+member fields as an **owned structural child** — so `--with-member-fields`
+is a **transitional** opt-in, not a statement that member fields are
+optional. The flip to default-on is a separate release: the flag keeps
+working as a no-op, and `--no-member-fields` ships in the same release as
+the flip. Nothing about an existing config changes when that happens — an
+absent `memberFields:` block still means "unmanaged".
+
+Rows that could not be read (a 403, a rate-limited 429) are reported and the
+group is adopted **without** them, so one unreadable group never aborts a
+bulk adoption — re-run with `--with-member-fields` once the read succeeds.
 
 ## Plan and apply
 

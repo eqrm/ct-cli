@@ -31,6 +31,7 @@ import type { DesiredResource } from "../engine/types.js";
 import { slug } from "../resources/registry.js";
 import {
   groupScopedRows,
+  memberFieldStateKey,
   matchesLocalKey,
   memberFieldRowId,
   memberFieldsReadPath,
@@ -753,7 +754,7 @@ function pendingIdFromState(r: Ref, state: State): number {
     // `applySyntheticFields` re-resolves each change immediately before applying it). So by the time
     // a ruleset carrying this marker is written, the id is already in state.
     const group = state.resources[r.group];
-    const id = group?.memberFields?.[r.field];
+    const id = group?.memberFields?.[memberFieldStateKey(r.field)];
     if (typeof id !== "number") {
       throw new Error(
         `Pending ${refLabel(r)} did not resolve after its group applied — no member field "${r.field}" ` +

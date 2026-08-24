@@ -110,11 +110,15 @@ async function applySyntheticFields(
   key: string,
   changes: FieldChange[],
 ): Promise<void> {
+  // One read cache per ITEM, so a group's N member-field changes share a single
+  // `GET /groups/{id}/memberfields` instead of issuing N identical ones. Deliberately not longer-
+  // lived than the item: the next apply must see the rows this one wrote.
+  const reads = new Map<string, Promise<unknown>>();
   for (const c of changes) {
     const f = syntheticField(c.field);
     if (!f) continue;
     const change = hasPendingRef(c.to) ? { ...c, to: reresolvePendingValue(c.to, state) } : c;
-    await f.apply({ client, state, id, key, change });
+    await f.apply({ client, state, id, key, change, reads });
   }
 }
 

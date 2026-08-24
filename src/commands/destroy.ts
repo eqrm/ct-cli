@@ -13,6 +13,7 @@ import type { DesiredResource } from "../engine/types.js";
 import { writeBackup } from "../engine/backup.js";
 import {
   groupScopedRows,
+  memberFieldStateKey,
   matchesLocalKey,
   memberFieldItemPath,
   memberFieldRowId,
@@ -174,6 +175,11 @@ export function resolveMemberFieldTargets(state: State, raw: string[]): MemberFi
  * after every success. A field that is already gone in ChurchTools (no live row, or a 404 on the
  * DELETE) is success-with-note, mirroring `runDeleteLoop`; any other error stops the run with state
  * saved up to that point.
+ *
+ * Returns `false` if ANY target failed — including the ones that only skip ahead to the next target
+ * — so the caller can hold back the group deletes that follow. That gate matters: the groups being
+ * destroyed are the very groups these fields belong to, so carrying on would delete a field the run
+ * just reported it could not delete, and the printed "Nothing further was deleted" would be a lie.
  */
 export async function runMemberFieldDeleteLoop(ctx: {
   client: Pick<CtClient, "get" | "request">;
@@ -181,15 +187,20 @@ export async function runMemberFieldDeleteLoop(ctx: {
   statePath: string;
   targets: MemberFieldTarget[];
   save?: (path: string, state: State) => Promise<void>;
-}): Promise<void> {
+}): Promise<boolean> {
   const { client, state, statePath, targets } = ctx;
   const save = ctx.save ?? saveState;
+  let ok = true;
   for (const target of targets) {
     const forget = async (): Promise<void> => {
       const managed = state.resources[target.groupKey];
-      if (managed?.memberFields && target.fieldKey in managed.memberFields) {
+      // Slugged, exactly as the apply that wrote it keyed the entry (`memberFieldStateKey`) and as
+      // `matchesLocalKey` matched the live row — otherwise `--member-field g::Wahl` deletes the
+      // field in ChurchTools but leaves `memberFields.wahl` pointing at the id it just destroyed.
+      const stateKey = memberFieldStateKey(target.fieldKey);
+      if (managed?.memberFields && stateKey in managed.memberFields) {
         const rest = { ...managed.memberFields };
-        delete rest[target.fieldKey];
+        delete rest[stateKey];
         if (Object.keys(rest).length > 0) managed.memberFields = rest;
         else delete managed.memberFields;
       }
@@ -205,13 +216,14 @@ export async function runMemberFieldDeleteLoop(ctx: {
             `"${target.fieldKey}" — refusing to guess which one to delete. Rename one in ChurchTools first.`,
         );
         process.exitCode = 1;
+        ok = false;
         continue;
       }
       fieldId = matches.length === 1 ? memberFieldRowId(matches[0]!) : undefined;
     } catch (err) {
       error(`Stopped at ${target.identity}: ${formatError(err)}. Nothing further was deleted.`);
       process.exitCode = 1;
-      return;
+      return false;
     }
     if (fieldId === undefined) {
       await forget();
@@ -232,11 +244,12 @@ export async function runMemberFieldDeleteLoop(ctx: {
         `Stopped at ${target.identity}: ${formatError(err)}. State saved up to this point — re-run to resume.`,
       );
       process.exitCode = 1;
-      return;
+      return false;
     }
     await forget();
     success(`Destroyed group member field ${target.identity} (#${fieldId})`);
   }
+  return ok;
 }
 
 export function destroyWarnings(state: State, keys: string[]): string[] {
@@ -374,7 +387,20 @@ export function destroyCommand(): Command {
       // Member fields FIRST: they are owned by their group, so deleting the group would take them
       // with it and the explicit per-field record would be lost.
       if (memberFieldTargets.length > 0) {
-        await runMemberFieldDeleteLoop({ client, state, statePath, targets: memberFieldTargets });
+        const fieldsDone = await runMemberFieldDeleteLoop({
+          client,
+          state,
+          statePath,
+          targets: memberFieldTargets,
+        });
+        if (!fieldsDone) {
+          // A field that could not be deleted must not be deleted anyway as collateral of its
+          // owning group's destroy — and the user was just told nothing further would happen.
+          if (ordered.length > 0) {
+            error(`Not destroying ${ordered.join(", ")} — a member field on it could not be deleted first.`);
+          }
+          return;
+        }
       }
       if (ordered.length > 0) {
         await runDeleteLoop({ client, state, statePath, ordered });

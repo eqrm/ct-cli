@@ -6,7 +6,7 @@ import { renderPlan } from "../src/engine/render.js";
 import { createContext, evaluateConfig, ref } from "../src/config/context.js";
 import { emptyState, type State } from "../src/state/state.js";
 import type { DesiredResource } from "../src/engine/types.js";
-import { memberFieldPseudo } from "../src/engine/member-fields.js";
+import { memberFieldPseudo, isGroupScopedMemberField } from "../src/engine/member-fields.js";
 
 const HOST = "https://mychurch.church.tools";
 
@@ -380,6 +380,79 @@ describe("group member fields — apply (#135)", () => {
   });
 });
 
+describe("group member fields — one spelling of identity (#135 review)", () => {
+  it("resolves a differently-cased ref against the declared key, end to end", async () => {
+    // `matchesLocalKey` slugs both sides, so `wahl` and `Wahl` are deliberately the SAME field.
+    // Everything downstream has to agree: if the id were recorded under the raw declaration key and
+    // read back under the raw ref key, apply would hard-fail here — after the group and the field
+    // had already been created in ChurchTools.
+    const ct = makeCt();
+    const state = stateWith({});
+    const { ct: dsl, resources } = createContext();
+    dsl.group({
+      key: "praktikum_1",
+      name: "Praktikum 1",
+      groupTypeId: 5,
+      groupStatusId: 1,
+      memberFields: [{ key: "wahl", name: "Wahl", fieldTypeCode: "text" }],
+      dynamic: {
+        status: "active",
+        ruleset: {
+          description: "wahl",
+          query: { "==": [{ var: "memberfield.id" }, ref.groupMemberField("praktikum_1", "Wahl")] },
+          process: {},
+        },
+      },
+    });
+    const { plan } = await buildPlan(ct.client, state, resources);
+    await executePlan(plan, { client: ct.client, state, statePath: "s.json", save: async () => {} });
+
+    const gid = state.resources.praktikum_1!.id;
+    const stored = ct.rulesets[gid] as { query: { "==": unknown[] } };
+    expect(stored.query["=="][1]).toBe(ct.memberFields[gid]![0]!.id);
+    expect(state.resources.praktikum_1!.memberFields).toEqual({ wahl: ct.memberFields[gid]![0]!.id });
+  });
+
+  it("rejects two declarations that differ only in case, since both name the same live row", async () => {
+    await expect(
+      evaluateConfig((ct) => {
+        ct.group({
+          key: "a",
+          name: "A",
+          memberFields: [
+            { key: "wahl", name: "Wahl" },
+            { key: "Wahl", name: "Wahl again" },
+          ],
+        });
+      }),
+    ).rejects.toThrow(/duplicate member field key/);
+  });
+
+  it("reads a group's member fields ONCE per apply, however many fields it declares", async () => {
+    const ct = makeCt();
+    const state = stateWith({});
+    const { ct: dsl, resources } = createContext();
+    dsl.group({
+      key: "praktikum_1",
+      name: "Praktikum 1",
+      groupTypeId: 5,
+      groupStatusId: 1,
+      memberFields: [
+        { key: "wahl", name: "Wahl", fieldTypeCode: "text" },
+        { key: "alt", name: "Alt", fieldTypeCode: "text" },
+        { key: "dritte", name: "Dritte", fieldTypeCode: "text" },
+      ],
+    });
+    const { plan } = await buildPlan(ct.client, state, resources);
+    ct.calls.length = 0;
+    await executePlan(plan, { client: ct.client, state, statePath: "s.json", save: async () => {} });
+
+    const reads = ct.calls.filter((c) => c === `GET /groups/${state.resources.praktikum_1!.id}/memberfields`);
+    expect(reads).toHaveLength(1); // not one per declared field (#145: the API rate-limits)
+    expect(ct.memberFields[state.resources.praktikum_1!.id]).toHaveLength(3);
+  });
+});
+
 describe("group member fields — ruleset validation (#135)", () => {
   it("fails at config-eval time when a ruleset names a field the target group does not declare", async () => {
     await expect(
@@ -459,5 +532,28 @@ describe("group member fields — ruleset validation (#135)", () => {
 describe("memberFieldPseudo", () => {
   it("is the diff key a declaration folds into", () => {
     expect(memberFieldPseudo("wahl")).toBe("memberField:wahl");
+  });
+});
+
+describe("isGroupScopedMemberField (#135 review)", () => {
+  it("keeps a row whose only string discriminator is a field TYPE, not a scope", () => {
+    // The failure this guards against is silent and compounding: read `type: "text"` as "not a
+    // group field" and EVERY group's list comes back empty — adopt emits nothing, and apply finds
+    // no match and POSTs a brand-new field on every single run, duplicating the group's fields.
+    expect(isGroupScopedMemberField({ id: 1, type: "text", name: "Wahl" })).toBe(true);
+    expect(isGroupScopedMemberField({ id: 1, type: "date", fieldTypeCode: "date" })).toBe(true);
+  });
+
+  it("keeps a row with no discriminator at all, and one that says group in any key", () => {
+    expect(isGroupScopedMemberField({ id: 1, name: "Wahl" })).toBe(true);
+    expect(isGroupScopedMemberField({ id: 1, type: "group" })).toBe(true);
+    expect(isGroupScopedMemberField({ id: 1, fieldCategory: "Group" })).toBe(true);
+    expect(isGroupScopedMemberField({ id: 1, source: "group", type: "text" })).toBe(true);
+  });
+
+  it("drops a row that positively names a source outside the group", () => {
+    expect(isGroupScopedMemberField({ id: 1, type: "person" })).toBe(false);
+    expect(isGroupScopedMemberField({ id: 1, source: "masterdata" })).toBe(false);
+    expect(isGroupScopedMemberField({ id: 1, fieldSource: "group-type" })).toBe(false);
   });
 });
