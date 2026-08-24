@@ -108,7 +108,13 @@ export class CtClient {
   /** Re-entrancy guards: no self-heal while a login (or a resume probe) is already in flight. */
   private loggingIn = false;
   private resuming = false;
-  /** At most ONE automatic re-login per process — a server that always 401s must not become a login storm. */
+  /**
+   * At most ONE automatic re-login per *unrecovered* 401 — a server that always 401s must not
+   * become a login storm. Reset once a re-login actually produced a successful replay, so the
+   * budget is a guard against a hopeless loop rather than a lifetime cap: a long `apply` whose
+   * session dies twice (or that burned the budget on a 401 that was never about the session —
+   * CT answers 401 for a CSRF failure too) can still self-heal.
+   */
   private reauthAttempts = 0;
 
   constructor(
@@ -482,7 +488,13 @@ export class CtClient {
       if (await this.reauthenticate()) {
         // Drain the response we're discarding so its socket isn't left buffered.
         await res.body?.cancel().catch(() => {});
-        return this.requestEnvelope(method, path, body);
+        const replayed = await this.requestEnvelope(method, path, body);
+        // The replay went through, so the self-heal worked and the budget it spent is
+        // available again for a later expiry in the same run. A re-login whose replay
+        // 401s again throws from the line above with the budget still spent, which is
+        // what stops an always-401 server from becoming a login storm.
+        this.reauthAttempts = 0;
+        return replayed;
       }
     }
     if (!res.ok) {

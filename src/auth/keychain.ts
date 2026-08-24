@@ -34,18 +34,23 @@ export function isMac(): boolean {
  * each of which reaches for the stored credentials — so without this cache the
  * same entry is fetched multiple times per command, spawning
  * `security find-generic-password` (and prompting to unlock a locked Keychain)
- * every time. A cached value of `null` = read and absent. Invalidated wholesale
- * on any write (`resetKeychainCache`).
+ * every time. A cached value of `null` = read and absent. A write through
+ * `keychainSet`/`keychainDelete` invalidates only the account it touched, so
+ * storing one entry (a session) does not force every *other* entry (the
+ * credential blob) to be re-read — and re-prompted for.
  */
 const cachedBlobs = new Map<string, string | null>();
 
-/** Drop the memoized keychain reads. Called after every store/clear; exported for tests. */
+/** Drop ALL memoized keychain reads. A blunt instrument kept for tests and for a
+ * fresh credential login, where every derived entry is suspect; ordinary writes
+ * invalidate only their own account. */
 export function resetKeychainCache(): void {
   cachedBlobs.clear();
 }
 
 export async function keychainSet(account: string, value: string): Promise<void> {
   await run("security", ["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", account, "-w", value]);
+  cachedBlobs.set(account, value); // a read later in this process must see what was just written
 }
 
 export async function keychainGet(account: string): Promise<string | null> {
@@ -77,4 +82,5 @@ export async function keychainDelete(account: string): Promise<void> {
   } catch {
     /* not present — nothing to delete */
   }
+  cachedBlobs.delete(account); // a later read must not return the cleared secret
 }

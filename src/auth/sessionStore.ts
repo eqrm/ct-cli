@@ -42,7 +42,7 @@
  * the value or `null`.
  */
 import { createHash } from "node:crypto";
-import { isMac, keychainDelete, keychainGet, keychainSet, resetKeychainCache } from "./keychain.js";
+import { isMac, keychainDelete, keychainGet, keychainSet } from "./keychain.js";
 import type { SessionCache } from "../api/ctClient.js";
 
 /** Keychain account prefix; the rest of the account name is the (normalized) host. */
@@ -146,8 +146,10 @@ export async function storeSession(
     obtainedAt: Date.now(),
     tokenHash: tokenFingerprint(token),
   };
+  // `keychainSet` refreshes this account's memoized read on its own, so a later read in
+  // this process sees the new session — without evicting the credential blob's cached
+  // read and re-prompting for a locked Keychain (keychain.ts).
   await keychainSet(accountFor(host), JSON.stringify(blob));
-  resetKeychainCache(); // a read later in this process must see the new session, not the old one
 }
 
 /** Forget the cached session for `host` (logout, or a session the server rejected). */
@@ -156,7 +158,6 @@ export async function clearSession(host: string): Promise<void> {
     return;
   }
   await keychainDelete(accountFor(host));
-  resetKeychainCache();
 }
 
 /**

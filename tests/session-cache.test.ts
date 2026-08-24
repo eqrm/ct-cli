@@ -180,6 +180,39 @@ describe("session cache across invocations (#145)", () => {
     expect(logins).toHaveLength(2); // the initial login + exactly one automatic retry
   });
 
+  it("a recovered 401 restores the budget, so a second expiry later in the run still self-heals", async () => {
+    // The storm guard must not be a lifetime cap: a long-running `apply` can outlive two
+    // sessions, and a 401 that was never about the session at all (CT answers 401 for a CSRF
+    // failure too) must not silently spend the run's only self-heal.
+    const cache = memoryCache();
+    let rejectNext = false;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes("login_token")) {
+        return Promise.resolve(jsonResponse({ data: { id: 7 } }, { setCookie: "s=1; Path=/" }));
+      }
+      if (url.includes("csrftoken")) {
+        return Promise.resolve(jsonResponse({ data: "csrf" }));
+      }
+      if (rejectNext) {
+        rejectNext = false;
+        return Promise.resolve(jsonResponse({ message: "unauthorized" }, { status: 401 }));
+      }
+      return Promise.resolve(jsonResponse({ data: [{ id: 1 }] }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new CtClient({ host: HOST }, { sessionCache: cache });
+    await client.authenticate("tok");
+    rejectNext = true;
+    await expect(client.get("/campuses")).resolves.toEqual([{ id: 1 }]);
+    rejectNext = true;
+    await expect(client.get("/campuses")).resolves.toEqual([{ id: 1 }]);
+
+    const logins = urls(fetchMock).filter((u) => u.includes("login_token"));
+    expect(logins).toHaveLength(3); // the initial login + one per recovered 401
+  });
+
   it("a client without a session cache behaves exactly as before (always handshakes)", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
