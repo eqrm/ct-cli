@@ -159,14 +159,15 @@ confirmation — and a declaration marked `preventDestroy: true` blocks even tha
 
 ## What it manages
 
-| Resource                                                                   | DSL                                                                                                            | Guide                                             |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Campuses                                                                   | `ct.campus`                                                                                                    | [config guide](docs/configuration.md)             |
-| Groups (fields, campus, multi-parent hierarchy)                            | `ct.group`                                                                                                     | [config guide](docs/configuration.md)             |
-| Group types, roles, age/target groups, relationship types, person statuses | `ct.groupType`, `ct.roleDefinition`, `ct.ageGroup`, `ct.targetGroup`, `ct.relationshipType`, `ct.personStatus` | reusable building blocks                          |
-| Permissions (group-role, group-type-role, person-status)                   | `ct.groupRole`, `ct.groupTypeRole`, `ct.status`                                                                | [permissions](docs/handbuch/permissions.md)       |
-| Auto-groups (dynamic groups)                                               | the `dynamic` block on a group                                                                                 | [dynamic groups](docs/handbuch/dynamic-groups.md) |
-| Repeated structure, parametrized                                           | a plain function over the DSL                                                                                  | [blueprints](docs/handbuch/blueprints.md)         |
+| Resource                                                                   | DSL                                                                                                            | Guide                                                       |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Campuses                                                                   | `ct.campus`                                                                                                    | [config guide](docs/configuration.md)                       |
+| Groups (fields, campus, multi-parent hierarchy)                            | `ct.group`                                                                                                     | [config guide](docs/configuration.md)                       |
+| Group types, roles, age/target groups, relationship types, person statuses | `ct.groupType`, `ct.roleDefinition`, `ct.ageGroup`, `ct.targetGroup`, `ct.relationshipType`, `ct.personStatus` | reusable building blocks                                    |
+| Permissions (group-role, group-type-role, person-status)                   | `ct.groupRole`, `ct.groupTypeRole`, `ct.status`                                                                | [permissions](docs/handbuch/permissions.md)                 |
+| Auto-groups (dynamic groups)                                               | the `dynamic` block on a group                                                                                 | [dynamic groups](docs/handbuch/dynamic-groups.md)           |
+| Group member field definitions (group-scoped, never deleted implicitly)    | the `memberFields` block on a group                                                                            | [group member fields](docs/handbuch/group-member-fields.md) |
+| Repeated structure, parametrized                                           | a plain function over the DSL                                                                                  | [blueprints](docs/handbuch/blueprints.md)                   |
 
 Read-only by design: the person master-data model, security levels and
 custom-field _definitions_ (`ct get person-masterdata`, `ct get data-fields`) —

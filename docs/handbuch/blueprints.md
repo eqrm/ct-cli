@@ -4,7 +4,7 @@ sources:
   - src/config/context.ts
   - src/engine/graph.ts
   - src/engine/hierarchy.ts
-sources_hash: 37db6b8730470f73
+sources_hash: a1b74a4f10325270
 reviewed: 2026-08-17
 ---
 
@@ -201,12 +201,15 @@ A blueprint doesn't need to worry about sequencing:
   `dependsOn`), so `orderKeys` always places `${campus}_kids_lead` before
   `${campus}_kids_0_3`/`_4_6`/`_checkin`/`_all` — the topological sort
   guarantees it structurally, not by declaration order.
-- **Hierarchy and auto-group state ride along with their group.** `parents`
-  and `dynamic` are _synthetic fields_ on the `group` resource itself (see
-  `SYNTHETIC_FIELDS` in [`src/engine/synthetic.ts`](https://github.com/eqrm/ct-cli/blob/main/src/engine/synthetic.ts)),
+- **Hierarchy, member fields and auto-group state ride along with their
+  group.** `parents`, `memberFields` and `dynamic` are _synthetic fields_ on
+  the `group` resource itself (see `SYNTHETIC_FIELDS` in
+  [`src/engine/synthetic.ts`](https://github.com/eqrm/ct-cli/blob/main/src/engine/synthetic.ts)),
   not separate resources with their own tier — they're diffed and applied as
   part of that same group's create/update, once the group (and, for
-  `parents`, its referenced parent groups) already exist.
+  `parents`, its referenced parent groups) already exist. Within one group
+  they are written in that registered order, so a group's member fields exist
+  before a ruleset that references them is installed.
 - **Permissions apply after the structural plan.** `ct.groupTypeRole` /
   `ct.groupRole` declarations aren't part of `orderKeys`'s dependency graph
   at all — they go through a separate plan/apply pass
@@ -237,6 +240,14 @@ resource throws immediately:
 Group "berlin_kids_0_3" declares hierarchy parent "berlin_kids_laed", which is not declared in this config.
 Managed parents must reference a group by its key (omit unmanaged parents entirely).
 ```
+
+The same pass validates **group member field references** (#135): a
+`ref.groupMemberField("<group>", "<field>")` anywhere in a declaration — a
+dynamic ruleset included — must name a group declared in this config that
+declares that field, or `evaluateConfig` throws before any plan runs. Member
+fields are the surface where this matters most in a blueprint, because a field
+is owned by exactly one group: a blueprint instantiated twice creates two
+independent `wahl` fields, and a reference must say _which group's_.
 
 This matters more in a blueprint than in a hand-written flat config,
 because the `${campus}_`-prefixed key is itself computed

@@ -138,3 +138,66 @@ describe("ct destroy (command level)", () => {
     }
   });
 });
+
+/**
+ * The EXPLICIT destructive operation for a group member field (#135). `apply` can never delete one
+ * — a field dropped from config produces no desired key, so the diff engine is structurally unable
+ * to propose it — so this command is the only path, and it inherits the group's guardrails.
+ */
+describe("ct destroy --member-field (#135)", () => {
+  const rows = [{ id: 701, type: "group", referenceName: "wahl", name: "Wahl", fieldTypeCode: "text" }];
+
+  beforeEach(() => {
+    getMock.mockImplementation((async (path: string) => {
+      if (path === "/groups/hierarchies") return [];
+      if (path === "/groups/1/memberfields") return rows;
+      return { name: path };
+    }) as never);
+  });
+
+  it("deletes the field through its group-scoped path and drops it from state", async () => {
+    const state = emptyState(HOST);
+    state.resources.area = group("area", 1, { memberFields: { wahl: 701 } });
+    await saveState(statePath, state);
+
+    await runDestroy(["--member-field", "area::wahl", "--state", statePath, "--force"]);
+
+    expect(calls).toEqual([{ method: "DELETE", path: "/groups/1/memberfields/group/701" }]);
+    const after = await loadState(statePath, HOST);
+    // The owning GROUP survives — only the field it owns was destroyed.
+    expect(after.resources.area).toBeDefined();
+    expect(after.resources.area!.memberFields).toBeUndefined();
+  });
+
+  it("is refused when the owning group is protected — protecting a group protects its fields", async () => {
+    const state = emptyState(HOST);
+    state.resources.area = group("area", 1, { preventDestroy: true });
+    await saveState(statePath, state);
+
+    await expect(
+      runDestroy(["--member-field", "area::wahl", "--state", statePath, "--force"]),
+    ).rejects.toThrow(/preventDestroy is set \(in state\) for group "area"/);
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects a malformed identity and an unmanaged group before any network call", async () => {
+    const state = emptyState(HOST);
+    state.resources.area = group("area", 1);
+    await saveState(statePath, state);
+
+    await expect(runDestroy(["--member-field", "wahl", "--state", statePath, "--force"])).rejects.toThrow(
+      /not a group member field identity/,
+    );
+    await expect(
+      runDestroy(["--member-field", "nope::wahl", "--state", statePath, "--force"]),
+    ).rejects.toThrow(/no managed group "nope"/);
+    expect(calls).toEqual([]);
+  });
+
+  it("still refuses to delete anything with neither --target nor --member-field", async () => {
+    await saveState(statePath, emptyState(HOST));
+    await expect(runDestroy(["--state", statePath, "--force"])).rejects.toThrow(
+      /Destroy never deletes implicitly/,
+    );
+  });
+});

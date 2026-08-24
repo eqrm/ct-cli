@@ -3,6 +3,10 @@
  * plan produced by diffing desired vs state vs actual.
  */
 
+import type { MemberFieldSpec } from "./member-fields.js";
+
+export type { MemberFieldSpec };
+
 export type DynamicStatus = "active" | "inactive" | "manual" | "none";
 
 export interface DynamicSpec {
@@ -22,6 +26,13 @@ export interface DesiredResource {
   parents?: string[];
   /** Auto-group / dynamic-group config. Opt-in: `undefined` = not a dynamic group. Only valid on a group. */
   dynamic?: DynamicSpec;
+  /**
+   * Group-scoped member-field DEFINITIONS owned by this group (#135). Opt-in, mirroring `parents`
+   * and `dynamic`: `undefined` = member fields are not managed for this group; `[]` = managed with
+   * none declared (which still never deletes an existing one — see engine/synthetic.ts). Only valid
+   * on a group, because a member field belongs to exactly one group and is not globally reusable.
+   */
+  memberFields?: MemberFieldSpec[];
   /** Logical keys this resource must be applied after (includes `parent`/`parents`). */
   dependsOn: string[];
   /** Lifecycle flag: block `ct destroy` for this resource. Never diffed or sent to the API. */

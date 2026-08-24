@@ -72,6 +72,23 @@ function makeClient(childrenResponse: ChildrenResponse = "array") {
     },
   };
   const statuses: Record<number, string> = { 30: "active", 33: "active" };
+  // Group-scoped member fields (#135). Group 31 has two custom fields plus a row sourced elsewhere
+  // (`type: "person"`), which must NOT be adopted — only `/memberfields/group` rows are manageable.
+  const memberFields: Record<number, Array<Record<string, unknown>>> = {
+    31: [
+      {
+        id: 701,
+        type: "group",
+        referenceName: "wahl",
+        name: "Wahl",
+        fieldTypeCode: "text",
+        requiredInRegistrationForm: true,
+        sortKey: 1,
+      },
+      { id: 702, type: "group", referenceName: "notiz", name: "Notiz", fieldTypeCode: "textarea" },
+      { id: 703, type: "person", referenceName: "vorname", name: "Vorname", fieldTypeCode: "text" },
+    ],
+  };
 
   const get = vi.fn(async (path: string): Promise<unknown> => {
     let m = /^\/groups\/(\d+)$/.exec(path);
@@ -99,6 +116,8 @@ function makeClient(childrenResponse: ChildrenResponse = "array") {
       }
       return rows;
     }
+    m = /^\/groups\/(\d+)\/memberfields$/.exec(path);
+    if (m) return memberFields[Number(m[1])] ?? [];
     if (path === "/group/grouptypes") return groupTypes;
     if (path === "/campuses") return campuses;
     if (path === "/group/roles") return roles;
@@ -533,5 +552,64 @@ describe("ct adopt group — idiomatic snippet round-trips to a no-op (#52 item 
       configDir: workDir,
     });
     expect(plan.items.every((i) => i.action === "no-op")).toBe(true);
+  });
+});
+
+describe("ct adopt group --with-member-fields (#135)", () => {
+  /** Grab the `--dry-run` payload, which carries the generated config snippet verbatim. */
+  async function snippetFor(args: string[]): Promise<string> {
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s) => {
+      writes.push(String(s));
+      return true;
+    });
+    try {
+      await run(args);
+    } finally {
+      spy.mockRestore();
+    }
+    const payload = JSON.parse(writes.join("")) as { config?: string } | Array<{ config?: string }>;
+    return Array.isArray(payload) ? payload.map((p) => p.config).join("\n") : (payload.config ?? "");
+  }
+
+  it("is opt-in: a plain adopt emits no memberFields block and never reads the endpoint", async () => {
+    const snippet = await snippetFor(["group", "31", "--dry-run", "--state", statePath]);
+    expect(snippet).not.toContain("memberFields");
+    expect(client.get).not.toHaveBeenCalledWith("/groups/31/memberfields");
+  });
+
+  it("emits every group-scoped field WITHOUT any ChurchTools id", async () => {
+    const snippet = await snippetFor([
+      "group",
+      "31",
+      "--with-member-fields",
+      "--dry-run",
+      "--state",
+      statePath,
+    ]);
+    expect(snippet).toContain("memberFields:");
+    expect(snippet).toContain('key: "wahl"');
+    expect(snippet).toContain('name: "Wahl"');
+    expect(snippet).toContain('fieldTypeCode: "text"');
+    expect(snippet).toContain("requiredInRegistrationForm: true");
+    expect(snippet).toContain('key: "notiz"');
+    // The whole portability guarantee: no host-specific field id anywhere in the emitted config.
+    expect(snippet).not.toContain("701");
+    expect(snippet).not.toContain("702");
+    expect(snippet).not.toMatch(/\bid:/);
+    // …and a row that is not group-scoped is not manageable through /memberfields/group.
+    expect(snippet).not.toContain("vorname");
+  });
+
+  it("emits no memberFields block for a group that has none", async () => {
+    const snippet = await snippetFor([
+      "group",
+      "10",
+      "--with-member-fields",
+      "--dry-run",
+      "--state",
+      statePath,
+    ]);
+    expect(snippet).not.toContain("memberFields");
   });
 });

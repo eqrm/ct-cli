@@ -16,6 +16,12 @@ import { CtApiError, type CtClient } from "../api/ctClient.js";
 import { resolveConfig } from "../config.js";
 import { prepareEnv } from "../env/context.js";
 import { normalizeRuleset } from "../engine/dynamic.js";
+import {
+  groupScopedRows,
+  localKeyOf,
+  MEMBER_FIELD_PROPS,
+  memberFieldsReadPath,
+} from "../engine/member-fields.js";
 import type { DynamicStatus } from "../engine/types.js";
 import { RESOURCES, configSnippet, fromInformation, slug } from "../resources/registry.js";
 import { ReverseResolver, type RoleCatalogEntry } from "../resolve/reverse.js";
@@ -32,6 +38,8 @@ interface AdoptGroupOptions {
   type?: string;
   childrenOf?: string;
   withDynamic?: boolean;
+  /** Opt in to capturing the group's group-scoped member-field definitions (#135). Never the default. */
+  withMemberFields?: boolean;
   /** Opt in to changing an already-managed group's logical key (#123). Never the default. */
   rekey?: boolean;
   /** Commander's negatable `--no-portable-rulesets`: true unless the flag was passed (#101). */
@@ -186,6 +194,42 @@ interface DynamicCapture {
   normalizedRuleset: Record<string, unknown>;
 }
 
+/**
+ * Capture a group's group-scoped member-field DEFINITIONS as portable declarations (#135).
+ *
+ * Emits `{ key, ...managed properties }` per field and **never a ChurchTools id** — the field's
+ * identity in config is the group key plus its local key (`ojbp_2026_27_praktikum_1::wahl`), so the
+ * same blueprint applied to another group, or another host, mints its own fields rather than
+ * resolving against this host's numbering. The local key comes from CT's own `referenceName`
+ * (slugged), falling back to the slugged name for a field created in the ChurchTools UI.
+ *
+ * Opt-in only (`--with-member-fields`). Whether owned child resources are adopted by default is a
+ * project-wide contract, deliberately left to #141.
+ */
+async function captureMemberFields(
+  id: number,
+  client: Pick<CtClient, "get">,
+): Promise<Array<Record<string, unknown>> | undefined> {
+  let raw: unknown;
+  try {
+    raw = await client.get(memberFieldsReadPath(id));
+  } catch (err) {
+    // A group whose member fields cannot be read is not a reason to abort a bulk adoption of a whole
+    // subtree — say so and adopt the group without them.
+    if (err instanceof CtApiError && err.status === 404) return undefined;
+    throw err;
+  }
+  const rows = groupScopedRows(raw);
+  if (rows.length === 0) return undefined;
+  return rows.map((row) => {
+    const declaration: Record<string, unknown> = { key: localKeyOf(row) };
+    for (const prop of MEMBER_FIELD_PROPS) {
+      if (row[prop] !== undefined) declaration[prop] = row[prop];
+    }
+    return declaration;
+  });
+}
+
 /** Fetch + normalize a group's ruleset and status. `undefined` (never throws) if the group isn't dynamic. */
 async function captureDynamic(
   id: number,
@@ -227,6 +271,11 @@ export function adoptGroupCommand(): Command {
     .option(
       "--with-dynamic",
       "also capture each dynamic group's ruleset to rulesets/<key>.json and emit the dynamic: block",
+    )
+    .option(
+      "--with-member-fields",
+      "also capture each group's group-scoped member-field definitions and emit the memberFields: " +
+        "block (portable: no ChurchTools field ids are ever emitted)",
     )
     .option(
       "--portable-rulesets",
@@ -350,6 +399,12 @@ export function adoptGroupCommand(): Command {
         // captured `dynamic` block (if any) is appended AFTER, so it is not treated as an id field.
         const { fields: sugared, todos } = await reverse.sugarFields(fields);
         const snippetFields: Record<string, unknown> = sugared;
+        // Emitted BEFORE `dynamic` so the snippet reads in apply order — the fields a ruleset may
+        // reference are declared above the ruleset that references them (#135).
+        if (opts.withMemberFields) {
+          const memberFields = await captureMemberFields(id, client);
+          if (memberFields) snippetFields.memberFields = memberFields;
+        }
         if (opts.withDynamic) {
           const captured = await captureDynamic(id, client);
           if (captured) {

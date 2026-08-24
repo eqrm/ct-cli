@@ -16,6 +16,22 @@ import { mapConcurrent } from "../util/concurrency.js";
 import { info, warn, formatError } from "../ui.js";
 import { normalizeDynamic, normalizeRuleset, putRulesetBody, resolveRulesetRef } from "./dynamic.js";
 import { formatPortablizeWarnings, scanUnportablized } from "../config/query-refs.js";
+import { slug } from "../resources/registry.js";
+import {
+  actualMemberFieldProps,
+  groupScopedRows,
+  localKeyOf,
+  matchesLocalKey,
+  memberFieldIdentity,
+  memberFieldItemPath,
+  memberFieldLocalKey,
+  memberFieldPseudo,
+  memberFieldRowId,
+  memberFieldsCreatePath,
+  memberFieldsReadPath,
+  MEMBER_FIELD_PREFIX,
+  type MemberFieldRow,
+} from "./member-fields.js";
 import type { DynamicStatus } from "./types.js";
 
 /** How many dynamic groups to fetch (ruleset + status) from ChurchTools at once. Mirrors build.ts. */
@@ -40,6 +56,12 @@ export interface SyntheticApplyCtx {
   client: Pick<CtClient, "request">;
   state: State;
   id: number;
+  /**
+   * The owning resource's LOGICAL key. Needed by any field whose write produces state a later
+   * change has to read back — today the group-scoped member fields (#135), which record each
+   * created field's id on the group's state entry so a same-run ruleset reference can resolve.
+   */
+  key: string;
   change: FieldChange;
 }
 export interface SyntheticPostApplyCtx {
@@ -67,6 +89,14 @@ export interface SyntheticFoldResult {
 
 export interface SyntheticField {
   field: string;
+  /**
+   * Marks this entry as owning a FAMILY of pseudo-fields sharing a prefix, rather than one fixed
+   * name (#135). Group-scoped member fields need it: one declared field folds into one pseudo-field
+   * (`memberField:wahl`), so the plan diffs and renders per field instead of as one opaque array —
+   * and, crucially, a field dropped from config simply has no desired key, which is what makes
+   * `diffFields` (desired-driven) structurally incapable of turning a removal into a delete.
+   */
+  prefix?: string;
   fold(ctx: SyntheticFoldCtx): Promise<SyntheticFoldResult>;
   apply(ctx: SyntheticApplyCtx): Promise<void>;
   /**
@@ -128,6 +158,179 @@ const parentsField: SyntheticField = {
   },
 };
 
+/** How many groups' member-field lists to read from ChurchTools at once. Mirrors the dynamic fold. */
+const MEMBER_FIELD_FETCH_CONCURRENCY = 8;
+
+/** Read one group's group-scoped member fields through a read-only client. */
+async function readMemberFields(client: Pick<CtClient, "get">, groupId: number): Promise<MemberFieldRow[]> {
+  return groupScopedRows(await client.get<unknown>(memberFieldsReadPath(groupId)));
+}
+
+/** Read them through the write client (apply only has `request`; `GET` goes through it just fine). */
+async function readMemberFieldsForWrite(
+  client: Pick<CtClient, "request">,
+  groupId: number,
+): Promise<MemberFieldRow[]> {
+  return groupScopedRows(await client.request<unknown>("GET", memberFieldsReadPath(groupId)));
+}
+
+/**
+ * `memberField:<localKey>`: group-scoped member-field DEFINITIONS (#135), one pseudo-field per
+ * declared field on the owning group.
+ *
+ * Three properties of this shape are load-bearing rather than incidental:
+ *
+ *  1. **Never deletes.** `diffFields` walks the DESIRED side, so a field dropped from config
+ *     produces no key, no change and no write — it is structurally impossible for a removal to
+ *     become a delete here. The live field is still surfaced as a DELETE CANDIDATE (a warning
+ *     naming its portable identity and the explicit `ct destroy --member-field` that removes it),
+ *     so "left alone" never means "unnoticed".
+ *  2. **Round-trips to a no-op.** The actual side is narrowed to exactly the properties the
+ *     declaration names (`actualMemberFieldProps`), so a server-defaulted sibling CT returns can
+ *     never make the two sides unequal forever.
+ *  3. **Ordered before `dynamic`.** This entry is registered ahead of the dynamic field, so the
+ *     folded `memberField:*` keys land in the desired bag before `dynamic`, `diffFields` emits them
+ *     in that order, and `applySyntheticFields` therefore creates the fields before installing a
+ *     ruleset that may reference them.
+ */
+const memberFieldsField: SyntheticField = {
+  field: MEMBER_FIELD_PREFIX,
+  prefix: MEMBER_FIELD_PREFIX,
+  async fold({ client, state, desired, actual }) {
+    const optedIn = desired.filter((d) => d.type === "group" && d.memberFields !== undefined);
+    if (optedIn.length === 0) return { desired, errors: [] };
+
+    // Only groups that are ALREADY managed and were fetched have an actual side to read. A group
+    // this run creates has neither — its fields are created by its own apply item — and a vanished
+    // one is handled as a recreate by the plain plan.
+    const readable = optedIn.filter((d) => {
+      const managed = state.resources[d.key];
+      return managed?.type === "group" && actual.get(d.key) !== undefined;
+    });
+    const outcomes = await mapConcurrent(readable, MEMBER_FIELD_FETCH_CONCURRENCY, async (d) => {
+      const managed = state.resources[d.key]!;
+      try {
+        return { key: d.key, rows: await readMemberFields(client, managed.id), errors: [] as string[] };
+      } catch (err) {
+        // Same honesty rule as the dynamic fold (#126): an unread actual is NOT a known-absent one,
+        // so the desired side stays unfolded and the group is reported unreadable rather than having
+        // "create every member field" manufactured out of a transient 429.
+        return {
+          key: d.key,
+          rows: undefined,
+          errors: [`member fields ${d.key} (#${managed.id}): ${formatError(err)}`],
+        };
+      }
+    });
+    const errors = outcomes.flatMap((o) => o.errors);
+    const unreadable = outcomes.filter((o) => o.rows === undefined).map((o) => o.key);
+    const unreadableKeys = new Set(unreadable);
+    const rowsByKey = new Map(outcomes.filter((o) => o.rows !== undefined).map((o) => [o.key, o.rows!]));
+
+    const augmented = desired.map((d) => {
+      if (d.type !== "group" || d.memberFields === undefined) return d;
+      if (unreadableKeys.has(d.key)) return d;
+      const rows = rowsByKey.get(d.key);
+      const a = actual.get(d.key);
+      const fields = { ...d.fields };
+      for (const spec of d.memberFields) {
+        const pseudo = memberFieldPseudo(spec.key);
+        fields[pseudo] = spec.props;
+        if (!a || !rows) continue;
+        const matches = rows.filter((row) => matchesLocalKey(row, spec.key));
+        // >1 live match means the local key is ambiguous on this host — a blind update would pick
+        // one arbitrarily, so leave the actual side absent and let the ambiguity surface where it
+        // can be acted on (the apply path refuses it by name).
+        if (matches.length === 1) {
+          a[pseudo] = actualMemberFieldProps(matches[0]!, Object.keys(spec.props));
+        }
+      }
+      if (rows) {
+        const declared = new Set(d.memberFields.map((f) => slug(f.key)));
+        for (const row of rows) {
+          const local = localKeyOf(row);
+          if (!local || declared.has(local)) continue;
+          warn(
+            `group "${d.key}": member field "${memberFieldIdentity(d.key, local)}" exists in ` +
+              `ChurchTools but is not declared — DELETE CANDIDATE, left untouched. ct never removes a ` +
+              `member field because it vanished from config; remove it explicitly with ` +
+              `\`ct destroy --member-field ${memberFieldIdentity(d.key, local)}\`.`,
+          );
+        }
+      }
+      return { ...d, fields };
+    });
+    return { desired: augmented, errors, unreadable };
+  },
+  async apply({ client, state, id, key, change }) {
+    const local = memberFieldLocalKey(change.field);
+    if (local === undefined) return;
+    const props = change.to as Record<string, unknown> | undefined;
+    // No desired value = the field is not declared. `diffFields` cannot even produce such a change
+    // (it walks the desired side), so this is belt-and-braces: apply never deletes a member field.
+    if (props === undefined || props === null) return;
+
+    const rows = await readMemberFieldsForWrite(client, id);
+    const matches = rows.filter((row) => matchesLocalKey(row, local));
+    if (matches.length > 1) {
+      throw new Error(
+        `group member field "${memberFieldIdentity(key, local)}": ${matches.length} fields on group ` +
+          `#${id} answer to the local key "${local}". Rename one in ChurchTools so the key is unique ` +
+          `within the group, then re-apply.`,
+      );
+    }
+
+    const record = (fieldId: number): void => {
+      // Record the per-host id on the OWNING GROUP's state entry, so a same-run `<group>::<field>`
+      // reference in a ruleset applied later in this very item can be completed (#135).
+      const managed = state.resources[key];
+      if (!managed) return;
+      managed.memberFields = { ...managed.memberFields, [local]: fieldId };
+    };
+
+    if (matches.length === 1) {
+      const fieldId = memberFieldRowId(matches[0]!);
+      if (fieldId === undefined) {
+        throw new Error(
+          `group member field "${memberFieldIdentity(key, local)}": the matching ChurchTools row ` +
+            `carries no numeric id, so it cannot be updated.`,
+        );
+      }
+      const path = memberFieldItemPath(id, fieldId);
+      assertNotPeople(path);
+      // PATCH is a partial update, so unmanaged sibling properties are left alone (the same reason
+      // groups are PATCHed). Instances whose member-field endpoint only implements PUT answer 405/501
+      // — fall back rather than fail an apply over a verb.
+      try {
+        await client.request("PATCH", path, props);
+      } catch (err) {
+        if (!(err instanceof CtApiError && (err.status === 405 || err.status === 501))) throw err;
+        await client.request("PUT", path, props);
+      }
+      record(fieldId);
+      return;
+    }
+
+    const createPath = memberFieldsCreatePath(id);
+    assertNotPeople(createPath);
+    // `referenceName` is the local key, not a managed property: it is CT's own stable, non-numeric
+    // handle within the group, and sending it at create is what lets every later run find this
+    // field by its portable identity instead of by a host-specific id.
+    const created = await client.request<{ id?: number } | undefined>("POST", createPath, {
+      ...props,
+      referenceName: local,
+    });
+    const newId = created?.id;
+    if (typeof newId !== "number") {
+      throw new Error(
+        `group member field "${memberFieldIdentity(key, local)}": create returned no numeric id ` +
+          `(got ${JSON.stringify(created)}).`,
+      );
+    }
+    record(newId);
+  },
+};
+
 /** `dynamic`: dynamic-group ruleset + status, reconciled as one synthetic field. */
 const dynamicField: SyntheticField = {
   field: "dynamic",
@@ -143,7 +346,14 @@ const dynamicField: SyntheticField = {
       if (!a) return []; // vanished from CT → handled as a recreate by the plain plan
       return [{ managed, a }];
     });
-    if (targets.length === 0) return { desired, errors: [] };
+    // Gate on the DESIRED opt-in, not on the readable targets (#135, mirroring `parents`). Returning
+    // early whenever nothing is readable ALSO skipped folding the desired side of a group this run
+    // CREATES — so a config whose only dynamic group was brand new silently applied no ruleset on
+    // its first run, while the same config next to an already-adopted dynamic group applied it fine.
+    // With no readable targets there is simply nothing to fetch; the desired-side fold below still runs.
+    if (!desired.some((d) => d.type === "group" && d.dynamic !== undefined)) {
+      return { desired, errors: [] };
+    }
     // Fetch each group's (ruleset, status) concurrently — 2N serial round-trips otherwise dominate
     // plan/apply latency on a config with many dynamic groups. Within a group the two GETs stay
     // sequential: the status GET must run only after the ruleset GET succeeds (a 404 there means
@@ -270,14 +480,24 @@ const dynamicField: SyntheticField = {
   },
 };
 
-export const SYNTHETIC_FIELDS: SyntheticField[] = [parentsField, dynamicField];
+/**
+ * Registration ORDER IS APPLY ORDER (#135). Each fold appends its pseudo-fields to the desired bag,
+ * `diffFields` walks that bag in insertion order, and `applySyntheticFields` walks the resulting
+ * changes in order — so member fields are created before the same group's dynamic ruleset is
+ * installed, which is exactly what lets a ruleset reference a field created in the same run.
+ */
+export const SYNTHETIC_FIELDS: SyntheticField[] = [parentsField, memberFieldsField, dynamicField];
 
 const BY_FIELD = new Map(SYNTHETIC_FIELDS.map((f) => [f.field, f]));
+/** Entries owning a whole prefix family (`memberField:<key>`) rather than one fixed field name. */
+const BY_PREFIX = SYNTHETIC_FIELDS.filter(
+  (f): f is SyntheticField & { prefix: string } => typeof f.prefix === "string",
+);
 export function isSyntheticField(field: string): boolean {
-  return BY_FIELD.has(field);
+  return syntheticField(field) !== undefined;
 }
 export function syntheticField(field: string): SyntheticField | undefined {
-  return BY_FIELD.get(field);
+  return BY_FIELD.get(field) ?? BY_PREFIX.find((f) => field.startsWith(f.prefix));
 }
 
 /**
