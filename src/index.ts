@@ -11,7 +11,9 @@ import { planCommand } from "./commands/plan.js";
 import { applyCommand } from "./commands/apply.js";
 import { destroyCommand } from "./commands/destroy.js";
 import { initCommand } from "./commands/init.js";
+import { completionCommand } from "./commands/completion.js";
 import { plannedCommands } from "./commands/placeholders.js";
+import { isCompletionRequest, serveCompletionRequest } from "./completion/shell.js";
 import { isMainModule } from "./isMain.js";
 import { error, formatError } from "./ui.js";
 
@@ -36,6 +38,7 @@ export function buildProgram(): Command {
   program.addCommand(planCommand());
   program.addCommand(applyCommand());
   program.addCommand(destroyCommand());
+  program.addCommand(completionCommand());
   for (const cmd of plannedCommands()) {
     program.addCommand(cmd);
   }
@@ -45,6 +48,12 @@ export function buildProgram(): Command {
 
 async function main(): Promise<void> {
   const program = buildProgram();
+  // A Tab keypress re-enters `ct` with the shell hook's plumbing flags (#132). Answer
+  // from the command tree and exit before Commander ever sees them.
+  if (isCompletionRequest(process.argv)) {
+    serveCompletionRequest(program);
+    return;
+  }
   try {
     await program.parseAsync(process.argv);
   } catch (err) {

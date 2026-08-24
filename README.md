@@ -94,6 +94,36 @@ You also need a ChurchTools **personal login token** (ChurchTools → your user
 settings). Each release additionally attaches an `INSTALL.md` with the exact
 commands.
 
+### Tab completion
+
+`ct completion <shell>` prints a small hook that calls `ct` back on every Tab, so the
+candidates always match the binary you actually have — including things a generated
+script could not know: the environments in your `ct.envs.json`, the keys in your state
+file, and paths for options like `--config`. It only ever reads local files: completion
+never contacts ChurchTools and never touches your token.
+
+Add the hook to your shell startup file:
+
+```zsh
+# zsh — after `compinit` has run
+echo '. <(ct completion zsh)' >> ~/.zshrc
+```
+
+```bash
+# bash
+echo '. <(ct completion bash)' >> ~/.bashrc     # macOS: ~/.bash_profile
+```
+
+The bash hook runs on the bash macOS ships (3.2); the `bash-completion` package is
+not required.
+
+```fish
+# fish
+ct completion fish > ~/.config/fish/completions/ct.fish
+```
+
+Open a new shell, then try `ct sta<Tab>`, `ct state rm <Tab>` or `ct plan --env <Tab>`.
+
 ## First run
 
 Create a config repository without having to assemble its files by hand:

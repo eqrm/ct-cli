@@ -5,7 +5,7 @@ describe("ct program", () => {
   it("registers the core command surface", () => {
     const names = buildProgram().commands.map((c) => c.name());
     expect(names).toEqual(
-      expect.arrayContaining(["init", "auth", "get", "adopt", "plan", "apply", "destroy"]),
+      expect.arrayContaining(["init", "auth", "get", "adopt", "plan", "apply", "destroy", "completion"]),
     );
   });
 
