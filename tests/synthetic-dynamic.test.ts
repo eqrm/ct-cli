@@ -482,14 +482,16 @@ describe("dynamic synthetic field — un-portablized ruleset reporting (#101)", 
       errs.push(String(s));
       return true;
     });
+    let result: Awaited<ReturnType<ReturnType<typeof dynamicField>["fold"]>> | undefined;
     try {
-      await dynamicField().fold({ client: getClient(client), state, desired, actual });
+      result = await dynamicField().fold({ client: getClient(client), state, desired, actual });
     } finally {
       spy.mockRestore();
     }
     const out = errs.join("");
     expect(out).toContain('dynamic group "g": ruleset carries 1 host-specific id(s)');
     expect(out).toMatch(/ctgroup\.id: 1246 left numeric/);
+    expect(result?.warnings?.join("\n")).toContain("ctgroup.id: 1246 left numeric");
   });
 
   it("stays silent for a fully portable ruleset — the warning must mean something", async () => {

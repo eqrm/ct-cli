@@ -49,6 +49,12 @@ describe("ct program", () => {
     }
   });
 
+  it("registers the plan format, locale and sidecar output options (#144)", () => {
+    const cmd = buildProgram().commands.find((candidate) => candidate.name() === "plan")!;
+    const options = cmd.options.map((option) => option.long);
+    expect(options).toEqual(expect.arrayContaining(["--format", "--output-base", "--locale", "--json"]));
+  });
+
   it("registers --env on auth status and auth logout (#117)", () => {
     const auth = buildProgram().commands.find((c) => c.name() === "auth")!;
     for (const name of ["status", "logout"]) {

@@ -217,6 +217,7 @@ ct coverage                   # what the instance has that the config does not m
 ct state list                 # what is managed
 ct state rm campus mainz      # un-adopt: drop it from state. Never touches ChurchTools.
 ct plan                       # diff the config against ChurchTools (read-only)
+ct plan --format markdown     # plain-language review report (German by default)
 ct apply                      # create + update in dependency order (confirm + backup first)
 ct refresh --group <key>      # make ChurchTools re-evaluate one auto-group now
 ```
@@ -287,8 +288,8 @@ ct apply --env prod    # protected env: type the env name to confirm
 - [**Environments**](docs/environments.md) — `ct.envs.json`, per-env state files,
   protected environments, the dev → prod promotion workflow.
 - [**CI usage**](docs/ci.md) — the auth model and token-from-secret setup,
-  `--detailed-exitcode`, the `--json` plan shape, drift-vs-config attribution,
-  and a copy-pasteable job that posts the plan as a PR comment.
+  `--detailed-exitcode`, Markdown/JSON plan projections, deterministic sidecar
+  names, drift-vs-config attribution, and copy-pasteable PR artifacts.
 
 ## Guardrails (by design)
 

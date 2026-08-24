@@ -95,6 +95,8 @@ export interface SyntheticFoldResult {
   desired: DesiredResource[];
   errors: string[];
   unreadable?: string[];
+  /** Informational safety/portability warnings to embed in non-terminal projections. */
+  warnings?: string[];
 }
 
 export interface SyntheticField {
@@ -471,6 +473,7 @@ const dynamicField: SyntheticField = {
     const errors = perGroupOutcome.flatMap((o) => o.errors);
     const unreadable = perGroupOutcome.flatMap((o) => o.unreadable);
     const unreadableKeys = new Set(unreadable);
+    const warnings: string[] = [];
     const augmented = desired.map((d) => {
       if (d.type !== "group" || d.dynamic === undefined) return d;
       // Actual side unknown → leave the desired side unfolded so nothing diffs. `buildPlan` turns
@@ -490,16 +493,18 @@ const dynamicField: SyntheticField = {
       // someone notices the membership. Warn, never fail: the numeric form stays a valid escape hatch.
       const unportable = scanUnportablized(resolvedRuleset);
       if (unportable.length > 0) {
-        warn(
+        const headline =
           `dynamic group "${d.key}": ruleset carries ${unportable.length} host-specific id(s) — ` +
-            `not portable to another instance:`,
-        );
-        for (const line of formatPortablizeWarnings(unportable)) info(`    ${line}`);
+          `not portable to another instance:`;
+        const details = formatPortablizeWarnings(unportable);
+        warnings.push(headline, ...details);
+        warn(headline);
+        for (const line of details) info(`    ${line}`);
       }
       const dynamic = normalizeDynamic({ status: d.dynamic.status, ruleset: resolvedRuleset });
       return { ...d, fields: { ...d.fields, dynamic } };
     });
-    return { desired: augmented, errors, unreadable };
+    return { desired: augmented, errors, unreadable, ...(warnings.length > 0 ? { warnings } : {}) };
   },
   async apply({ client, id, change }) {
     const to = change.to as { status: DynamicStatus; ruleset: Record<string, unknown> } | undefined;
@@ -593,15 +598,17 @@ export async function runPostApplyHooks(
 /** Run every registered fold in order, threading the (immutably) augmented desired through each. */
 export async function foldSynthetic(
   ctx: SyntheticFoldCtx,
-): Promise<{ desired: DesiredResource[]; errors: string[]; unreadable: Set<string> }> {
+): Promise<{ desired: DesiredResource[]; errors: string[]; unreadable: Set<string>; warnings?: string[] }> {
   let desired = ctx.desired;
   const errors: string[] = [];
   const unreadable = new Set<string>();
+  const warnings: string[] = [];
   for (const f of SYNTHETIC_FIELDS) {
     const res = await f.fold({ ...ctx, desired });
     desired = res.desired;
     errors.push(...res.errors);
+    warnings.push(...(res.warnings ?? []));
     for (const key of res.unreadable ?? []) unreadable.add(key);
   }
-  return { desired, errors, unreadable };
+  return { desired, errors, unreadable, ...(warnings.length > 0 ? { warnings } : {}) };
 }

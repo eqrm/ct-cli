@@ -84,6 +84,8 @@ export interface FieldChange {
 export interface PlanItem {
   type: string;
   key: string;
+  /** Best available human-facing name, derived once from the desired/state field bag. */
+  displayName?: string;
   /** CT id when known (updates/deletes); null for creates. */
   id: number | null;
   action: PlanAction;
@@ -113,6 +115,15 @@ export interface PlanItem {
    * when set, and never touches update/delete. Undefined elsewhere.
    */
   allowDuplicateName?: boolean;
+}
+
+/** Pick a stable human-facing label without coupling renderers to resource-specific branches. */
+export function resourceDisplayName(fields: Record<string, unknown>, fallback: string): string {
+  for (const field of ["name", "nameTranslated", "shorty", "title", "label"]) {
+    const value = fields[field];
+    if (typeof value === "string" && value.trim() !== "") return value.trim();
+  }
+  return fallback;
 }
 
 export interface Plan {

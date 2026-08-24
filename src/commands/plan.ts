@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import { format as formatPath, parse as parsePath } from "node:path";
 import { Command } from "commander";
 import { authedSession } from "../api/session.js";
 import { resolveConfig } from "../config.js";
@@ -7,18 +9,88 @@ import { loadConfig, resolveConfigPath } from "../config/load.js";
 import { buildPlan } from "../engine/build.js";
 import { Resolver } from "../resolve/resolver.js";
 import { renderPlan } from "../engine/render.js";
+import { PLAN_MARKDOWN_LOCALES, renderPlanMarkdown, type PlanMarkdownLocale } from "../engine/markdown.js";
 import { summarize } from "../engine/types.js";
 import { buildPermissionPlan } from "../permissions/plan.js";
 import { loadHostCatalog } from "../permissions/catalog-store.js";
 import { renderPermissionPlan } from "../permissions/render.js";
-import { info, warn, out } from "../ui.js";
+import { info, warn } from "../ui.js";
+
+export type PlanFormat = "text" | "json" | "markdown";
+
+export interface PlanOutputTarget {
+  format: PlanFormat;
+  path?: string;
+}
 
 interface PlanOptions {
   config?: string;
   state?: string;
   env?: string;
   json?: boolean;
+  format?: string[];
+  outputBase?: string;
+  locale?: string;
   detailedExitcode?: boolean;
+}
+
+function collectFormat(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function parseFormat(value: string): PlanFormat {
+  if (value === "text" || value === "json" || value === "markdown") return value;
+  throw new Error(`Unknown plan format "${value}". Use text, json, or markdown.`);
+}
+
+export function parsePlanLocale(value: string | undefined): PlanMarkdownLocale {
+  const locale = value ?? "de-DE";
+  if ((PLAN_MARKDOWN_LOCALES as readonly string[]).includes(locale)) return locale as PlanMarkdownLocale;
+  throw new Error(`Unknown plan locale "${locale}". Available locales: ${PLAN_MARKDOWN_LOCALES.join(", ")}.`);
+}
+
+function planOutputPath(base: string, planFormat: PlanFormat): string {
+  const extension: Record<PlanFormat, string> = { text: ".txt", json: ".json", markdown: ".md" };
+  const parsed = parsePath(base);
+  const knownExtension = [".txt", ".json", ".md", ".markdown"].includes(parsed.ext.toLowerCase());
+  return formatPath({
+    dir: parsed.dir,
+    name: parsed.name,
+    ext: knownExtension ? extension[planFormat] : `${parsed.ext}${extension[planFormat]}`,
+  });
+}
+
+/** Resolve output files before any ChurchTools request, so invalid combinations fail cheaply. */
+export function planOutputTargets(
+  opts: Pick<PlanOptions, "json" | "format" | "outputBase">,
+): PlanOutputTarget[] {
+  const explicit = opts.format ?? [];
+  if (opts.json && explicit.length > 0) {
+    throw new Error("--json is an alias for --format json and cannot be combined with --format.");
+  }
+  if (opts.json && opts.outputBase) {
+    throw new Error(
+      "Use --format json with --output-base; the backward-compatible --json alias writes to stdout.",
+    );
+  }
+  const selected = opts.json
+    ? ["json" as const]
+    : explicit.length > 0
+      ? explicit.map(parseFormat)
+      : ["text" as const];
+  const formats = [...new Set(selected)];
+  if (opts.outputBase && explicit.length === 0) {
+    throw new Error("--output-base requires at least one explicit --format.");
+  }
+  if (formats.length > 1 && !opts.outputBase) {
+    throw new Error(
+      "Multiple --format values require --output-base so every projection has a distinct file.",
+    );
+  }
+  return formats.map((planFormat) => ({
+    format: planFormat,
+    path: opts.outputBase ? planOutputPath(opts.outputBase, planFormat) : undefined,
+  }));
 }
 
 export function planCommand(): Command {
@@ -29,10 +101,20 @@ export function planCommand(): Command {
     .option("-e, --env <name>", "environment profile from ct.envs.json (host + state + token)")
     .option("--json", "emit the raw plan as JSON instead of the rendered diff")
     .option(
+      "--format <format>",
+      "output format; repeat for multiple projections: text, json, markdown",
+      collectFormat,
+      [],
+    )
+    .option("--output-base <path>", "write selected formats as <path>.txt/.json/.md")
+    .option("--locale <locale>", "Markdown language: de-DE or en", "de-DE")
+    .option(
       "--detailed-exitcode",
       "Terraform-style exit code: 0 = no changes, 1 = error, 2 = changes pending (resource or permission)",
     )
     .action(async (opts: PlanOptions) => {
+      const outputTargets = planOutputTargets(opts);
+      const locale = parsePlanLocale(opts.locale);
       // Resolve the env FIRST — it wires the target host/token into the process env before resolveConfig.
       const cmdEnv = await prepareEnv(opts);
       const config = await resolveConfig();
@@ -53,7 +135,7 @@ export function planCommand(): Command {
       const resolver = new Resolver({ client, state, desired, host: config.host });
       // Independent fetches run concurrently (see commands/apply.ts).
       const [
-        { plan, fetchErrors },
+        { plan, fetchErrors, warnings: resourceWarnings = [] },
         { items: permItems, fetchErrors: permFetchErrors, warnings: permWarnings },
       ] = await Promise.all([
         buildPlan(client, state, desired, { configDir, resolver }),
@@ -70,41 +152,54 @@ export function planCommand(): Command {
       );
       const hasChanges = hasResourceChanges || hasPermissionChanges;
 
-      if (opts.json) {
-        // Additive on top of the raw plan/permissions (#24) — existing consumers of `plan`/`permissions`
-        // are unaffected. See README "CI usage" for exactly what each summary field means.
-        out({
-          plan,
-          permissions: permItems,
-          summary: {
-            resources: summarize(plan),
-            drifted: plan.items.filter((i) => i.drift && i.drift.length > 0).length,
-            // Non-zero means the plan is PARTIAL: these resources could not be read, so their diff
-            // is missing rather than empty. A machine consumer must not treat the plan as complete
-            // while this is > 0 (#126) — `ct plan` also exits 1 in that case.
-            unreadable: plan.items.filter((i) => i.note === "fetch-failed").length,
-            permissions: {
-              toPut: permItems.reduce((n, i) => n + i.diff.toPut.length, 0),
-              toDelete: permItems.reduce((n, i) => n + i.diff.toDelete.length, 0),
-              preserved: permItems.reduce((n, i) => n + i.diff.preserved.length, 0),
-            },
-            hasChanges,
+      // Additive on top of the raw plan/permissions (#24) — existing consumers of `plan`/`permissions`
+      // are unaffected. Every projection below consumes this one computation.
+      const payload = {
+        plan,
+        permissions: permItems,
+        summary: {
+          resources: summarize(plan),
+          drifted: plan.items.filter((i) => i.drift && i.drift.length > 0).length,
+          // Non-zero means the plan is PARTIAL: these resources could not be read, so their diff
+          // is missing rather than empty. A machine consumer must not treat the plan as complete
+          // while this is > 0 (#126) — `ct plan` also exits 1 in that case.
+          unreadable: plan.items.filter((i) => i.note === "fetch-failed").length,
+          permissions: {
+            toPut: permItems.reduce((n, i) => n + i.diff.toPut.length, 0),
+            toDelete: permItems.reduce((n, i) => n + i.diff.toDelete.length, 0),
+            preserved: permItems.reduce((n, i) => n + i.diff.preserved.length, 0),
           },
-        });
-      } else {
-        // Under --env, surface the target env name + its CT version (per-env version gate, #22) so a
-        // dev/prod version skew is visible before applying. No --env keeps the original header byte-identical.
-        if (cmdEnv.name) {
-          info(
-            `env: ${cmdEnv.name} · host: ${config.host} · ChurchTools ${client.version ?? "unknown"} · ` +
-              `config: ${configPath} · state host: ${state.host}`,
-          );
+          hasChanges,
+        },
+      };
+
+      const textHeader = cmdEnv.name
+        ? `env: ${cmdEnv.name} · host: ${config.host} · ChurchTools ${client.version ?? "unknown"} · ` +
+          `config: ${configPath} · state host: ${state.host}`
+        : `config: ${configPath} · state host: ${state.host}`;
+      const textBody = `${renderPlan(plan)}${permItems.length > 0 ? `\n\n${renderPermissionPlan(permItems)}` : ""}\n`;
+      for (const target of outputTargets) {
+        const content =
+          target.format === "json"
+            ? `${JSON.stringify(payload, null, 2)}\n`
+            : target.format === "markdown"
+              ? renderPlanMarkdown(plan, permItems, {
+                  environment: cmdEnv.name,
+                  host: config.host,
+                  churchToolsVersion: client.version,
+                  configPath,
+                  stateHost: state.host,
+                  locale,
+                  warnings: [...resourceWarnings, ...permWarnings],
+                  fetchErrors: [...fetchErrors, ...permFetchErrors],
+                })
+              : textBody;
+        if (target.path) {
+          await writeFile(target.path, content, "utf8");
+          info(`plan ${target.format}: ${target.path}`);
         } else {
-          info(`config: ${configPath} · state host: ${state.host}`);
-        }
-        process.stdout.write(`${renderPlan(plan)}\n`);
-        if (permItems.length > 0) {
-          process.stdout.write(`\n${renderPermissionPlan(permItems)}\n`);
+          if (target.format === "text") info(textHeader);
+          process.stdout.write(content);
         }
       }
 

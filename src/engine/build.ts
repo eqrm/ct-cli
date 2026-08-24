@@ -24,6 +24,8 @@ export interface BuildResult {
   plan: Plan;
   actual: Map<string, Record<string, unknown>>;
   fetchErrors: string[];
+  /** Informational registry/portability warnings already printed to stderr. */
+  warnings?: string[];
 }
 
 export interface FetchActualResult {
@@ -35,6 +37,7 @@ export interface FetchActualResult {
   fetchFailed: Map<string, string>;
   /** Human-readable fetch-error lines (non-404), one per failed key. */
   fetchErrors: string[];
+  warnings?: string[];
 }
 
 /**
@@ -54,14 +57,15 @@ export async function fetchActual(
   const unresolved = new Set<string>();
   const fetchFailed = new Map<string, string>();
   const fetchErrors: string[] = [];
+  const warnings: string[] = [];
 
   await mapConcurrent(resources, FETCH_CONCURRENCY, async (managed) => {
     const spec = RESOURCES[managed.type];
     if (!spec) {
       unresolved.add(managed.key);
-      warn(
-        `No registry entry for managed type "${managed.type}" (${managed.type}.${managed.key} #${managed.id}) — cannot diff; leaving untouched.`,
-      );
+      const warning = `No registry entry for managed type "${managed.type}" (${managed.type}.${managed.key} #${managed.id}) — cannot diff; leaving untouched.`;
+      warnings.push(warning);
+      warn(warning);
       return;
     }
     try {
@@ -88,7 +92,13 @@ export async function fetchActual(
     }
   });
 
-  return { actual, unresolved, fetchFailed, fetchErrors };
+  return {
+    actual,
+    unresolved,
+    fetchFailed,
+    fetchErrors,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }
 
 export interface BuildOptions {
@@ -110,10 +120,13 @@ export async function buildPlan(
   opts: BuildOptions = {},
 ): Promise<BuildResult> {
   // Keyed by logical key (globally unique), not CT id (unique only within a type — the Mainz campus is id 0).
-  const { actual, unresolved, fetchFailed, fetchErrors } = await fetchActual(
-    client,
-    Object.values(state.resources),
-  );
+  const {
+    actual,
+    unresolved,
+    fetchFailed,
+    fetchErrors,
+    warnings: fetchWarnings = [],
+  } = await fetchActual(client, Object.values(state.resources));
 
   // Synthetic sub-resource fields (parents, dynamic, …) fold into the diff on both sides.
   const folded = await foldSynthetic({ client, state, desired, actual, configDir: opts.configDir });
@@ -149,5 +162,6 @@ export async function buildPlan(
   });
 
   const plan = computePlan(ordered, state, actual, { unresolved, fetchFailed });
-  return { plan, actual, fetchErrors };
+  const warnings = [...fetchWarnings, ...(folded.warnings ?? [])];
+  return { plan, actual, fetchErrors, ...(warnings.length > 0 ? { warnings } : {}) };
 }

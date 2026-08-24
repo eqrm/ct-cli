@@ -67,6 +67,79 @@ An INCOMPLETE plan is always exit `1`, even with `--detailed-exitcode` and
 even if the (partial) plan has changes: an incomplete diff can't be trusted
 enough to report "changes pending" instead of "this run failed".
 
+## Plain-language review report: Markdown
+
+`ct plan --format markdown` renders the same resource and permission plan as a
+self-contained Markdown document for people who do not need to understand the
+terminal diff or raw JSON:
+
+```bash
+ct plan --env prod --format markdown > plan-prod.md
+```
+
+The report starts with the target environment, host, ChurchTools version,
+configuration and state host. It distinguishes creates, updates, drift,
+delete candidates, permission grants/revocations, preserved grants and an
+incomplete plan. A delete candidate is explicitly described as something
+`ct apply` will **not** delete. Automatic groups receive a semantic summary;
+all current and future resource types remain visible through a generic
+technical appendix.
+
+German is the deterministic default. Select English explicitly when needed:
+
+```bash
+ct plan --env prod --format markdown --locale en > plan-prod.md
+```
+
+The command computes the live plan only once even when several projections are
+needed. Repeat `--format` and give one base name; `ct` adds a stable extension:
+
+```bash
+ct plan --env prod \
+  --format text \
+  --format json \
+  --format markdown \
+  --output-base reports/plan-prod
+
+# reports/plan-prod.txt
+# reports/plan-prod.json
+# reports/plan-prod.md
+```
+
+For a single projection, `--output-base` follows the same convention. If the
+base already ends in `.txt`, `.json`, `.md` or `.markdown`, that known extension
+is replaced with the selected format's extension. Multiple formats without
+`--output-base` are rejected so two documents can never be concatenated
+ambiguously on stdout.
+
+`--json` remains the backward-compatible stdout alias for `--format json`.
+Combining the alias with `--format` is rejected rather than guessing which
+request wins.
+
+The Markdown renderer performs no additional ChurchTools request and does not
+recalculate actions or safety policy. It consumes the same structured plan as
+terminal and JSON output. Fields whose names look like credentials, tokens,
+passwords or secrets are redacted in both the readable body and technical
+fallback.
+
+To publish the report as a GitHub Actions artifact:
+
+```yaml
+- name: Create review plans
+  env:
+    CT_LOGINTOKEN: ${{ secrets.CT_LOGINTOKEN }}
+  run: |
+    mkdir -p reports
+    ct plan --env prod --format json --format markdown --output-base reports/plan-prod
+
+- name: Upload plan reports
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: churchtools-plan
+    path: reports/plan-prod.*
+```
+
 ## Machine-readable output: `--json`
 
 `ct plan --json` prints **only** the plan JSON to stdout — the env/host

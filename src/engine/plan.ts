@@ -11,7 +11,13 @@
  * types. Logical keys are globally unique in the state file.
  */
 import type { State } from "../state/state.js";
-import type { DesiredResource, FieldChange, Plan, PlanItem } from "./types.js";
+import {
+  resourceDisplayName,
+  type DesiredResource,
+  type FieldChange,
+  type Plan,
+  type PlanItem,
+} from "./types.js";
 import { orderKeys, isKnownType } from "./graph.js";
 import { RESOURCES } from "../resources/registry.js";
 
@@ -177,6 +183,7 @@ export function computePlan(
       creates.push({
         type: d.type,
         key: d.key,
+        displayName: resourceDisplayName(d.fields, d.key),
         id: null,
         action: "create",
         changes: attributeCreate(diffFields(d.fields, {})),
@@ -196,6 +203,7 @@ export function computePlan(
       updates.push({
         type: d.type,
         key: d.key,
+        displayName: resourceDisplayName(d.fields, d.key),
         id: managed.id,
         action: "no-op",
         changes: [],
@@ -209,6 +217,7 @@ export function computePlan(
       updates.push({
         type: d.type,
         key: d.key,
+        displayName: resourceDisplayName(d.fields, d.key),
         id: managed.id,
         action: "no-op",
         changes: [],
@@ -223,6 +232,7 @@ export function computePlan(
       creates.push({
         type: d.type,
         key: d.key,
+        displayName: resourceDisplayName(d.fields, d.key),
         id: null,
         action: "create",
         changes: attributeCreate(diffFields(d.fields, {})),
@@ -239,6 +249,7 @@ export function computePlan(
     updates.push({
       type: d.type,
       key: d.key,
+      displayName: resourceDisplayName(d.fields, d.key),
       id: managed.id,
       action: changes.length > 0 ? "update" : "no-op",
       changes: attributeChanges(changes, managed.fields, driftedFields),
@@ -257,6 +268,7 @@ export function computePlan(
       deletes.push({
         type: managed.type,
         key: managed.key,
+        displayName: resourceDisplayName(managed.fields, managed.key),
         id: managed.id,
         action: "no-op",
         changes: [],
@@ -269,6 +281,7 @@ export function computePlan(
       deletes.push({
         type: managed.type,
         key: managed.key,
+        displayName: resourceDisplayName(managed.fields, managed.key),
         id: managed.id,
         action: "no-op",
         changes: [],
@@ -283,6 +296,7 @@ export function computePlan(
       deletes.push({
         type: managed.type,
         key: managed.key,
+        displayName: resourceDisplayName(managed.fields, managed.key),
         id: managed.id,
         action: "no-op",
         changes: [],
@@ -290,7 +304,14 @@ export function computePlan(
       });
       continue;
     }
-    deletes.push({ type: managed.type, key: managed.key, id: managed.id, action: "delete", changes: [] });
+    deletes.push({
+      type: managed.type,
+      key: managed.key,
+      displayName: resourceDisplayName(managed.fields, managed.key),
+      id: managed.id,
+      action: "delete",
+      changes: [],
+    });
   }
 
   const rank = new Map(orderKeys(desired).map((key, i) => [key, i]));

@@ -8,7 +8,7 @@
  *    against a DIFFERENT host is rejected by the state host-check.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { writeFile, rm } from "node:fs/promises";
+import { readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Plan } from "../src/engine/types.js";
@@ -44,6 +44,7 @@ vi.mock("../src/permissions/plan.js", () => ({
 }));
 
 const { planCommand } = await import("../src/commands/plan.js");
+const { buildPlan } = await import("../src/engine/build.js");
 const { saveState, emptyState } = await import("../src/state/state.js");
 
 const DEV = "https://mychurch-dev.church.tools";
@@ -56,12 +57,15 @@ const saved = { host: process.env.CT_HOST, envs: process.env.CT_ENVS };
 
 let stderr = "";
 let stderrSpy: { mockRestore: () => void };
+let stdout = "";
+let stdoutSpy: { mockRestore: () => void };
 
 async function runPlan(args: string[]): Promise<void> {
   await planCommand().parseAsync(args, { from: "user" });
 }
 
 beforeEach(async () => {
+  vi.mocked(buildPlan).mockClear();
   delete process.env.CT_HOST;
   process.env.CT_ENVS = envsPath;
   await writeFile(
@@ -81,10 +85,16 @@ beforeEach(async () => {
     stderr += String(chunk);
     return true;
   }) as (typeof process.stderr)["write"]);
+  stdout = "";
+  stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+    stdout += String(chunk);
+    return true;
+  }) as (typeof process.stdout)["write"]);
 });
 
 afterEach(async () => {
   stderrSpy.mockRestore();
+  stdoutSpy.mockRestore();
   if (saved.host === undefined) delete process.env.CT_HOST;
   else process.env.CT_HOST = saved.host;
   if (saved.envs === undefined) delete process.env.CT_ENVS;
@@ -109,6 +119,45 @@ describe("ct plan --env", () => {
     expect(stderr).toContain(`host: ${PROD}`);
     expect(stderr).toContain("ChurchTools 3.123.0");
     expect(stderr).toContain(`state host: ${PROD}`);
+  });
+
+  it("renders the same env-bound plan as a self-contained Markdown report (#144)", async () => {
+    await runPlan(["--env", "dev", "--format", "markdown", "--locale", "de-DE"]);
+    expect(stdout).toContain("# ChurchTools-Änderungsplan");
+    expect(stdout).toContain("> Dieser Bericht beschreibt nur den Plan.");
+    expect(stdout).toContain(`| ChurchTools-Instanz | ${DEV} |`);
+    expect(stdout).toContain("| Umgebung | dev |");
+    expect(stdout).toContain("ChurchTools-Version | 3.100.0");
+    expect(stdout).toContain("Es sind keine Änderungen erforderlich");
+  });
+
+  it("writes text, JSON and Markdown sidecars after one plan computation (#144)", async () => {
+    const outputBase = join(tmpdir(), `ct-cli-planenv-report-${process.pid}`);
+    try {
+      await runPlan([
+        "--env",
+        "dev",
+        "--format",
+        "text",
+        "--format",
+        "json",
+        "--format",
+        "markdown",
+        "--output-base",
+        outputBase,
+      ]);
+      expect(buildPlan).toHaveBeenCalledTimes(1);
+      expect(stdout).toBe("");
+      expect(await readFile(`${outputBase}.txt`, "utf8")).toContain("No changes");
+      expect(JSON.parse(await readFile(`${outputBase}.json`, "utf8"))).toMatchObject({
+        summary: { hasChanges: false },
+      });
+      expect(await readFile(`${outputBase}.md`, "utf8")).toContain("# ChurchTools-Änderungsplan");
+    } finally {
+      await Promise.all(
+        ["txt", "json", "md"].map((extension) => rm(`${outputBase}.${extension}`, { force: true })),
+      );
+    }
   });
 
   it("refuses when an env's state file was recorded against a different host (no cross-contamination)", async () => {
