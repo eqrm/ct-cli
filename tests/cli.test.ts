@@ -32,6 +32,24 @@ describe("ct program", () => {
     }
   });
 
+  it("registers --env on auth status and auth logout (#117)", () => {
+    const auth = buildProgram().commands.find((c) => c.name() === "auth")!;
+    for (const name of ["status", "logout"]) {
+      const sub = auth.commands.find((c) => c.name() === name)!;
+      expect(sub.options.some((o) => o.long === "--env" && o.short === "-e")).toBe(true);
+    }
+  });
+
+  it("registers --all on auth status as the every-environment preflight (#117)", () => {
+    const auth = buildProgram().commands.find((c) => c.name() === "auth")!;
+    const status = auth.commands.find((c) => c.name() === "status")!;
+    expect(status.options.some((o) => o.long === "--all")).toBe(true);
+  });
+
+  it("reports a real version, not the 0.0.0 literal (#116)", () => {
+    expect(buildProgram().version()).not.toBe("0.0.0");
+  });
+
   it("registers --confirm-env on apply and destroy (protected-env CI path, #22)", () => {
     for (const name of ["apply", "destroy"]) {
       const cmd = buildProgram().commands.find((c) => c.name() === name)!;

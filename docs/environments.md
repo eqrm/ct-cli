@@ -54,6 +54,29 @@ Without `--env`, behaviour is unchanged (single stored login, `ct-state.json`).
 login` stores credentials **per host**, so one machine can hold logins for `dev`
 and `prod` at once (a pre-existing single login still works as a fallback).
 
+## Which account am I using where?
+
+`ct auth status` answers it per environment, resolving the same host and token an
+`--env` command would — without writing anything:
+
+```bash
+ct auth status --env dev      # identity on dev's host (JSON on stdout, host on stderr)
+ct auth status --all          # preflight: every env in ct.envs.json, one line each
+```
+
+```text
+dev   https://mychurch-dev.church.tools  ✓ Ada Lovelace (#42) via Keychain
+prod  https://mychurch.church.tools      ✗ no token
+```
+
+`--all` exits non-zero if any environment has no working token, so CI can gate on
+it before an apply. It is the first thing to run when an `--env` command returns
+401 and you need to know whether the token is missing, expired, or simply belongs
+to somebody else. Tokens are never printed — only where each one came from.
+
+`ct auth logout --env <name>` removes just that host's credentials and leaves
+your other logins in place.
+
 **Cross-contamination is impossible:** every state file is bound to its host, and
 loading a state file against a different host is refused —
 `State file host (…) does not match … Refusing to mix instances.` — so `--env prod`

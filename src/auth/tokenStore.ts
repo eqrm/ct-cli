@@ -168,20 +168,36 @@ export async function readStoredHost(): Promise<string | null> {
 }
 
 /**
- * Remove stored credentials. Clears the default blob, the pre-host bare-token
- * entry, and — for the current default login — its per-host account, so a
- * single-host logout leaves no secret behind. (Additional per-host logins for
- * OTHER hosts are left in place; re-login overwrites them.)
+ * Remove stored credentials.
+ *
+ * With no `host`: clears the default blob, the pre-host bare-token entry, and —
+ * for the current default login — its per-host account, so a single-host logout
+ * leaves no secret behind. (Additional per-host logins for OTHER hosts are left
+ * in place; re-login overwrites them.)
+ *
+ * With a `host` (already normalized — `ct auth logout --env <name>`, #117):
+ * clears only that host's per-host account, leaving other hosts logged in. The
+ * default blob is dropped too when it points at that same host, since it holds a
+ * copy of the very token being removed.
  */
-export async function clearCredentials(): Promise<void> {
+export async function clearCredentials(host?: string): Promise<void> {
   if (isMac()) {
-    const current = await readCredentials(); // default blob → its host's per-host account
-    if (current) {
-      await keychainDelete(current.host);
+    if (host !== undefined) {
+      await keychainDelete(host);
+      const fallback = await readCredentials(); // the default blob may hold the same token
+      if (fallback?.host === host) {
+        await keychainDelete(DEFAULT_ACCOUNT);
+        await keychainDelete(LEGACY_KEYCHAIN_ACCOUNT);
+      }
+    } else {
+      const current = await readCredentials(); // default blob → its host's per-host account
+      if (current) {
+        await keychainDelete(current.host);
+      }
+      await keychainDelete(DEFAULT_ACCOUNT);
+      // Also drop the pre-host bare-token entry so an upgrade doesn't leave a secret behind.
+      await keychainDelete(LEGACY_KEYCHAIN_ACCOUNT);
     }
-    await keychainDelete(DEFAULT_ACCOUNT);
-    // Also drop the pre-host bare-token entry so an upgrade doesn't leave a secret behind.
-    await keychainDelete(LEGACY_KEYCHAIN_ACCOUNT);
   }
   resetKeychainCache(); // a later read in the same process must not return the cleared secret
 }

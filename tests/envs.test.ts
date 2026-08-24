@@ -2,7 +2,13 @@ import { describe, it, expect, afterEach } from "vitest";
 import { writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_ENVS_PATH, resolveEnvsPath, defaultEnvStatePath, loadEnvProfile } from "../src/env/envs.js";
+import {
+  DEFAULT_ENVS_PATH,
+  resolveEnvsPath,
+  defaultEnvStatePath,
+  loadEnvProfile,
+  loadEnvProfiles,
+} from "../src/env/envs.js";
 
 const envsPath = join(tmpdir(), `ct-cli-envs-${process.pid}.json`);
 
@@ -88,5 +94,47 @@ describe("loadEnvProfile", () => {
   it("rejects invalid JSON with a friendly error", async () => {
     await writeFile(envsPath, "{ not json", "utf8");
     await expect(loadEnvProfile("dev", envsPath)).rejects.toThrow(/not valid JSON/);
+  });
+});
+
+describe("loadEnvProfiles (#117)", () => {
+  it("resolves every profile in declaration order", async () => {
+    await writeEnvs({
+      environments: {
+        dev: { host: "https://d.church.tools/" },
+        prod: { host: "https://p.church.tools", protected: true, tokenEnv: "CT_PROD_TOKEN" },
+      },
+    });
+    const profiles = await loadEnvProfiles(envsPath);
+    expect(profiles.map((p) => p.name)).toEqual(["dev", "prod"]);
+    expect(profiles[0]).toEqual({
+      name: "dev",
+      host: "https://d.church.tools",
+      statePath: defaultEnvStatePath("dev"),
+      tokenEnv: undefined,
+      protected: false,
+    });
+    expect(profiles[1]!.protected).toBe(true);
+  });
+
+  it("returns an empty list for an empty environments map", async () => {
+    await writeEnvs({ environments: {} });
+    await expect(loadEnvProfiles(envsPath)).resolves.toEqual([]);
+  });
+
+  it("fails on ONE malformed profile rather than silently omitting it", async () => {
+    await writeEnvs({
+      environments: { dev: { host: "https://d.church.tools" }, prod: { protected: true } },
+    });
+    await expect(loadEnvProfiles(envsPath)).rejects.toThrow(/missing.*host/i);
+  });
+
+  it("rejects a profile that is not an object", async () => {
+    await writeEnvs({ environments: { dev: "https://d.church.tools" } });
+    await expect(loadEnvProfiles(envsPath)).rejects.toThrow(/must be a JSON object/);
+  });
+
+  it("throws the same friendly error as the single lookup when the file is missing", async () => {
+    await expect(loadEnvProfiles(envsPath)).rejects.toThrow(/Environment profile file not found/);
   });
 });
