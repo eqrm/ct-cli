@@ -196,7 +196,7 @@ promotes a new category to default-on. Without that guarantee, every default
 flip would be a breaking change for scripts.
 
 Default-off categories exist only as a transition mechanism (see
-[Backwards compatibility](#backwards-compatibility)); the steady state is that
+[Backwards compatibility](#backwards-compatibility-promoting-an-opt-in-to-a-default)); the steady state is that
 categories 2 and 3 are on and there is nothing to opt into.
 
 ## Recursion and cycles
