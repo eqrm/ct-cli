@@ -82,6 +82,7 @@ curl -L -o ct https://github.com/eqrm/ct-cli/releases/latest/download/ct-linux-x
 chmod +x ct
 sudo mv ct /usr/local/bin/ct   # or anywhere on your PATH
 ct --help
+ct --version                   # e.g. 1.7.0 (/usr/local/bin/ct) — version AND which binary
 ```
 
 With Node ≥ 20 already installed, the npm-pack tarball works too:

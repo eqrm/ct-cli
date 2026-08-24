@@ -14,6 +14,7 @@ import { completionCommand } from "./commands/completion.js";
 import { plannedCommands } from "./commands/placeholders.js";
 import { isCompletionRequest, serveCompletionRequest } from "./completion/shell.js";
 import { isMainModule } from "./isMain.js";
+import { versionLine } from "./version.js";
 import { error, formatError } from "./ui.js";
 
 export function buildProgram(): Command {
@@ -24,7 +25,7 @@ export function buildProgram(): Command {
       "ChurchTools structure-as-code CLI — declarative plan/apply for the overarching, " +
         "rights-bearing structure. Never manages people.",
     )
-    .version("0.0.0");
+    .version(versionLine(import.meta.url));
 
   program.addCommand(authCommand());
   program.addCommand(getCommand());

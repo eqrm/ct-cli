@@ -49,12 +49,7 @@ jobs:
           bun-version: latest
 
       - name: Compile standalone binaries
-        run: |
-          mkdir -p release
-          bun build --compile --target=bun-darwin-arm64 ./src/index.ts --outfile release/ct-darwin-arm64
-          bun build --compile --target=bun-darwin-x64   ./src/index.ts --outfile release/ct-darwin-x64
-          bun build --compile --target=bun-linux-x64    ./src/index.ts --outfile release/ct-linux-x64
-          chmod +x release/ct-darwin-arm64 release/ct-darwin-x64 release/ct-linux-x64
+        run: bash .github/scripts/build-binaries.sh
 
       # The release tarball is packed in the `release` job (via @semantic-release/exec)
       # AFTER semantic-release bumps the version — packing it here would embed the
@@ -145,6 +140,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      # The binaries are RECOMPILED here, inside semantic-release's prepare step —
+      # see the @semantic-release/exec command below and #116.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
 
       # @semantic-release/npm publishes the package from THIS working tree, so `dist/`
       # must exist and devDependencies (tsup, via the `prepare` script) must be present
