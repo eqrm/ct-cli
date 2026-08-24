@@ -178,9 +178,18 @@ export async function readStoredHost(): Promise<string | null> {
  * With a `host` (already normalized — `ct auth logout --env <name>`, #117):
  * clears only that host's per-host account, leaving other hosts logged in. The
  * default blob is dropped too when it points at that same host, since it holds a
- * copy of the very token being removed.
+ * copy of the very token being removed — which also un-sets the host that
+ * commands WITHOUT `--env` fall back to. That is reported back in
+ * `clearedDefault` so the caller can say so instead of promising, wrongly, that
+ * nothing else changed.
  */
-export async function clearCredentials(host?: string): Promise<void> {
+export interface ClearCredentialsResult {
+  /** True when the default (unqualified) login was removed along with the host's. */
+  clearedDefault: boolean;
+}
+
+export async function clearCredentials(host?: string): Promise<ClearCredentialsResult> {
+  let clearedDefault = false;
   if (isMac()) {
     if (host !== undefined) {
       await keychainDelete(host);
@@ -188,8 +197,10 @@ export async function clearCredentials(host?: string): Promise<void> {
       if (fallback?.host === host) {
         await keychainDelete(DEFAULT_ACCOUNT);
         await keychainDelete(LEGACY_KEYCHAIN_ACCOUNT);
+        clearedDefault = true;
       }
     } else {
+      clearedDefault = true;
       const current = await readCredentials(); // default blob → its host's per-host account
       if (current) {
         await keychainDelete(current.host);
@@ -200,4 +211,5 @@ export async function clearCredentials(host?: string): Promise<void> {
     }
   }
   resetKeychainCache(); // a later read in the same process must not return the cleared secret
+  return { clearedDefault };
 }

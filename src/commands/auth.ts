@@ -119,8 +119,16 @@ export function authCommand(): Command {
         return;
       }
       const profile = await loadEnvProfile(opts.env, resolveEnvsPath());
-      await clearCredentials(profile.host);
+      const { clearedDefault } = await clearCredentials(profile.host);
       success(`Logged out of ${profile.host} (env ${profile.name}) — other hosts stay logged in.`);
+      if (clearedDefault) {
+        // The default blob held a copy of the very token just removed, so it went
+        // with it — and with it the host that commands without --env fall back to.
+        warn(
+          `${profile.host} was also the default login, so commands without --env now have no host. ` +
+            `Run \`ct auth login --host <url> --token <token>\` (or pass --env) to set one again.`,
+        );
+      }
     });
 
   return cmd;

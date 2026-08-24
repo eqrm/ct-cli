@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { VERSION, resolveEntry, versionLine } from "../src/version.js";
 import { buildProgram } from "../src/index.js";
 
@@ -12,6 +12,9 @@ describe("VERSION (#116)", () => {
   it("is the version declared in package.json, not the old 0.0.0 literal", () => {
     expect(VERSION).toBe(pkg.version);
     expect(VERSION).not.toBe("0.0.0");
+    // The build-time define is absent when running from source; the package.json
+    // fallback must cover it rather than leaving the honest-answer placeholder.
+    expect(VERSION).not.toBe("0.0.0-unknown");
   });
 
   it("is what the program reports for --version", () => {
@@ -22,7 +25,9 @@ describe("VERSION (#116)", () => {
 describe("resolveEntry", () => {
   it("returns the module's own path when it exists on disk", () => {
     const here = new URL("../src/version.ts", import.meta.url);
-    expect(resolveEntry(here.href)).toBe(here.pathname);
+    // fileURLToPath on both sides: `URL.pathname` is percent-encoded, so a checkout
+    // under a path with a space (or any Windows drive path) would never match.
+    expect(resolveEntry(here.href)).toBe(fileURLToPath(here));
   });
 
   it("falls back to the executable for bun's embedded filesystem", () => {
@@ -43,6 +48,6 @@ describe("resolveEntry", () => {
 describe("versionLine", () => {
   it("answers both 'which version' and 'which ct'", () => {
     const here = new URL("../src/version.ts", import.meta.url);
-    expect(versionLine(here.href)).toBe(`${VERSION} (${here.pathname})`);
+    expect(versionLine(here.href)).toBe(`${VERSION} (${fileURLToPath(here)})`);
   });
 });

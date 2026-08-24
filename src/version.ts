@@ -10,20 +10,43 @@
  * because it reads like evidence.
  *
  * The version is baked in at build time from `package.json`: both `tsup` and
- * `bun build --compile` inline the JSON import, so an artifact carries the
- * version its working tree declared when it was built. That is the released
- * version for the published package — semantic-release bumps `package.json`
+ * `bun build --compile` replace the `__CT_VERSION__` constant below with a
+ * string literal, so an artifact carries the version its working tree declared
+ * when it was built. (It used to be a default JSON import, which esbuild cannot
+ * tree-shake — the whole manifest, `devDependencies` and `scripts` included,
+ * ended up inlined in the published bundle.) Running from source, where nothing
+ * defines the constant, falls back to reading `package.json` off disk. That is
+ * the released version for the published package — semantic-release bumps `package.json`
  * before `npm pack`/`npm publish`, each of which re-runs the build through the
  * `prepare` script (the same ordering `.releaserc.json` relies on for the
  * tarball, see #84). Running from source (`npm run dev`) reports the repo's
  * placeholder version, which the entry path below makes obvious.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import pkg from "../package.json" with { type: "json" };
+
+/**
+ * Injected at build time: `tsup`'s `define` and `bun build --define` both
+ * replace this identifier with a string literal. Undeclared when running from
+ * source — `typeof` on a bare identifier is safe there, and the fallback reads
+ * the manifest that is right next to the checkout anyway.
+ */
+declare const __CT_VERSION__: string;
+
+/** What `--version` reports when neither the build nor `package.json` could say. */
+const UNKNOWN_VERSION = "0.0.0-unknown";
+
+function packageVersion(): string {
+  try {
+    const raw = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    return (JSON.parse(raw) as { version?: string }).version ?? UNKNOWN_VERSION;
+  } catch {
+    return UNKNOWN_VERSION;
+  }
+}
 
 /** The version this build was compiled from. */
-export const VERSION: string = pkg.version;
+export const VERSION: string = typeof __CT_VERSION__ === "string" ? __CT_VERSION__ : packageVersion();
 
 /**
  * Paths inside a `bun build --compile` binary's embedded filesystem. Bun's `fs`

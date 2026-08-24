@@ -44,9 +44,13 @@ jobs:
       - run: npm test
       - run: npm run build
 
+      # Pinned, not `latest`: the `release` job recompiles these very binaries and
+      # ships the recompiled ones, so both jobs must resolve the SAME bun — a bun
+      # release landing between the two jobs would otherwise mean the attached
+      # artifacts are not the ones the smoke tests ran (#116). Bump both together.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.4.0
 
       - name: Compile standalone binaries
         run: bash .github/scripts/build-binaries.sh
@@ -141,11 +145,13 @@ jobs:
         with:
           node-version: 22
 
-      # The binaries are RECOMPILED here, inside semantic-release's prepare step —
-      # see the @semantic-release/exec command below and #116.
+      # The binaries are RECOMPILED here, inside semantic-release's prepare step,
+      # and the recompiled linux one is smoke-tested again there — see the
+      # @semantic-release/exec command below and #116. Keep this pin in lockstep
+      # with the `build` job's.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.4.0
 
       # @semantic-release/npm publishes the package from THIS working tree, so `dist/`
       # must exist and devDependencies (tsup, via the `prepare` script) must be present

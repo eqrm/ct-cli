@@ -8,6 +8,7 @@ import {
   type StatusDeps,
 } from "../src/auth/status.js";
 import type { EnvProfile } from "../src/env/envs.js";
+import { CtApiError } from "../src/api/ctClient.js";
 
 const dev: EnvProfile = {
   name: "dev",
@@ -30,6 +31,7 @@ function deps(overrides: StatusDeps = {}): StatusDeps {
   return {
     env: {},
     readStored: async () => null,
+    readDefaultHost: async () => null,
     whoami: async () => {
       throw new Error("whoami should not be called without a token");
     },
@@ -80,13 +82,59 @@ describe("checkEnvAuth token resolution (#117)", () => {
     expect(status.source).toEqual({ kind: "env", variable: "CT_PROD_TOKEN" });
   });
 
-  it("falls back to CT_LOGINTOKEN when the profile's tokenEnv is unset", async () => {
+  it("falls back to CT_LOGINTOKEN for the host that token is bound to (CT_HOST)", async () => {
+    const status = await checkEnvAuth(
+      prod,
+      deps({
+        env: { CT_LOGINTOKEN: "ambient", CT_HOST: `${prod.host}/` },
+        whoami: async (host, token) => {
+          expect(host).toBe(prod.host);
+          expect(token).toBe("ambient");
+          return ME;
+        },
+      }),
+    );
+    expect(status.source).toEqual({ kind: "env", variable: "CT_LOGINTOKEN" });
+  });
+
+  it("falls back to CT_LOGINTOKEN for the stored default login's host", async () => {
     const status = await checkEnvAuth(
       prod,
       deps({
         env: { CT_LOGINTOKEN: "ambient" },
+        readDefaultHost: async () => prod.host,
         whoami: async (_host, token) => {
           expect(token).toBe("ambient");
+          return ME;
+        },
+      }),
+    );
+    expect(status.source).toEqual({ kind: "env", variable: "CT_LOGINTOKEN" });
+  });
+
+  it("never sends an ambient CT_LOGINTOKEN to a host it is not bound to", async () => {
+    // `--all` walks every host in ct.envs.json; fanning one instance's token out to
+    // all of them would post it — as a login_token= query param — into every other
+    // instance's access log, and report a green line for an unconfigured env.
+    const status = await checkEnvAuth(
+      dev,
+      deps({
+        env: { CT_LOGINTOKEN: "prod-token" },
+        readDefaultHost: async () => prod.host,
+      }),
+    );
+    expect(status.source).toEqual({ kind: "none" });
+    expect(status.identity).toBeUndefined();
+  });
+
+  it("still prefers a profile tokenEnv naming CT_LOGINTOKEN, whatever the default host", async () => {
+    const status = await checkEnvAuth(
+      { ...dev, tokenEnv: "CT_LOGINTOKEN" },
+      deps({
+        env: { CT_LOGINTOKEN: "explicit" },
+        readDefaultHost: async () => prod.host,
+        whoami: async (_host, token) => {
+          expect(token).toBe("explicit");
           return ME;
         },
       }),
@@ -99,6 +147,7 @@ describe("checkEnvAuth token resolution (#117)", () => {
       dev,
       deps({
         env: { CT_LOGINTOKEN: "expired" },
+        readDefaultHost: async () => dev.host,
         whoami: async () => {
           throw new Error("whoami failed (HTTP 401)");
         },
@@ -106,6 +155,36 @@ describe("checkEnvAuth token resolution (#117)", () => {
     );
     expect(status.identity).toBeUndefined();
     expect(status.error).toBe("whoami failed (HTTP 401)");
+  });
+
+  it("surfaces the HTTP status a real CtApiError carries, not just its message", async () => {
+    // CtClient.authenticate throws CtApiError("Login failed (whoami)", status) — the
+    // status is on the error, so err.message alone renders 401, 403 and 500 alike.
+    const status = await checkEnvAuth(
+      dev,
+      deps({
+        readStored: async (host) => ({ host, token: "expired" }),
+        whoami: async () => {
+          throw new CtApiError("Login failed (whoami)", 401, null);
+        },
+      }),
+    );
+    expect(status.error).toContain("HTTP 401");
+  });
+
+  it("reports a credential store that throws instead of aborting the sweep", async () => {
+    const statuses = await checkAllEnvAuth(
+      [dev, prod],
+      deps({
+        env: { CT_PROD_TOKEN: "ci-token" },
+        readStored: async () => {
+          throw new Error("keychain locked");
+        },
+        whoami: async () => ME,
+      }),
+    );
+    expect(statuses[0]!.error).toBe("keychain locked");
+    expect(statuses[1]!.identity).toEqual(ME);
   });
 });
 
