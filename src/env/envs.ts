@@ -116,6 +116,13 @@ function resolveProfile(name: string, raw: RawProfile): EnvProfile {
   };
 }
 
+/** Reject a non-object profile entry before {@link resolveProfile} reads fields off it. */
+function assertProfileObject(name: string, raw: unknown, path: string): asserts raw is RawProfile {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error(`Environment "${name}" in ${path} must be a JSON object.`);
+  }
+}
+
 /**
  * Load and resolve the profile named `name` from the profile file at `path`.
  * Throws a friendly error when the file is missing, malformed, or has no such env.
@@ -128,8 +135,20 @@ export async function loadEnvProfile(name: string, path: string): Promise<EnvPro
     const list = known.length ? known.join(", ") : "(none defined)";
     throw new Error(`Unknown environment "${name}" in ${path}. Defined: ${list}.`);
   }
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new Error(`Environment "${name}" in ${path} must be a JSON object.`);
-  }
+  assertProfileObject(name, raw, path);
   return resolveProfile(name, raw);
+}
+
+/**
+ * Load and resolve EVERY profile in the file, in declaration order — the whole
+ * set is what `ct auth status` reports on (#117). Same validation as the single
+ * lookup: one malformed profile fails the read rather than being skipped
+ * silently, because a preflight check that quietly omits an env is a trap.
+ */
+export async function loadEnvProfiles(path: string): Promise<EnvProfile[]> {
+  const envs = await loadEnvsFile(path);
+  return Object.entries(envs).map(([name, raw]) => {
+    assertProfileObject(name, raw, path);
+    return resolveProfile(name, raw);
+  });
 }

@@ -13,7 +13,14 @@
  */
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { DesiredResource, DynamicSpec, DynamicStatus } from "../engine/types.js";
+import type { DesiredResource, DynamicSpec, DynamicStatus, MemberFieldSpec } from "../engine/types.js";
+import {
+  isManagedMemberFieldProp,
+  MEMBER_FIELD_FORBIDDEN_PROPS,
+  MEMBER_FIELD_PROPS,
+  memberFieldStateKey,
+} from "../engine/member-fields.js";
+import { collectRefs } from "../resolve/refs.js";
 import type { DomainType } from "../permissions/grants.js";
 import type { DesiredPermission, Grant, PreserveUnknown } from "../permissions/types.js";
 import { KNOWN_SCOPE_FIELDS } from "../permissions/catalog.js";
@@ -87,6 +94,16 @@ function relocate(err: unknown, location: string | undefined): unknown {
  */
 export type DynamicInput = boolean | string | { status: DynamicStatus; ruleset: unknown };
 
+/**
+ * One group-scoped member field in a `ct.group({ memberFields: [...] })` declaration (#135).
+ * `key` is the group-local key; every other property is a ChurchTools member-field property
+ * (see {@link MEMBER_FIELD_PROPS}) and is diffed and written as one unit.
+ */
+export interface MemberFieldInput {
+  key: string;
+  [prop: string]: unknown;
+}
+
 export interface ResourceInput {
   key: string;
   /** Ordering hint: apply this resource after `parent`. A dependency edge only — NOT managed hierarchy. */
@@ -99,6 +116,26 @@ export interface ResourceInput {
    * in the same config.
    */
   parents?: string[];
+  /**
+   * Group-scoped member-field DEFINITIONS this group owns (#135). Opt-in, exactly like `parents`
+   * and `dynamic`: omit to leave the group's member fields unmanaged.
+   *
+   * ```ts
+   * ct.group({
+   *   key: "ojbp_2026_27_praktikum_1",
+   *   name: "OJBP 1. Praktikum 26/27",
+   *   memberFields: [{ key: "wahl", name: "Wahl", fieldTypeCode: "text" }],
+   * });
+   * ```
+   *
+   * `key` is the LOCAL key — the field's portable identity is the group key plus this one
+   * (`ojbp_2026_27_praktikum_1::wahl`), because a member field belongs to exactly one group and is
+   * not globally reusable. Two groups declaring `wahl` stay independent fields with different
+   * ChurchTools ids. A declaration may never carry a ChurchTools field id.
+   *
+   * A field dropped from this list is NEVER deleted — see `ct destroy --member-field`.
+   */
+  memberFields?: MemberFieldInput[];
   dependsOn?: string[];
   /**
    * Block `ct destroy` for this resource. Mirrored to the state entry on `apply`,
@@ -350,6 +387,83 @@ function desugarDynamic(type: string, key: string, dynamic: unknown): DynamicSpe
   return { status: d.status as DynamicStatus, ruleset: d.ruleset };
 }
 
+/**
+ * Validate and normalise a group's `memberFields` declaration (#135) into {@link MemberFieldSpec}s.
+ *
+ * `undefined` passes straight through (opt-in: member fields are not managed for this group). Every
+ * failure is an EVAL-time error rather than a warning, because each one is a portability or
+ * identity defect that would otherwise only surface as a wrong write:
+ *  - a declared ChurchTools field id would freeze this host's numbering into a config that is meant
+ *    to stand up any host — the single guarantee the whole tool rests on;
+ *  - a duplicate local key would silently collapse two fields into one pseudo-field;
+ *  - a missing `name` would reach CT as an HTTP 400 halfway through an unattended apply.
+ * A property outside the managed set only WARNS and still passes through — the same escape hatch
+ * unrecognised resource fields have.
+ */
+function normalizeMemberFields(
+  type: string,
+  key: string,
+  input: unknown,
+  location?: string,
+): MemberFieldSpec[] | undefined {
+  if (input === undefined) return undefined;
+  if (type !== "group") throw new Error(`${type} "${key}": "memberFields" is only valid on a group.`);
+  if (!Array.isArray(input)) {
+    throw new Error(`group "${key}": "memberFields" must be an array of { key, name, ... } objects.`);
+  }
+  const specs: MemberFieldSpec[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`group "${key}": each entry of "memberFields" must be an object with a "key".`);
+    }
+    const { key: localKey, ...props } = raw as MemberFieldInput;
+    if (typeof localKey !== "string" || localKey.length === 0) {
+      throw new Error(`group "${key}": each entry of "memberFields" needs a non-empty string "key".`);
+    }
+    // Compared in the CANONICAL spelling, because that is what identity means here: `matchesLocalKey`
+    // slugs both sides, so "Wahl" and "wahl" would resolve to the same live row and two declarations
+    // would fight over it — each apply PATCHing the row the other just wrote.
+    const canonical = memberFieldStateKey(localKey);
+    if (seen.has(canonical)) {
+      throw new Error(
+        `group "${key}": duplicate member field key "${localKey}". Local keys must be unique within ` +
+          `a group — they are half of the portable "${key}::${localKey}" identity, and are compared ` +
+          `in their normalised form ("Wahl" and "wahl" are the same key).`,
+      );
+    }
+    seen.add(canonical);
+    for (const forbidden of MEMBER_FIELD_FORBIDDEN_PROPS) {
+      if (props[forbidden] !== undefined) {
+        throw new Error(
+          `group "${key}" member field "${localKey}": "${forbidden}" must never appear in config. A ` +
+            `group member field is identified by "${key}::${localKey}", not by a ChurchTools id — ` +
+            `declaring one would pin this config to a single host.`,
+        );
+      }
+    }
+    if (typeof props.name !== "string" || props.name.length === 0) {
+      throw new Error(
+        `group "${key}" member field "${localKey}": a non-empty "name" is required (ChurchTools ` +
+          `rejects a member field without one).`,
+      );
+    }
+    for (const prop of Object.keys(props)) {
+      if (!isManagedMemberFieldProp(prop)) {
+        warn(
+          located(
+            location,
+            `group "${key}" member field "${localKey}": unknown property "${prop}" (sent as-is, never ` +
+              `diffed against ChurchTools; managed properties: ${MEMBER_FIELD_PROPS.join(", ")})`,
+          ),
+        );
+      }
+    }
+    specs.push({ key: localKey, props });
+  }
+  return specs;
+}
+
 function toDesired(type: string, input: ResourceInput, location?: string): DesiredResource {
   const {
     key,
@@ -358,6 +472,7 @@ function toDesired(type: string, input: ResourceInput, location?: string): Desir
     dependsOn = [],
     preventDestroy,
     dynamic,
+    memberFields,
     allowDuplicateName,
     ...fields
   } = input;
@@ -468,6 +583,9 @@ function toDesired(type: string, input: ResourceInput, location?: string): Desir
   // `dynamic` is a synthetic field for auto-groups, handled separately from the plain diffed
   // field bag. Opt-in: `undefined` means "not a dynamic group" (mirrors `parents`).
   const dynamicSpec = desugarDynamic(type, key, dynamic);
+  // Group-scoped member fields (#135) — likewise synthetic, likewise opt-in, and destructured out
+  // above so they never reach the plain field bag (and never trip the unknown-field warning).
+  const memberFieldSpecs = normalizeMemberFields(type, key, memberFields, location);
   // `parent` is an ordering hint only — a dependency edge, never a diffed/managed field
   // (its pre-hierarchy meaning; a `parent` may point at a campus). Group hierarchy is
   // managed opt-in via `parents`: `undefined` → unmanaged, `[]` → managed with no parents.
@@ -483,6 +601,7 @@ function toDesired(type: string, input: ResourceInput, location?: string): Desir
     parent: parentKey,
     parents: parentKeys,
     dynamic: dynamicSpec,
+    memberFields: memberFieldSpecs,
     dependsOn: edges,
     preventDestroy,
     allowDuplicateName,
@@ -509,6 +628,54 @@ function validateReferences(resources: DesiredResource[]): void {
       if (target.type !== "group") {
         throw new Error(
           `Group "${r.key}" declares hierarchy parent "${parentKey}", but "${parentKey}" is a ${target.type}, not a group.`,
+        );
+      }
+    }
+  }
+  validateMemberFieldRefs(resources, byKey);
+}
+
+/**
+ * Every `ref.groupMemberField(group, field)` a config emits must name a group DECLARED in this
+ * config that DECLARES that member field (#135).
+ *
+ * This is the plan-time ruleset check the issue asks for, pulled all the way forward to config
+ * evaluation: a dynamic ruleset naming a field that is not declared for its target group fails here,
+ * offline, before any network call — never as a mid-apply surprise. ChurchTools treats a ruleset as
+ * opaque JSON and validates none of the ids inside it, so without this the mistake would apply
+ * cleanly and simply compute the wrong membership.
+ *
+ * Deliberately limited to groups this config OWNS. A ref into a group that is merely adopted (in
+ * state, not declared) cannot be checked offline — the resolver checks it against the live
+ * `GET /groups/{id}/memberfields` instead, and hard-errors there, still before apply writes.
+ */
+function validateMemberFieldRefs(resources: DesiredResource[], byKey: Map<string, DesiredResource>): void {
+  for (const r of resources) {
+    // The ruleset lives on the synthetic `dynamic` spec, id fields on the plain bag — walk both.
+    for (const ref of collectRefs([r.fields, r.dynamic?.ruleset])) {
+      if (ref.kind !== "group-member-field") continue;
+      const target = byKey.get(ref.group);
+      if (!target) continue; // adopted-but-not-declared: the resolver checks it live (see above)
+      if (target.type !== "group") {
+        throw new Error(
+          `"${r.key}" references member field "${ref.group}::${ref.field}", but "${ref.group}" is a ` +
+            `${target.type}, not a group.`,
+        );
+      }
+      if (target.memberFields === undefined) {
+        throw new Error(
+          `"${r.key}" references member field "${ref.group}::${ref.field}", but group "${ref.group}" ` +
+            `does not manage member fields. Add a "memberFields" list declaring "${ref.field}" to it.`,
+        );
+      }
+      // Normalised on both sides, exactly as the live row is matched (`matchesLocalKey`) and as the
+      // created id is keyed in state (`memberFieldStateKey`) — one spelling of identity everywhere.
+      if (!target.memberFields.some((f) => memberFieldStateKey(f.key) === memberFieldStateKey(ref.field))) {
+        const declared = target.memberFields.map((f) => f.key).join(", ");
+        throw new Error(
+          `"${r.key}" references member field "${ref.group}::${ref.field}", which group "${ref.group}" ` +
+            `does not declare${declared ? ` (it declares: ${declared})` : ""}. A member field belongs ` +
+            `to exactly one group, so it can only be named through the group that owns it.`,
         );
       }
     }

@@ -7,8 +7,8 @@
     [
       "@semantic-release/exec",
       {
-        "//": "Runs AFTER @semantic-release/npm has written the bumped version into package.json, so this tarball carries the real release version (not the placeholder 0.1.0 the build job packs pre-bump). Renamed to the fixed filename the stable releases/latest/download/ct-cli.tgz URL depends on (README + INSTALL.md). See #84.",
-        "prepareCmd": "npm pack --pack-destination release && mv release/eqrm-ct-cli-${nextRelease.version}.tgz release/ct-cli.tgz"
+        "//": "Runs AFTER @semantic-release/npm has written the bumped version into package.json, so these artifacts carry the real release version (not the placeholder 0.1.0 the build job produces pre-bump). The tarball is renamed to the fixed filename the stable releases/latest/download/ct-cli.tgz URL depends on (README + INSTALL.md). See #84. The binaries are recompiled for the same reason: `ct --version` bakes in package.json's version at build time, so the smoke-tested pre-bump binaries would report the placeholder. They are overwritten in place, so the assets attached below are the recompiled ones — which is why the recompiled linux binary is smoke-tested again right here, on the runner that can execute it, instead of trusting that the pre-bump smoke run still speaks for these bytes (both jobs pin the same bun version, so the only intended difference is the version constant). The darwin binaries cannot be executed on this runner; their `--version` assertion is the one the smoke jobs ran pre-bump. See #116.",
+        "prepareCmd": "bash .github/scripts/build-binaries.sh && bash .github/scripts/smoke-test-binary.sh release/ct-linux-x64 && npm pack --pack-destination release && mv release/eqrm-ct-cli-${nextRelease.version}.tgz release/ct-cli.tgz"
       }
     ],
     [

@@ -29,7 +29,8 @@ export type RefKind =
   | "role-def"
   | "group"
   | "group-role"
-  | "group-type-role";
+  | "group-type-role"
+  | "group-member-field";
 
 /**
  * Shared explanation for why a group-status reference can never be resolved by name (#67):
@@ -95,7 +96,28 @@ export interface GroupTypeRoleRef {
   role: string;
 }
 
-export type Ref = SimpleRef | GroupRoleRef | GroupTypeRoleRef;
+/**
+ * Compound reference: a GROUP-SCOPED MEMBER FIELD, addressed by its portable
+ * `(group key, local field key)` pair (#135) — `ojbp_2026_27_praktikum_1::wahl`.
+ *
+ * It has to be compound for the same reason {@link GroupTypeRoleRef} does, only more strongly: a
+ * member field belongs to exactly ONE group and is not globally reusable, so its local key alone
+ * names nothing. Two groups declaring `wahl` are two independent fields with two different
+ * ChurchTools ids, and that is the whole point of the blueprint use case — running the same
+ * function for 25/26 and 26/27 must mint fresh fields per group, with no id from the other year
+ * participating in resolution.
+ *
+ * This is what lets a dynamic-group ruleset name a member field portably instead of freezing this
+ * host's numeric field id into a file that is then applied somewhere else.
+ */
+export interface GroupMemberFieldRef {
+  __ctRef: true;
+  kind: "group-member-field";
+  group: string;
+  field: string;
+}
+
+export type Ref = SimpleRef | GroupRoleRef | GroupTypeRoleRef | GroupMemberFieldRef;
 
 function requireKey(kind: RefKind, value: unknown): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -230,6 +252,19 @@ export const ref = {
     groupType: requireKey("group-type-role", groupType),
     role: requireKey("group-type-role", role),
   }),
+  /**
+   * A group-scoped member FIELD (#135), by its portable `(group key, local field key)` pair — the
+   * `ojbp_2026_27_praktikum_1::wahl` identity. The resolver maps it to this host's numeric field id
+   * from `GET /groups/{groupId}/memberfields`; a field the same config declares but that does not
+   * exist on this host yet resolves to a {@link PendingRef} and is completed during apply, after the
+   * owning group's fields have been created. See {@link GroupMemberFieldRef}.
+   */
+  groupMemberField: (group: string, field: string): GroupMemberFieldRef => ({
+    __ctRef: true,
+    kind: "group-member-field",
+    group: requireKey("group-member-field", group),
+    field: requireKey("group-member-field", field),
+  }),
 };
 
 export function isRef(value: unknown): value is Ref {
@@ -243,6 +278,8 @@ export function refKey(r: Ref): string {
       return `group-role:${r.group} ${r.role}`;
     case "group-type-role":
       return `group-type-role:${r.groupType} ${r.role}`;
+    case "group-member-field":
+      return `group-member-field:${r.group}::${r.field}`;
     default:
       return `${r.kind}:${r.key}`;
   }
@@ -255,6 +292,10 @@ export function refLabel(r: Ref): string {
       return `group-role(group=${r.group}, role=${r.role})`;
     case "group-type-role":
       return `group-type-role(groupType=${r.groupType}, role=${r.role})`;
+    case "group-member-field":
+      // The portable `<group>::<field>` identity itself — the same string the docs, the plan and
+      // `ct destroy --member-field` all use, so one identity is spoken everywhere (#135).
+      return `group-member-field:${r.group}::${r.field}`;
     default:
       return `${r.kind}:${r.key}`;
   }
@@ -330,9 +371,15 @@ export function collectPendingRefKeys(value: unknown): string[] {
   const walk = (v: unknown): void => {
     if (isPendingRef(v)) {
       const r = v.__pendingRef;
+      // A pending group-scoped member field (#135) DOES belong here, and its ordering dependency is
+      // the OWNING GROUP: the field is created by that group's own apply item (before its dynamic
+      // ruleset — see engine/synthetic.ts), so sequencing the group first is exactly what makes a
+      // ruleset on another group able to name a field created in the same run. A self-reference (the
+      // ruleset and the field on the same group) is dropped by buildPlan's `k !== d.key` filter.
+      if (r.kind === "group-member-field") out.push(r.group);
       // Only the simple, single-`key` kinds contribute an apply-order dependency here — see the note
-      // above for why the compound ones cannot reach this walk.
-      if (r.kind !== "group-role" && r.kind !== "group-type-role") out.push(r.key);
+      // above for why the other compound ones cannot reach this walk.
+      else if (r.kind !== "group-role" && r.kind !== "group-type-role") out.push(r.key);
       return;
     }
     if (Array.isArray(v)) {

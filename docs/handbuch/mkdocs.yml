@@ -79,4 +79,5 @@ nav:
   - Permissions: permissions.md
   - Dynamic groups: dynamic-groups.md
   - Field definitions: field-definitions.md
+  - Group member fields: group-member-fields.md
   - Blueprints: blueprints.md

@@ -6,7 +6,7 @@ sources:
   - src/engine/dynamic.ts
   - src/engine/synthetic.ts
   - src/commands/adopt-group.ts
-sources_hash: 13e4a54533b0e8a2
+sources_hash: a0be8585fb6a48dc
 reviewed: 2026-08-17
 ---
 
@@ -66,6 +66,38 @@ not a separate resource with its own tier in `TYPE_TIER`
 the group's own tier-1 apply, after the group itself has been
 created/updated — so `ct apply` always writes against the group's real
 (possibly just-created) id.
+
+That holds on the very first run too, including when the group being made
+dynamic is created by that same run and is the _only_ dynamic group in the
+config (fixed alongside #135): the desired `dynamic` block is folded whenever
+any group declares one, not only when there is already an adopted dynamic group
+to read.
+
+The group's own synthetic fields are written **in declaration order**, and that
+order is fixed by the synthetic-field registry in `src/engine/synthetic.ts`:
+hierarchy `parents`, then `memberField:*`, then `dynamic`. So a group's
+[member fields](group-member-fields.md) are created before the ruleset that may
+reference them.
+
+### Referencing a group member field portably (#135)
+
+A ruleset that names one of a group's member fields must not carry that host's
+numeric field id — it is not portable, and ChurchTools validates none of the ids
+inside a ruleset, so the wrong id applies cleanly and silently computes the
+wrong membership. Use the group-scoped reference instead:
+
+```ts
+ref.groupMemberField("ojbp_2026_27_praktikum_1", "wahl");
+```
+
+The resolver maps it to this host's id from
+`GET /groups/{groupId}/memberfields`. A field this config declares but that does
+not exist on the host yet resolves to a pending marker and is completed during
+apply, right after the create that minted it. A reference to a field the target
+group does not declare fails at config-eval time, before any network call — the
+declared key and the referenced one being compared in their normalised form, so
+`"Wahl"` finds a field declared as `wahl`. See
+[Group member fields](group-member-fields.md).
 
 ## Supplying a ruleset — three ways
 
@@ -139,6 +171,10 @@ Rather than hand-editing markers into a freshly captured file, adopt does it:
 ct adopt group <id> --with-dynamic                          # portablized (the default)
 ct adopt group <id> --with-dynamic --no-portable-rulesets   # verbatim, this host's ids
 ```
+
+`--with-member-fields` is the sibling opt-in for a group's own
+[member-field definitions](group-member-fields.md); combine the two to capture a
+whole structure — group, fields, ruleset — in one pass.
 
 > **A re-adopt refreshes the snapshot, not the key (#123).** Re-running this over
 > a list of ids is the documented way to refresh rulesets once their scope

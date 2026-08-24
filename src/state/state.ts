@@ -30,6 +30,17 @@ export interface ManagedResource {
    * (the exact moment it becomes a destroy candidate). Missing = not protected.
    */
   preventDestroy?: boolean;
+  /**
+   * Groups only (#135): local member-field key → this host's ChurchTools member-field id.
+   *
+   * NOT a managed-field snapshot — it is never diffed and never written to ChurchTools. It exists
+   * because a group-scoped member field has no logical key of its own in `resources` (it belongs to
+   * exactly one group and is not globally reusable), yet a same-run reference to a field created in
+   * THIS apply — a dynamic ruleset naming `<group>::<field>` — has to be completed from somewhere
+   * once the field exists. `ct destroy --member-field` reads it too, so an explicit teardown does
+   * not need a live lookup to find the id it is about to delete.
+   */
+  memberFields?: Record<string, number>;
 }
 
 export interface State {

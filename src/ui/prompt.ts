@@ -21,6 +21,34 @@ function realAsk(question: string): Promise<string> {
   });
 }
 
+/**
+ * Ask a question whose answer must never appear on screen — a password, a TOTP
+ * code, a login token (#138).
+ *
+ * `readline` echoes typed characters through its private `_writeToOutput`. The
+ * prompt itself is written synchronously by `rl.question`, so muting straight
+ * after it lets the label through and swallows every keystroke after it. The
+ * trailing newline is written by hand, since the muted Enter no longer produces
+ * one.
+ */
+export function askHidden(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
+  const muteable = rl as unknown as { _writeToOutput: (chunk: string) => void };
+  return new Promise<string>((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      process.stderr.write("\n");
+      resolve(answer);
+    });
+    muteable._writeToOutput = () => {};
+  });
+}
+
+/** Ask a question whose answer is not secret and may echo normally. */
+export function askVisible(question: string): Promise<string> {
+  return realAsk(question);
+}
+
 function ttyState(opts: PromptOptions): boolean {
   return opts.isTTY ?? Boolean(process.stdin.isTTY);
 }

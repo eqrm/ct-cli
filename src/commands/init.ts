@@ -1,11 +1,10 @@
 import { createInterface } from "node:readline";
 import { Command } from "commander";
-import { loginWithToken } from "../auth/login.js";
-import { supportsCredentialStorage } from "../auth/tokenStore.js";
+import { bootstrapLoginToken } from "../auth/login.js";
+import { isSecureStorageAvailable } from "../auth/tokenStore.js";
 import { initializeConfigRepository } from "../init.js";
-import { askSecret } from "../ui/prompt.js";
 import { info, success } from "../ui.js";
-import { reportLogin } from "./auth.js";
+import { verifyAndStoreLoginToken } from "./auth.js";
 
 interface InitCommandOptions {
   template?: string;
@@ -61,17 +60,15 @@ export function initCommand(): Command {
           result.template === "process"
             ? `ct plan -e ${result.environment}`
             : `ct coverage --env ${result.environment}`;
-        if (process.stdin.isTTY && !opts.yes && supportsCredentialStorage()) {
-          const token = (
-            await askSecret("Personal login token (input hidden; leave empty to log in later): ")
-          ).trim();
-          if (token) {
-            reportLogin(await loginWithToken(result.host!, token));
+        if (process.stdin.isTTY && !opts.yes && isSecureStorageAvailable()) {
+          const outcome = await bootstrapLoginToken(result.host!);
+          if (outcome.kind === "token") {
+            await verifyAndStoreLoginToken(result.host!, outcome.token);
             info(`Next: run \`${inspectCommand}\`.`);
             return;
           }
         }
-        if (supportsCredentialStorage()) {
+        if (isSecureStorageAvailable()) {
           info(`Next: run \`ct auth login --host ${result.host}\`, then \`${inspectCommand}\`.`);
         } else {
           info(

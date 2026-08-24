@@ -80,6 +80,41 @@ Without `--env`, behaviour is unchanged (single stored login, `ct-state.json`).
 login` stores credentials **per host**, so one machine can hold logins for `dev`
 and `prod` at once (a pre-existing single login still works as a fallback).
 
+`ct auth status --all` is stricter about the bare `CT_LOGINTOKEN` fallback than
+an `--env` command is, because it walks _every_ host: an ambient
+`CT_LOGINTOKEN` is offered only to the host it is bound to (`CT_HOST`, else the
+stored default login's host). Give each env its own `tokenEnv` to authenticate
+more than one host in CI — the alternative would post one instance's token to
+every other instance listed in `ct.envs.json`.
+
+## Which account am I using where?
+
+`ct auth status` answers it per environment, resolving the same host and token an
+`--env` command would — without writing anything:
+
+```bash
+ct auth status --env dev      # identity on dev's host (JSON on stdout, host on stderr)
+ct auth status --all          # preflight: every env in ct.envs.json, one line each
+```
+
+```text
+dev   https://mychurch-dev.church.tools  ✓ Ada Lovelace (#42) via Keychain
+prod  https://mychurch.church.tools      ✗ no token
+```
+
+`--all` exits non-zero if any environment has no working token, so CI can gate on
+it before an apply. It is the first thing to run when an `--env` command returns
+401 and you need to know whether the token is missing, expired, or simply belongs
+to somebody else — failures carry the HTTP status the instance returned. A green
+line also means the instance meets the minimum ChurchTools version, so it is not
+one an `apply` would refuse. Tokens are never printed — only where each one came
+from.
+
+`ct auth logout --env <name>` removes just that host's credentials and leaves
+your other logins in place. If that host also happened to be your _default_
+login, the shared entry goes with it and the command says so — commands without
+`--env` then need a `ct auth login` again.
+
 **Cross-contamination is impossible:** every state file is bound to its host, and
 loading a state file against a different host is refused —
 `State file host (…) does not match … Refusing to mix instances.` — so `--env prod`

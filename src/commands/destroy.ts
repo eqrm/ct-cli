@@ -11,12 +11,23 @@ import { fetchActual } from "../engine/build.js";
 import { parentIdsByGroupId, managedParentKeys, type HierarchyEntry } from "../engine/hierarchy.js";
 import type { DesiredResource } from "../engine/types.js";
 import { writeBackup } from "../engine/backup.js";
+import {
+  groupScopedRows,
+  memberFieldStateKey,
+  matchesLocalKey,
+  memberFieldItemPath,
+  memberFieldRowId,
+  memberFieldsReadPath,
+  parseMemberFieldIdentity,
+} from "../engine/member-fields.js";
 import { resolveBackupDir } from "./apply.js";
 import { confirmTyped, confirmEnv } from "../ui/prompt.js";
 import { info, warn, success, error, formatError } from "../ui.js";
 
 interface DestroyOptions {
   target?: string[];
+  /** Group-scoped member fields to delete, by their portable `<groupKey>::<fieldKey>` identity (#135). */
+  memberField?: string[];
   state?: string;
   env?: string;
   confirmEnv?: string;
@@ -105,6 +116,142 @@ async function fetchParentEdges(
  * `person-status`, whose deletion mutates every person carrying it), so an unattended `--force`
  * teardown is exactly the run that should stop and ask.
  */
+/** One `--member-field` target, resolved against state. */
+export interface MemberFieldTarget {
+  /** The portable `<groupKey>::<fieldKey>` identity, as typed. */
+  identity: string;
+  groupKey: string;
+  fieldKey: string;
+  groupId: number;
+}
+
+/**
+ * Resolve `--member-field <group>::<field>` targets against the state file (#135).
+ *
+ * This is the EXPLICIT destructive operation a group member field can only ever be removed by.
+ * `apply` never deletes one — a field dropped from config produces no desired key at all, so the
+ * diff engine is structurally unable to propose it (see engine/synthetic.ts) — and `ct destroy
+ * --target` addresses whole managed resources, which a member field is not: it has no state entry
+ * of its own because it belongs to exactly one group.
+ *
+ * Guardrails are the group's: the owning group must be managed, and `preventDestroy` on it blocks
+ * its fields too — protecting a group protects what it owns.
+ */
+export function resolveMemberFieldTargets(state: State, raw: string[]): MemberFieldTarget[] {
+  const out: MemberFieldTarget[] = [];
+  for (const identity of parseTargets(raw)) {
+    const parsed = parseMemberFieldIdentity(identity);
+    if (!parsed) {
+      throw new Error(
+        `"${identity}" is not a group member field identity. Use "<groupKey>::<fieldKey>" ` +
+          `(e.g. "ojbp_2026_27_praktikum_1::wahl").`,
+      );
+    }
+    const managed = state.resources[parsed.group];
+    if (!managed || managed.type !== "group") {
+      throw new Error(
+        `"${identity}": no managed group "${parsed.group}" in the state file. A member field can only ` +
+          `be destroyed through the group that owns it.`,
+      );
+    }
+    if (managed.preventDestroy) {
+      throw new Error(
+        `preventDestroy is set (in state) for group "${parsed.group}", which owns "${identity}". ` +
+          `Clear the protection first — protecting a group protects its member fields too.`,
+      );
+    }
+    out.push({
+      identity,
+      groupKey: parsed.group,
+      fieldKey: parsed.field,
+      groupId: managed.id,
+    });
+  }
+  return out;
+}
+
+/**
+ * Delete each resolved member field, dropping its id from the owning group's state entry and saving
+ * after every success. A field that is already gone in ChurchTools (no live row, or a 404 on the
+ * DELETE) is success-with-note, mirroring `runDeleteLoop`; any other error stops the run with state
+ * saved up to that point.
+ *
+ * Returns `false` if ANY target failed — including the ones that only skip ahead to the next target
+ * — so the caller can hold back the group deletes that follow. That gate matters: the groups being
+ * destroyed are the very groups these fields belong to, so carrying on would delete a field the run
+ * just reported it could not delete, and the printed "Nothing further was deleted" would be a lie.
+ */
+export async function runMemberFieldDeleteLoop(ctx: {
+  client: Pick<CtClient, "get" | "request">;
+  state: State;
+  statePath: string;
+  targets: MemberFieldTarget[];
+  save?: (path: string, state: State) => Promise<void>;
+}): Promise<boolean> {
+  const { client, state, statePath, targets } = ctx;
+  const save = ctx.save ?? saveState;
+  let ok = true;
+  for (const target of targets) {
+    const forget = async (): Promise<void> => {
+      const managed = state.resources[target.groupKey];
+      // Slugged, exactly as the apply that wrote it keyed the entry (`memberFieldStateKey`) and as
+      // `matchesLocalKey` matched the live row — otherwise `--member-field g::Wahl` deletes the
+      // field in ChurchTools but leaves `memberFields.wahl` pointing at the id it just destroyed.
+      const stateKey = memberFieldStateKey(target.fieldKey);
+      if (managed?.memberFields && stateKey in managed.memberFields) {
+        const rest = { ...managed.memberFields };
+        delete rest[stateKey];
+        if (Object.keys(rest).length > 0) managed.memberFields = rest;
+        else delete managed.memberFields;
+      }
+      await save(statePath, state);
+    };
+    let fieldId: number | undefined;
+    try {
+      const rows = groupScopedRows(await client.get(memberFieldsReadPath(target.groupId)));
+      const matches = rows.filter((row) => matchesLocalKey(row, target.fieldKey));
+      if (matches.length > 1) {
+        error(
+          `${target.identity}: ${matches.length} member fields on group #${target.groupId} answer to ` +
+            `"${target.fieldKey}" — refusing to guess which one to delete. Rename one in ChurchTools first.`,
+        );
+        process.exitCode = 1;
+        ok = false;
+        continue;
+      }
+      fieldId = matches.length === 1 ? memberFieldRowId(matches[0]!) : undefined;
+    } catch (err) {
+      error(`Stopped at ${target.identity}: ${formatError(err)}. Nothing further was deleted.`);
+      process.exitCode = 1;
+      return false;
+    }
+    if (fieldId === undefined) {
+      await forget();
+      success(`${target.identity} already absent in ChurchTools — nothing to delete`);
+      continue;
+    }
+    const path = memberFieldItemPath(target.groupId, fieldId);
+    assertNotPeople(path);
+    try {
+      await client.request("DELETE", path);
+    } catch (err) {
+      if (err instanceof CtApiError && err.status === 404) {
+        await forget();
+        success(`${target.identity} (#${fieldId}) already deleted in ChurchTools`);
+        continue;
+      }
+      error(
+        `Stopped at ${target.identity}: ${formatError(err)}. State saved up to this point — re-run to resume.`,
+      );
+      process.exitCode = 1;
+      return false;
+    }
+    await forget();
+    success(`Destroyed group member field ${target.identity} (#${fieldId})`);
+  }
+  return ok;
+}
+
 export function destroyWarnings(state: State, keys: string[]): string[] {
   const out: string[] = [];
   for (const key of keys) {
@@ -118,7 +265,12 @@ export function destroyWarnings(state: State, keys: string[]): string[] {
 export function destroyCommand(): Command {
   return new Command("destroy")
     .description("Explicitly delete managed resources (protected; never implicit)")
-    .requiredOption("--target <keys...>", "logical key(s) to destroy (repeatable or comma-separated)")
+    .option("--target <keys...>", "logical key(s) to destroy (repeatable or comma-separated)")
+    .option(
+      "--member-field <identities...>",
+      "group member field(s) to destroy, by portable identity <groupKey>::<fieldKey> (#135) — the " +
+        "ONLY way one is ever deleted; apply never removes a field that vanished from config",
+    )
     .option("-s, --state <path>", "state file (or set CT_STATE)")
     .option("-e, --env <name>", "environment profile from ct.envs.json (host + state + token)")
     .option("--confirm-env <name>", "confirm a protected env non-interactively (must match --env exactly)")
@@ -129,8 +281,9 @@ export function destroyCommand(): Command {
     )
     .action(async (opts: DestroyOptions) => {
       const targets = parseTargets(opts.target ?? []);
-      if (targets.length === 0) {
-        throw new Error("No --target given. Destroy never deletes implicitly.");
+      const memberFieldArgs = parseTargets(opts.memberField ?? []);
+      if (targets.length === 0 && memberFieldArgs.length === 0) {
+        throw new Error("No --target or --member-field given. Destroy never deletes implicitly.");
       }
 
       const cmdEnv = await prepareEnv(opts);
@@ -157,6 +310,10 @@ export function destroyCommand(): Command {
         );
       }
 
+      // Member fields (#135) are resolved against state BEFORE any network call, so a malformed
+      // identity, an unmanaged group or a preventDestroy'd owner stops the run without touching CT.
+      const memberFieldTargets = resolveMemberFieldTargets(state, memberFieldArgs);
+
       const { client } = await authedSession();
 
       const parentEdges = await fetchParentEdges(client, state, targets);
@@ -177,10 +334,26 @@ export function destroyCommand(): Command {
         process.exitCode = 1;
         return;
       }
+      // Member-field definitions go into the SAME backup, under their portable identity, so an
+      // explicit teardown of one is as recoverable as any managed resource.
+      for (const target of memberFieldTargets) {
+        try {
+          const rows = groupScopedRows(await client.get(memberFieldsReadPath(target.groupId)));
+          const match = rows.find((row) => matchesLocalKey(row, target.fieldKey));
+          if (match) actual.set(target.identity, match);
+        } catch (err) {
+          error(
+            `Backup fetch failed for ${target.identity}: ${formatError(err)}. Nothing was deleted — ` +
+              `resolve the error and re-run.`,
+          );
+          process.exitCode = 1;
+          return;
+        }
+      }
       const backupPath = await writeBackup(resolveBackupDir(opts.backupDir, statePath), config.host, actual);
       info(`Backup written: ${backupPath}`);
 
-      warn(`About to DELETE: ${ordered.join(", ")}`);
+      warn(`About to DELETE: ${[...ordered, ...memberFieldTargets.map((t) => t.identity)].join(", ")}`);
       // Type-level risk (see `destroyWarnings`): surfaced before the prompt, and it takes `--force`
       // away for this run so the delete cannot go through unattended.
       const risky = destroyWarnings(state, ordered);
@@ -192,7 +365,12 @@ export function destroyCommand(): Command {
       }
       // Protected env (#22): typed confirmation of the env NAME is mandatory and --force does NOT bypass
       // it (--confirm-env <name> substitutes in CI). Otherwise the usual per-target typed confirmation.
-      const expected = targets.length === 1 ? targets[0]! : "destroy";
+      const expected =
+        targets.length === 1 && memberFieldTargets.length === 0
+          ? targets[0]!
+          : targets.length === 0 && memberFieldTargets.length === 1
+            ? memberFieldTargets[0]!.identity
+            : "destroy";
       const ok = cmdEnv.protected
         ? await confirmEnv(cmdEnv.name!, { confirmFlag: opts.confirmEnv })
         : await confirmTyped(expected, { force: opts.force && risky.length === 0 });
@@ -206,7 +384,27 @@ export function destroyCommand(): Command {
         return;
       }
 
-      await runDeleteLoop({ client, state, statePath, ordered });
+      // Member fields FIRST: they are owned by their group, so deleting the group would take them
+      // with it and the explicit per-field record would be lost.
+      if (memberFieldTargets.length > 0) {
+        const fieldsDone = await runMemberFieldDeleteLoop({
+          client,
+          state,
+          statePath,
+          targets: memberFieldTargets,
+        });
+        if (!fieldsDone) {
+          // A field that could not be deleted must not be deleted anyway as collateral of its
+          // owning group's destroy — and the user was just told nothing further would happen.
+          if (ordered.length > 0) {
+            error(`Not destroying ${ordered.join(", ")} — a member field on it could not be deleted first.`);
+          }
+          return;
+        }
+      }
+      if (ordered.length > 0) {
+        await runDeleteLoop({ client, state, statePath, ordered });
+      }
     });
 }
 

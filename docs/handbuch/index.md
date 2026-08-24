@@ -38,6 +38,10 @@ each page marks explicitly what was **verified** and what is still an
 - **[Field definitions](field-definitions.md)** — the person master-data model,
   security levels, and person/group custom-field _definitions_: what is readable
   over REST, what is writable, and where the boundary to per-record values runs.
+- **[Group member fields](group-member-fields.md)** — the field definitions a
+  group asks its members for: why their identity is scoped by the owning group,
+  how they are adopted portably (no ChurchTools ids), and why nothing is ever
+  deleted just because it left the config.
 - **[Blueprints](blueprints.md)** — describing a repeated structure (e.g. one
   campus's area scaffold) once and instantiating it per campus.
 
