@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { CtClient } from "../api/ctClient.js";
 import { normalizeHost, resolveConfig } from "../config.js";
 import { storeCredentials, readToken, clearCredentials } from "../auth/tokenStore.js";
+import { keychainSessionCache } from "../auth/sessionStore.js";
 import { checkAllEnvAuth, renderEnvAuth, allEnvsAuthenticated } from "../auth/status.js";
 import { authedSession } from "../api/session.js";
 import { prepareEnvHost } from "../env/context.js";
@@ -53,8 +54,10 @@ export function authCommand(): Command {
         return;
       }
       const config = { host: normalizeHost(rawHost) };
-      const client = new CtClient(config);
-      const me = await client.authenticate(token);
+      const client = new CtClient(config, { sessionCache: keychainSessionCache() });
+      // `fresh`: a login must actually prove the token, never be answered from a
+      // cached session — but the session it buys is cached for the next command.
+      const me = await client.authenticate(token, { fresh: true });
       const location = await storeCredentials({ host: config.host, token });
       success(`Logged in to ${config.host} as ${me.firstName ?? ""} ${me.lastName ?? ""} (#${me.id})`.trim());
       info(`Host + token stored in ${location}.`);
