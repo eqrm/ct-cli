@@ -102,27 +102,65 @@ async function resolveGroupId(
 }
 
 /**
+ * Resolve one `/groups/{id}/children` row to the group id it points at.
+ *
+ * CT answers this endpoint with either plain group rows (`{ id }`) or domain resources
+ * (`{ domainType: "group", domainIdentifier, apiUrl }`). For a domain resource the authoritative
+ * group id is `domainIdentifier` — a sibling `id`, if CT ever emits one, is the hierarchy edge's
+ * own id — so `domainIdentifier` is read first and `id` only backs it up. `apiUrl` is the last
+ * resort. `parentId` is threaded in purely so the error names the group that actually failed:
+ * `--children-of` walks whole subtrees, and "some group somewhere" is not actionable.
+ */
+function childId(raw: unknown, parentId: number): number {
+  let candidate: unknown = raw;
+  if (raw !== null && typeof raw === "object") {
+    const child = raw as Record<string, unknown>;
+    candidate = child.domainIdentifier ?? child.id;
+    if (candidate == null && typeof child.apiUrl === "string") {
+      candidate = /\/groups\/(\d+)(?:[/?#]|$)/.exec(child.apiUrl)?.[1];
+    }
+  }
+
+  const id =
+    typeof candidate === "number"
+      ? candidate
+      : typeof candidate === "string" && /^\d+$/.test(candidate.trim())
+        ? Number.parseInt(candidate, 10)
+        : Number.NaN;
+  if (!Number.isSafeInteger(id) || id < 0) {
+    const shape =
+      raw !== null && typeof raw === "object"
+        ? `{ ${Object.keys(raw as Record<string, unknown>).join(", ")} }`
+        : JSON.stringify(raw);
+    throw new Error(
+      `GET /groups/${parentId}/children returned a child without a usable id (${shape}); ` +
+        `expected a number or an object with id, domainIdentifier, or apiUrl.`,
+    );
+  }
+  return id;
+}
+
+/**
  * Recursively collect a group's full hierarchy subtree via `/groups/{id}/children`, in
  * parent-before-child (pre-order) sequence, excluding the root itself. Guards against a cyclic
  * hierarchy (a live-API bug, not a valid DAG state) with a `visited` set — never re-descends into
  * an id already seen, so a back-reference to an ancestor cannot loop forever.
+ *
+ * `/groups/{id}/children` is a paginated list endpoint, so it is read with `getAll`, never a plain
+ * `get` (#101): a plain GET returns only CT's default first page, which would silently drop the
+ * tail of a wide Bereich and every subtree hanging off it. `getAll` also absorbs CT's inconsistent
+ * page shapes (bare array vs. `{ data: [...] }`) and an empty 204 body, which for a leaf group is
+ * simply "no children".
  */
-async function collectSubtreeIds(rootId: number, client: Pick<CtClient, "get">): Promise<number[]> {
+async function collectSubtreeIds(rootId: number, client: Pick<CtClient, "getAll">): Promise<number[]> {
   const visited = new Set<number>([rootId]);
   const order: number[] = [];
 
   async function walk(id: number): Promise<void> {
-    let raw: unknown;
-    try {
-      raw = await client.get(`/groups/${id}/children`);
-    } catch (err) {
-      if (err instanceof CtApiError && err.status === 404) return; // no children (leaf, or unknown group)
-      throw err;
-    }
-    const children = Array.isArray(raw) ? raw : [];
-    for (const c of children) {
-      const cid = typeof c === "number" ? c : Number((c as Record<string, unknown> | null)?.id);
-      if (!Number.isFinite(cid) || visited.has(cid)) continue;
+    const page = await client.getAll<unknown>(`/groups/${id}/children`);
+    for (const c of page.data) {
+      const cid = childId(c, id);
+      if (visited.has(cid)) continue;
       visited.add(cid);
       order.push(cid);
       await walk(cid);
