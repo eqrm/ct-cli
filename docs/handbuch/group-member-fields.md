@@ -1,5 +1,5 @@
 ---
-sources_hash: 43f62be625184052
+sources_hash: 0dd7d04768dda2d2
 title: Group member fields
 sources:
   - src/engine/member-fields.ts
@@ -179,6 +179,11 @@ It carries the same guardrails as any other destroy: a pre-delete backup of the
 field definition, a typed confirmation, and the owning group's `preventDestroy`
 — protecting a group protects the fields it owns.
 
+If a field cannot be deleted, the run stops there **and holds back any
+`--target` groups in the same command**. Deleting the owning group would take
+the field with it as collateral, so a run that just reported it could not delete
+a field must not delete it anyway.
+
 ## Referencing a field from a dynamic ruleset
 
 A ruleset must not freeze one host's field id into a file that is applied
@@ -187,6 +192,12 @@ elsewhere, so a member field is referenced by its portable identity:
 ```ts
 ref.groupMemberField("ojbp_2026_27_praktikum_1", "wahl");
 ```
+
+Local keys are compared in their **normalised** form throughout — `"Wahl"` and
+`"wahl"` are the same field, whether they appear in a declaration, in a
+reference, in `ct destroy --member-field`, or as ChurchTools' own
+`referenceName` on the live row. Two declarations in one group that differ only
+in case are therefore rejected as duplicates.
 
 Three things follow:
 

@@ -11,6 +11,14 @@ import { memberFieldPseudo, isGroupScopedMemberField } from "../src/engine/membe
 const HOST = "https://mychurch.church.tools";
 
 /**
+ * `renderPlan` colours its output, and picocolors decides that at module load: on a CI runner the
+ * ambient `CI` env var forces colour ON, so a pinned plan string only matches locally. Compare the
+ * plain text — the colours are render.test.ts's subject, not this file's.
+ */
+// eslint-disable-next-line no-control-regex
+const plain = (s: string): string => s.replace(/\u001b\[[0-9;]*m/g, "");
+
+/**
  * An in-memory ChurchTools double for group member fields (#135).
  *
  * Deliberately models the ONE property that makes them interesting: a member field lives under its
@@ -210,7 +218,7 @@ describe("group member fields — plan (#135)", () => {
     const ct = makeCt();
     const state = stateWith({});
     const { plan } = await buildPlan(ct.client, state, [praktikum("praktikum_1", "Praktikum 1")]);
-    const rendered = renderPlan(plan);
+    const rendered = plain(renderPlan(plan));
     expect(rendered).toContain("+ group.praktikum_1");
     expect(rendered).toContain('memberField:wahl: {"name":"Wahl","fieldTypeCode":"text"}');
     expect(rendered).toContain("Plan: 1 to create, 0 to update, 0 to delete.");
@@ -237,7 +245,7 @@ describe("group member fields — plan (#135)", () => {
       memberFields: [{ key: "wahl", name: "Wahl (neu)", fieldTypeCode: "text" }],
     });
     const { plan } = await buildPlan(ct.client, state, resources);
-    const rendered = renderPlan(plan);
+    const rendered = plain(renderPlan(plan));
     expect(rendered).toContain("~ group.praktikum_1 (#100)");
     expect(rendered).toContain(
       'memberField:wahl: {"name":"Wahl","fieldTypeCode":"text"} -> {"name":"Wahl (neu)","fieldTypeCode":"text"}',
@@ -258,7 +266,7 @@ describe("group member fields — plan (#135)", () => {
     ct.memberFields[gid] = ct.memberFields[gid]!.map((r) => ({ ...r, sortKey: 7, nameTranslated: null }));
 
     const again = await buildPlan(ct.client, state, [praktikum("praktikum_1", "Praktikum 1")]);
-    expect(renderPlan(again.plan)).toBe("No changes. Desired state matches ChurchTools.");
+    expect(plain(renderPlan(again.plan))).toBe("No changes. Desired state matches ChurchTools.");
   });
 
   it("surfaces an undeclared live field as a DELETE CANDIDATE and never plans a delete", async () => {
@@ -279,7 +287,7 @@ describe("group member fields — plan (#135)", () => {
       { ...praktikum("praktikum_1", "Praktikum 1"), key: "praktikum_1" },
     ]);
     expect(plan.items.every((i) => i.action !== "delete")).toBe(true);
-    expect(renderPlan(plan)).toBe("No changes. Desired state matches ChurchTools.");
+    expect(plain(renderPlan(plan))).toBe("No changes. Desired state matches ChurchTools.");
     expect(warnings.join("\n")).toMatch(
       /praktikum_1::alt.*DELETE CANDIDATE.*ct destroy --member-field praktikum_1::alt/s,
     );

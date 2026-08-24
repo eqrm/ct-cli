@@ -6,7 +6,7 @@ sources:
   - src/engine/dynamic.ts
   - src/engine/synthetic.ts
   - src/commands/adopt-group.ts
-sources_hash: 69a1413762039f5c
+sources_hash: a0be8585fb6a48dc
 reviewed: 2026-08-17
 ---
 
@@ -94,7 +94,9 @@ The resolver maps it to this host's id from
 `GET /groups/{groupId}/memberfields`. A field this config declares but that does
 not exist on the host yet resolves to a pending marker and is completed during
 apply, right after the create that minted it. A reference to a field the target
-group does not declare fails at config-eval time, before any network call. See
+group does not declare fails at config-eval time, before any network call — the
+declared key and the referenced one being compared in their normalised form, so
+`"Wahl"` finds a field declared as `wahl`. See
 [Group member fields](group-member-fields.md).
 
 ## Supplying a ruleset — three ways
