@@ -41,9 +41,14 @@ export function renderBySubject(dataset: PermissionDataset): string {
     string,
     Array<{ subject: PermissionSubject; assignments: PermissionAssignment[] }>
   >();
+  const emptySubjects: PermissionSubject[] = [];
   for (const [key, list] of bySubject) {
     const subject = subjects.get(key);
     if (!subject) continue;
+    if (list.length === 0) {
+      emptySubjects.push(subject);
+      continue;
+    }
     const hash = permissionSetHash(list);
     const group = groups.get(hash) ?? [];
     group.push({ subject, assignments: list });
@@ -73,6 +78,15 @@ export function renderBySubject(dataset: PermissionDataset): string {
       if (a.object) lines.push(`    * ${objectText(a.object)}`);
     }
     lines.push("");
+  }
+  if (emptySubjects.length > 0) {
+    lines.push("# Keine Berechtigungen");
+    for (const subject of emptySubjects.sort((a, b) =>
+      `${a.type} ${a.label}`.localeCompare(`${b.type} ${b.label}`),
+    )) {
+      lines.push(`## ${subject.type} ${subject.label}`);
+    }
+    lines.push("", "(keine Berechtigungen)", "");
   }
   return lines.join("\n").trimEnd() + "\n";
 }

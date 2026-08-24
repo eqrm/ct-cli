@@ -1,221 +1,29 @@
 import type { CtClient } from "../../api/ctClient.js";
 import { fetchPermissionRows, type PermissionReader } from "../../permissions/fetch.js";
 import type { RawPermission } from "../../permissions/grants.js";
-import type {
-  PermissionAssignment,
-  PermissionDataset,
-  PermissionObject,
-  PermissionSubject,
-} from "./model.js";
-
-interface RawEntry {
-  [key: string]: unknown;
-}
-interface RawAuthSubject extends RawEntry {
-  person?: string;
-  person_id?: string | number;
-  grouptype?: string;
-  grouptypeMemberstatus_id?: string | number;
-  membertype?: string;
-  group?: string;
-  group_id?: string | number;
-  role?: string;
-  groupMemberstatus_id?: string | number;
-  auth?: Record<string, unknown>;
-  resolved_auth?: Array<Record<string, unknown>>;
-}
-
-export interface ChurchAuthMasterData {
-  auth_by_person?: Record<string, RawAuthSubject>;
-  auth_by_status?: Record<string, RawAuthSubject>;
-  auth_by_grouptypes?: Record<string, RawAuthSubject[]>;
-  auth_by_groups?: Record<string, Record<string, RawAuthSubject>>;
-}
-
-interface ChurchAuthResponse {
-  data?: ChurchAuthMasterData & LiveMasterData;
-  response?: ChurchAuthMasterData;
-  auth_by_person?: ChurchAuthMasterData["auth_by_person"];
-  auth_by_status?: ChurchAuthMasterData["auth_by_status"];
-  auth_by_grouptypes?: ChurchAuthMasterData["auth_by_grouptypes"];
-  auth_by_groups?: ChurchAuthMasterData["auth_by_groups"];
-}
-
-interface RawRightDefinition {
-  id?: string | number;
-  datenfeld?: string | null;
-  bezeichnung?: string;
-}
-
-type MasterDataTable = Record<string, unknown> | unknown[];
-
-interface LiveMasterData {
-  auth_table?: Record<string, Record<string, RawRightDefinition>>;
-  churchauth?: Record<string, MasterDataTable>;
-}
-
-interface LiveRight {
-  authId: number;
-  name: string;
-  technicalName: string;
-  scopeField: string | null;
-}
-
-const RIGHT_RE = /^(.*?)\s+\[([^\]]+)\]\s+\(auth_table:\s*([^)]+)\)$/;
-// Consume exactly the one separator space inserted before the metadata. Any additional space
-// belongs to the ChurchTools label and must remain visible in this lossless report.
-const OBJECT_RE = /^(.*) \(([^:()]+):\s*([^)]+)\)$/;
-
-function rightInfo(
-  value: string,
-  authId: string,
-): { name: string; technicalName?: string; authId: string | number } {
-  const match = RIGHT_RE.exec(value.trim());
-  return match
-    ? { name: match[1] ?? value.trim(), technicalName: match[2], authId: match[3] || authId }
-    : { name: value.trim(), authId };
-}
-
-function objectInfo(value: string, id: string): PermissionObject {
-  const match = OBJECT_RE.exec(value.trim());
-  return match
-    ? { label: match[1] ?? value.trim(), type: match[2] ?? "unknown", id: match[3] ?? id }
-    : { label: value.trim(), type: "unknown", id };
-}
-
-function addResolved(
-  subject: PermissionSubject,
-  raw: RawAuthSubject,
-  output: PermissionAssignment[],
-): Set<string> {
-  const seen = new Set<string>();
-  for (const item of raw.resolved_auth ?? []) {
-    for (const [rightLabel, objects] of Object.entries(item)) {
-      const parsed = rightInfo(rightLabel, rightLabel);
-      const authId = String(parsed.authId);
-      if (Array.isArray(objects)) {
-        for (const entry of objects) {
-          if (!entry || typeof entry !== "object") continue;
-          for (const [label, id] of Object.entries(entry)) {
-            const object = objectInfo(label, String(id));
-            output.push({ subject, right: parsed, object });
-            seen.add(`${authId}:${String(id)}`);
-          }
-        }
-      } else {
-        output.push({ subject, right: parsed });
-        seen.add(`${authId}:`);
-      }
-    }
-  }
-  return seen;
-}
-
-function addRawFallback(
-  subject: PermissionSubject,
-  raw: RawAuthSubject,
-  output: PermissionAssignment[],
-  seen: Set<string>,
-): void {
-  for (const [authId, scope] of Object.entries(raw.auth ?? {})) {
-    // The legacy PHP fixture uses [] for "no assignment" on a few catalog rights. It is not an
-    // unscoped grant and must not become a synthetic `authId N [N]` report line.
-    if (Array.isArray(scope) && scope.length === 0) continue;
-    if (Array.isArray(scope)) {
-      for (const value of scope) {
-        const id = String(value);
-        if (!seen.has(`${authId}:${id}`)) {
-          output.push({
-            subject,
-            right: { authId, name: `authId ${authId}` },
-            object: objectInfo("Objekt", id),
-          });
-        }
-      }
-      continue;
-    }
-    if (scope && typeof scope === "object" && !Array.isArray(scope)) {
-      for (const [id] of Object.entries(scope)) {
-        if (!seen.has(`${authId}:${id}`))
-          output.push({
-            subject,
-            right: { authId, name: `authId ${authId}` },
-            object: objectInfo(`Objekt`, id),
-          });
-      }
-    } else if (!seen.has(`${authId}:`)) {
-      output.push({ subject, right: { authId, name: `authId ${authId}` } });
-    }
-  }
-}
-
-function readSubject(
-  type: string,
-  id: string | number,
-  label: string,
-  raw: RawAuthSubject,
-  objectLabel?: string,
-): { subject: PermissionSubject; assignments: PermissionAssignment[] } {
-  const subject = { type, id, label, ...(objectLabel ? { objectLabel } : {}) };
-  const result: PermissionAssignment[] = [];
-  const seen = addResolved(subject, raw, result);
-  addRawFallback(subject, raw, result, seen);
-  return { subject, assignments: result };
-}
-
-export function collectPermissionAssignments(data: ChurchAuthMasterData): PermissionDataset {
-  const subjects: PermissionSubject[] = [];
-  const assignments: PermissionAssignment[] = [];
-  const add = (entry: ReturnType<typeof readSubject>): void => {
-    subjects.push(entry.subject);
-    assignments.push(...entry.assignments);
-  };
-  for (const [label, raw] of Object.entries(data.auth_by_person ?? {})) {
-    add(readSubject("PRS", raw.person_id ?? label, label, raw));
-  }
-  for (const [label, raw] of Object.entries(data.auth_by_status ?? {})) {
-    add(readSubject("ST", label, label, raw));
-  }
-  for (const [groupType, rows] of Object.entries(data.auth_by_grouptypes ?? {})) {
-    for (const raw of rows ?? []) {
-      const role = raw.membertype ?? "";
-      const label = `${groupType.split(/\s+/)[0] ?? groupType} ${role}`.trim();
-      add(readSubject("GTRL", raw.grouptypeMemberstatus_id ?? label, label, raw, `${groupType}: [${role}]`));
-    }
-  }
-  for (const [group, roles] of Object.entries(data.auth_by_groups ?? {})) {
-    for (const [role, raw] of Object.entries(roles ?? {})) {
-      const row = raw as RawAuthSubject;
-      const label = `${group} ${row.role ?? role}`.trim();
-      add(
-        readSubject(
-          "GRRL",
-          row.groupMemberstatus_id ?? `${row.group_id ?? group}:${role}`,
-          label,
-          row,
-          `${group}: [${row.role ?? role}]`,
-        ),
-      );
-    }
-  }
-  return { subjects, assignments };
-}
+import {
+  fetchChurchAuthMasterData,
+  permissionRightDefinitions,
+  type ChurchAuthMasterData,
+  type ChurchAuthMasterDataTable,
+  type PermissionRightDefinition,
+} from "../../permissions/masterdata.js";
+import type { PermissionAssignment, PermissionDataset, PermissionSubject } from "./model.js";
 
 export async function collectLivePermissions(
   client: PermissionReader & Pick<CtClient, "legacyPostForm">,
 ): Promise<PermissionDataset> {
-  const [masterResponse, person, status, groupTypeRole, groupRole] = await Promise.all([
-    client.legacyPostForm<ChurchAuthResponse>("churchauth/ajax", { func: "getMasterData" }),
+  const [master, person, status, groupTypeRole, groupRole] = await Promise.all([
+    fetchChurchAuthMasterData(client),
     fetchPermissionRows(client, "/permissions/person"),
     fetchPermissionRows(client, "/permissions/status"),
     fetchPermissionRows(client, "/permissions/group_type_role"),
     fetchPermissionRows(client, "/permissions/group_role"),
   ]);
-  const master = (masterResponse.data ?? masterResponse) as LiveMasterData;
   return collectLiveRows(master, { person, status, group_type_role: groupTypeRole, group_role: groupRole });
 }
 
-function rowsById(table: MasterDataTable | undefined): Map<string, Record<string, unknown>> {
+function rowsById(table: ChurchAuthMasterDataTable | undefined): Map<string, Record<string, unknown>> {
   const result = new Map<string, Record<string, unknown>>();
   if (!table || typeof table !== "object") return result;
   for (const [key, value] of Object.entries(table)) {
@@ -235,24 +43,6 @@ function labelOf(row: Record<string, unknown> | undefined, fallback: string): st
     if (typeof value === "string" && value.trim()) return value;
   }
   return fallback;
-}
-
-function liveRightCatalog(authTable: LiveMasterData["auth_table"]): Map<number, LiveRight> {
-  const result = new Map<number, LiveRight>();
-  for (const [module, definitions] of Object.entries(authTable ?? {})) {
-    for (const [technicalName, raw] of Object.entries(definitions ?? {})) {
-      const authId = Number(raw.id);
-      if (!Number.isFinite(authId) || result.has(authId)) continue;
-      result.set(authId, {
-        authId,
-        name: raw.bezeichnung?.trim() || `${module}:${technicalName}`,
-        technicalName,
-        scopeField:
-          raw.datenfeld == null || String(raw.datenfeld).trim() === "" ? null : String(raw.datenfeld),
-      });
-    }
-  }
-  return result;
 }
 
 function liveSubject(
@@ -307,11 +97,13 @@ function liveSubject(
 
 type LiveRows = Record<"person" | "status" | "group_type_role" | "group_role", RawPermission[]>;
 
-function collectLiveRows(master: LiveMasterData, rows: LiveRows): PermissionDataset {
+function collectLiveRows(master: ChurchAuthMasterData, rows: LiveRows): PermissionDataset {
   const rawTables = master.churchauth ?? {};
   const tables: Record<string, Map<string, Record<string, unknown>>> = {};
   for (const [name, table] of Object.entries(rawTables)) tables[name] = rowsById(table);
-  const rights = liveRightCatalog(master.auth_table);
+  const rights = new Map<number, PermissionRightDefinition>(
+    permissionRightDefinitions(master).map((definition) => [definition.authId, definition]),
+  );
   const result = new Map<string, PermissionAssignment>();
 
   const subjects = new Map<string, PermissionSubject>();
@@ -319,9 +111,10 @@ function collectLiveRows(master: LiveMasterData, rows: LiveRows): PermissionData
     subjects.set(`${subject.type}\0${String(subject.id)}`, subject);
   };
 
-  // Matching the legacy report, empty catalog subjects are emitted only for statuses and
-  // group-type roles. PRS and concrete GRRL subjects are added below only when a permission row
-  // references them; mere existence as a person or group-role pairing is not enough.
+  // Empty statuses and group-type roles are intentionally visible: an expected role/status with no
+  // direct rights is a useful permission gap. Listing every empty person and concrete group-role
+  // pairing would instead drown those gaps in thousands of irrelevant rows, so PRS/GRRL enter the
+  // dataset only when a direct permission row references them.
   for (const id of tables.status?.keys() ?? []) addSubject(liveSubject("status", Number(id), tables));
   for (const id of tables.grouptypeMemberstatus?.keys() ?? [])
     addSubject(liveSubject("group_type_role", Number(id), tables));
@@ -334,7 +127,11 @@ function collectLiveRows(master: LiveMasterData, rows: LiveRows): PermissionData
       const assignment: PermissionAssignment = {
         subject,
         right: right
-          ? { authId: right.authId, name: right.name, technicalName: right.technicalName }
+          ? {
+              authId: right.authId,
+              name: right.description.trim() || `${right.module}:${right.technicalName}`,
+              technicalName: right.technicalName,
+            }
           : { authId: row.authId, name: `authId ${row.authId}` },
         effect: row.type,
       };

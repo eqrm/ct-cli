@@ -17,9 +17,7 @@ export function permissionSetHash(assignments: PermissionAssignment[]): string {
   // Names and ids both belong to the documented fingerprint: ids distinguish equally named
   // objects, while a rename deliberately changes the report hash.
   const values = [...new Set(assignments.map(canonical))].sort();
-  // The old PHP report used 32-character fingerprints. MD5 is used only as a stable
-  // report fingerprint, never for authentication or integrity.
-  // Preserve its fingerprint for the empty JSON permission set (`md5("[]")`).
-  const serialized = values.length === 0 ? "[]" : values.join("\n");
-  return createHash("md5").update(serialized).digest("hex");
+  // MD5 is used only as a compact deterministic grouping key, never for authentication or
+  // integrity. Empty sets are rendered explicitly and never exposed as a misleading fingerprint.
+  return createHash("md5").update(values.join("\n")).digest("hex");
 }

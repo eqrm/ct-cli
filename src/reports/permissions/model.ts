@@ -4,7 +4,7 @@ export interface PermissionSubject {
   type: PermissionSubjectType;
   id: string | number;
   label: string;
-  /** Expanded label used by the historical by-object report, e.g. "Group: [Role]". */
+  /** Expanded label used by the object-oriented report, e.g. "Group: [Role]". */
   objectLabel?: string;
 }
 

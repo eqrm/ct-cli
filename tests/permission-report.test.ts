@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { permissionReportTargets } from "../src/commands/report.js";
-import {
-  collectLivePermissions,
-  collectPermissionAssignments,
-  type ChurchAuthMasterData,
-} from "../src/reports/permissions/collect.js";
+import { collectLivePermissions } from "../src/reports/permissions/collect.js";
 import { permissionSetHash } from "../src/reports/permissions/hash.js";
 import { renderByObject, renderBySubject } from "../src/reports/permissions/render.js";
 import type { PermissionAssignment, PermissionDataset } from "../src/reports/permissions/model.js";
@@ -87,10 +83,6 @@ describe("permission report hashing", () => {
     const value = assignment({ type: "PRS", id: 1, label: "Person" });
     expect(permissionSetHash([value])).toBe(permissionSetHash([value, value]));
   });
-
-  it("uses the legacy fingerprint for the empty permission set", () => {
-    expect(permissionSetHash([])).toBe("d751713988987e9331980363e24189ce");
-  });
 });
 
 describe("permission report renderers", () => {
@@ -125,7 +117,7 @@ describe("permission report renderers", () => {
     expect(renderByObject(dataset(assignments))).toContain("## Personen sehen (auth_table: 1)");
   });
 
-  it("renders known subjects with no rights under the shared empty-set hash", () => {
+  it("renders known subjects with no rights explicitly and without a fingerprint", () => {
     const text = renderBySubject(
       dataset(
         [],
@@ -135,67 +127,16 @@ describe("permission report renderers", () => {
         ],
       ),
     );
-    expect(text).toContain("# d751713988987e9331980363e24189ce");
+    expect(text).toContain("# Keine Berechtigungen");
     expect(text).toContain("## ST Ohne Statusrechte");
     expect(text).toContain("## GTRL Team Beobachter");
+    expect(text).toContain("(keine Berechtigungen)");
+    expect(text).not.toMatch(/^# [a-f0-9]{32}$/m);
     expect(text).not.toMatch(/^\* /m);
   });
 });
 
 describe("churchauth collector", () => {
-  it("does not turn a legacy empty scope array into an unscoped grant", () => {
-    expect(
-      collectPermissionAssignments({
-        auth_by_status: { Aktiv: { auth: { "502": [] }, resolved_auth: [] } },
-      }),
-    ).toEqual({
-      subjects: [{ type: "ST", id: "Aktiv", label: "Aktiv" }],
-      assignments: [],
-    });
-  });
-
-  it("deduplicates a legacy array scope already represented by resolved_auth", () => {
-    const { assignments } = collectPermissionAssignments({
-      auth_by_status: {
-        Aktiv: {
-          auth: { "502": ["0"] },
-          resolved_auth: [
-            {
-              "Wiki sehen [view category] (auth_table: 502)": [
-                { "Gemeindeinformationen (cc_wikicategory: 0)": 0 },
-              ],
-            },
-          ],
-        },
-      },
-    });
-    expect(assignments).toHaveLength(1);
-    expect(assignments[0]?.object).toEqual({
-      type: "cc_wikicategory",
-      id: "0",
-      label: "Gemeindeinformationen",
-    });
-  });
-
-  it("preserves a trailing space in a legacy object label", () => {
-    const { assignments } = collectPermissionAssignments({
-      auth_by_status: {
-        Aktiv: {
-          auth: { "502": { "15": "15" } },
-          resolved_auth: [
-            {
-              "Wiki sehen [view category] (auth_table: 502)": [
-                { "EG Kinderkirche  (cc_calcategory: 15)": 15 },
-              ],
-            },
-          ],
-        },
-      },
-    });
-    expect(assignments[0]?.object?.label).toBe("EG Kinderkirche ");
-    expect(renderByObject(dataset(assignments))).toContain("## EG Kinderkirche  (cc_calcategory: 15)");
-  });
-
   it("keeps live categories distinct when only one has a trailing space", async () => {
     const rows = {
       "/permissions/person": [
@@ -242,19 +183,18 @@ describe("churchauth collector", () => {
 
   it("uses the existing authenticated AJAX reader without contacting a live instance in the test", async () => {
     const calls: Array<[string, Record<string, string>]> = [];
-    const data: ChurchAuthMasterData = { auth_by_status: {} };
     const result = await collectLivePermissions({
       get: async <T>() => [] as T,
       legacyPostForm: async <T>(module: string, params: Record<string, string>) => {
         calls.push([module, params]);
-        return data as T;
+        return { data: { auth_table: {}, churchauth: {} } } as T;
       },
     });
     expect(result).toEqual({ subjects: [], assignments: [] });
     expect(calls).toEqual([["churchauth/ajax", { func: "getMasterData" }]]);
   });
 
-  it("joins live permission domains with right, subject and scope master data", async () => {
+  it("joins live domains and exposes empty ST/GTRL gaps without listing every empty PRS/GRRL", async () => {
     const paths: string[] = [];
     const rows = {
       "/permissions/person": [{ domainId: 10, authId: 502, dataId: 7, type: "grant", isInherited: false }],
@@ -349,6 +289,8 @@ describe("churchauth collector", () => {
         },
       ]),
     );
+    // Empty statuses and type roles expose actionable permission gaps.
+    // Empty people and concrete role pairings would only flood the report with irrelevant rows.
     expect(result.subjects).not.toContainEqual({ type: "PRS", id: 11, label: "Chuck Norris" });
     expect(result.subjects).not.toContainEqual(expect.objectContaining({ type: "GRRL", id: 31 }));
     const subjectReport = renderBySubject(result);
@@ -356,62 +298,5 @@ describe("churchauth collector", () => {
     expect(subjectReport).not.toContain("## GRRL Technik Beobachter");
     expect(subjectReport).toContain("## ST Ohne Rechte");
     expect(subjectReport).toContain("## GTRL Eventgruppe Beobachter");
-  });
-
-  it("keeps all subject types and non-declarable dimensions", () => {
-    const data: ChurchAuthMasterData = {
-      auth_by_person: {
-        Anna: {
-          person: "Anna",
-          person_id: "10",
-          auth: { "305": { "1": "1" } },
-          resolved_auth: [
-            {
-              "Dienste bearbeiten [edit servicegroup] (auth_table: 305)": [
-                { "Programm (cs_servicegroup: 1)": 1 },
-              ],
-            },
-          ],
-        },
-      },
-      auth_by_status: {
-        Aktiv: {
-          auth: { "17": "17" },
-          resolved_auth: [{ "Vorlagen verwenden [use template] (auth_table: 17)": 17 }],
-        },
-      },
-      auth_by_grouptypes: {
-        EG: [
-          {
-            grouptypeMemberstatus_id: "20",
-            grouptype: "EG",
-            membertype: "Leiter",
-            auth: { "502": { "-1": "-1" } },
-            resolved_auth: [
-              { "Wiki sehen [view category] (auth_table: 502)": [{ "alle (cc_wikicategory: -1)": -1 }] },
-            ],
-          },
-        ],
-      },
-      auth_by_groups: {
-        Gruppe: {
-          Leiter: {
-            group_id: "30",
-            groupMemberstatus_id: "31",
-            role: "Leiter",
-            auth: { "1105": { "123": "123" } },
-            resolved_auth: [
-              { "Gruppe bearbeiten [edit group] (auth_table: 1105)": [{ "Gruppe (cdb_gruppe: 123)": 123 }] },
-            ],
-          },
-        },
-      },
-    };
-    const { assignments } = collectPermissionAssignments(data);
-    expect(assignments.map((a) => a.subject.type)).toEqual(
-      expect.arrayContaining(["PRS", "ST", "GTRL", "GRRL"]),
-    );
-    expect(assignments.some((a) => a.object?.type === "cc_wikicategory" && a.object.id === "-1")).toBe(true);
-    expect(assignments.some((a) => a.object?.type === "cs_servicegroup")).toBe(true);
   });
 });

@@ -21,6 +21,7 @@ import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CtClient } from "../api/ctClient.js";
 import { useCatalog, type CatalogEntry } from "./catalog.js";
+import { fetchChurchAuthMasterData, permissionRightDefinitions } from "./masterdata.js";
 
 /** Directory a consumer repo commits its per-instance captures into, beside the config/state files. */
 export const CATALOG_DIR = ".ct";
@@ -94,18 +95,6 @@ function assertCatalogShape(parsed: Record<string, unknown>, path: string): void
   }
 }
 
-/** The legacy master-data shape (`auth_table[module][right]`) — see `capturePermissionCatalog`. */
-interface RawRight {
-  id: number;
-  datenfeld?: string | null;
-  bezeichnung?: string | null;
-  isRevocable?: boolean | number;
-}
-interface MasterData {
-  data?: { auth_table?: Record<string, Record<string, RawRight>> };
-  auth_table?: Record<string, Record<string, RawRight>>;
-}
-
 /**
  * Capture the catalog from a live instance and return it in `catalog.json`'s exact schema.
  *
@@ -117,25 +106,15 @@ interface MasterData {
 export async function capturePermissionCatalog(
   client: Pick<CtClient, "legacyPostForm" | "host" | "version">,
 ): Promise<Record<string, unknown>> {
-  const master = (await client.legacyPostForm("churchauth/ajax", { func: "getMasterData" })) as MasterData;
-  const authTable = master?.data?.auth_table ?? master?.auth_table;
-  if (!authTable || typeof authTable !== "object") {
-    throw new Error(
-      "Unexpected response from churchauth/ajax getMasterData: no data.auth_table. The legacy endpoint " +
-        "or its shape may have changed — the bundled catalog is still in use.",
-    );
-  }
+  const master = await fetchChurchAuthMasterData(client);
   const rights: Record<string, CatalogEntry> = {};
-  for (const [moduleName, moduleRights] of Object.entries(authTable)) {
-    for (const [rightName, raw] of Object.entries(moduleRights)) {
-      const field = raw.datenfeld;
-      rights[`${moduleName}:${rightName}`] = {
-        authId: raw.id,
-        scopeField: field && String(field).length > 0 ? String(field) : null,
-        revocable: Boolean(raw.isRevocable),
-        desc: raw.bezeichnung ? String(raw.bezeichnung) : "",
-      };
-    }
+  for (const definition of permissionRightDefinitions(master)) {
+    rights[`${definition.module}:${definition.technicalName}`] = {
+      authId: definition.authId,
+      scopeField: definition.scopeField,
+      revocable: definition.revocable,
+      desc: definition.description,
+    };
   }
   const host = client.host.replace(/^https?:\/\//, "");
   return {

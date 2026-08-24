@@ -5,7 +5,7 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: 3ce80118edd98c48
+sources_hash: f98e4836777ab248
 reviewed: 2026-08-17
 ---
 
@@ -41,14 +41,18 @@ kein Subjekt-Identifier. Seine Identität besteht aus `authId`, Objektdimension,
 Objekt-ID, den zugehörigen Rechte-/Objektnamen und Grant/Revoke. Gleich benannte
 Objekte mit verschiedenen IDs bleiben dadurch verschieden; ebenso erzeugt eine
 Umbenennung bewusst einen neuen Report-Hash. Bekannte Status (`ST`) und
-Gruppentyp-Rollen (`GTRL`) ohne eigene Zuweisung erscheinen ebenfalls: Sie teilen
-sich wie im Legacy-Report den Hash `d751713988987e9331980363e24189ce` der leeren
-Rechte-Menge. Personen (`PRS`) und konkrete Gruppenrollen (`GRRL`) werden dagegen
-nur aufgeführt, wenn mindestens eine direkte Permission existiert. Über Status
-oder Rollen geerbte effektive Personenrechte werden nicht zu einem synthetischen
-Personen-Rechte-Set verrechnet. `object` beantwortet „Wer
-darf auf dieses Objekt was?“ und verwendet die historische Sortierung für
-Status, Gruppentyp, Gruppe und Person, soweit diese Subjekttypen vorhanden sind.
+Gruppentyp-Rollen (`GTRL`) erscheinen auch ohne eigene Zuweisung unter „Keine
+Berechtigungen“. So werden erwartete Status oder Rollen ohne direkte Rechte als
+Berechtigungslücke sichtbar, statt stillschweigend aus dem Report zu
+verschwinden. Eine leere Rechte-Menge erhält bewusst keinen Fingerprint.
+Personen (`PRS`) und konkrete Gruppenrollen (`GRRL`) werden dagegen nur
+aufgeführt, wenn mindestens eine direkte Permission existiert: Alle leeren
+Personen und Rollenpaarungen aufzulisten würde die relevanten Lücken zwischen
+tausenden bedeutungslosen Zeilen verstecken. Über Status oder Rollen geerbte
+effektive Personenrechte werden nicht zu einem synthetischen
+Personen-Rechte-Set verrechnet. `object` beantwortet „Wer darf auf dieses Objekt
+was?“ und sortiert vorhandene Subjekttypen fest nach Status, Gruppentyp, Gruppe
+und Person.
 
 Objektbezeichnungen werden verlustfrei übernommen und insbesondere nicht
 getrimmt. Das ist fachlich relevant, weil ChurchTools zwei Objekte mit
