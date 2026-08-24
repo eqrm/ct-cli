@@ -44,6 +44,18 @@ export interface Credentials {
   token: string;
 }
 
+/**
+ * Whether this platform has a credential store `ct` can write to — today, the
+ * macOS Keychain and nothing else. Exported because callers need to know BEFORE
+ * they collect anything: an interactive login that gathered a password on Linux
+ * could only throw it away again at {@link storeCredentials}, having handled a
+ * secret for nothing. Those platforms keep the `CT_HOST` / `CT_LOGINTOKEN`
+ * guidance instead (#138).
+ */
+export function isSecureStorageAvailable(): boolean {
+  return isMac();
+}
+
 /** Parse the stored blob. Returns null for anything that is not a well-formed {host, token}. */
 export function parseCredentials(raw: string): Credentials | null {
   let parsed: unknown;
