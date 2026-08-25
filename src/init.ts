@@ -25,6 +25,7 @@ const GITIGNORE_TEMPLATE = `# Local secrets
 .env.*
 
 # Generated local output
+backups/
 node_modules/
 reference/
 reports/
@@ -104,6 +105,16 @@ function validateHost(host: string): { host: string; hostname: string } {
   if (url.username || url.password) {
     throw new Error(
       "ChurchTools URL must not contain credentials. Tokens are never written to the scaffold.",
+    );
+  }
+  // A URL copied out of the browser address bar carries the SPA's query and
+  // fragment (".../?q=churchdb#/churchdb"). Every request is built as
+  // `${host}/api/...`, so those would survive into every call. A path is left
+  // alone: it is how a sub-path installation is addressed.
+  if (url.search || url.hash) {
+    throw new Error(
+      `Invalid ChurchTools URL "${host}". Drop the "?"/"#" part and pass the base URL, ` +
+        `e.g. ${url.protocol}//${url.host}${url.pathname === "/" ? "" : url.pathname}.`,
     );
   }
   return { host: normalizeHost(url.toString()), hostname: url.hostname };
@@ -228,7 +239,10 @@ export async function initializeConfigRepository(
   } else if (protectedEnvironment !== undefined) {
     throw new Error("--protected requires --host so the generated environment profile is usable.");
   }
-  if (interactive && initializeGit === undefined) {
+  // Asking about `git init` in a directory that is already a repository would
+  // collect an answer this function then silently drops below.
+  const alreadyGit = await pathExists(resolve(directory, ".git"));
+  if (interactive && initializeGit === undefined && !alreadyGit) {
     const answer = (await ask!("Initialize a Git repository? [y/N] ")).trim();
     initializeGit = /^y(es)?$/i.test(answer);
   }
@@ -286,7 +300,7 @@ export async function initializeConfigRepository(
     ),
   );
 
-  const gitInitialized = initializeGit && !(await pathExists(resolve(directory, ".git")));
+  const gitInitialized = initializeGit && !alreadyGit;
   if (gitInitialized) {
     await (options.runGitInit ?? defaultGitInit)(directory);
   }

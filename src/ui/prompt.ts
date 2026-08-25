@@ -23,25 +23,11 @@ function realAsk(question: string): Promise<string> {
 
 /**
  * Ask a question whose answer must never appear on screen — a password, a TOTP
- * code, a login token (#138).
- *
- * `readline` echoes typed characters through its private `_writeToOutput`. The
- * prompt itself is written synchronously by `rl.question`, so muting straight
- * after it lets the label through and swallows every keystroke after it. The
- * trailing newline is written by hand, since the muted Enter no longer produces
- * one.
+ * code, a login token (#138). Thin alias for `askSecret` below, so there is a
+ * single no-echo code path to reason about.
  */
 export function askHidden(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
-  const muteable = rl as unknown as { _writeToOutput: (chunk: string) => void };
-  return new Promise<string>((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      process.stderr.write("\n");
-      resolve(answer);
-    });
-    muteable._writeToOutput = () => {};
-  });
+  return askSecret(question);
 }
 
 /** Ask a question whose answer is not secret and may echo normally. */
@@ -58,7 +44,13 @@ export interface SecretPromptOptions {
   output?: NodeJS.WritableStream;
 }
 
-/** Read a secret from the terminal without echoing its characters. */
+/**
+ * Read a secret from the terminal without echoing its characters.
+ *
+ * `readline` echoes typed characters to its own output, so it is handed a sink
+ * that discards everything; the prompt label and the closing newline are
+ * written to the real output by hand.
+ */
 export function askSecret(message: string, opts: SecretPromptOptions = {}): Promise<string> {
   const input = opts.input ?? process.stdin;
   const output = opts.output ?? process.stderr;

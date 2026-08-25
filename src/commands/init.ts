@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { bootstrapLoginToken } from "../auth/login.js";
 import { isSecureStorageAvailable } from "../auth/tokenStore.js";
 import { initializeConfigRepository } from "../init.js";
-import { info, success } from "../ui.js";
+import { error, formatError, info, success } from "../ui.js";
 import { verifyAndStoreLoginToken } from "./auth.js";
 
 interface InitCommandOptions {
@@ -61,11 +61,21 @@ export function initCommand(): Command {
             ? `ct plan -e ${result.environment}`
             : `ct coverage --env ${result.environment}`;
         if (process.stdin.isTTY && !opts.yes && isSecureStorageAvailable()) {
-          const outcome = await bootstrapLoginToken(result.host!);
-          if (outcome.kind === "token") {
-            await verifyAndStoreLoginToken(result.host!, outcome.token);
-            info(`Next: run \`${inspectCommand}\`.`);
-            return;
+          // The scaffold is already on disk. A failed or abandoned login must
+          // not fail `ct init`: re-running it would only hit "refusing to
+          // overwrite existing ct.config.ts". Fall through to the login hint,
+          // the way `ct auth login` reports and stops (#138).
+          try {
+            const outcome = await bootstrapLoginToken(result.host!);
+            if (outcome.kind === "token") {
+              await verifyAndStoreLoginToken(result.host!, outcome.token);
+              info(`Next: run \`${inspectCommand}\`.`);
+              return;
+            }
+          } catch (err) {
+            // formatError never sees a secret: LoginError carries a status and
+            // a redacted message, never the request body that was sent.
+            error(formatError(err));
           }
         }
         if (isSecureStorageAvailable()) {

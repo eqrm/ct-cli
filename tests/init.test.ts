@@ -239,6 +239,49 @@ describe("initializeConfigRepository", () => {
     );
   });
 
+  it("rejects a URL copied out of the browser address bar", async () => {
+    const directory = await temporaryDirectory();
+    await expect(
+      initializeConfigRepository(directory, {
+        host: "https://example.church.tools/?q=churchdb#/churchdb",
+        yes: true,
+      }),
+    ).rejects.toThrow(/Drop the "\?"\/"#" part/);
+    await expect(access(join(directory, "ct.envs.json"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    // A path is a sub-path installation, not junk, and stays intact.
+    const result = await initializeConfigRepository(directory, {
+      host: "https://example.church.tools/churchtools",
+      yes: true,
+    });
+    expect(result.host).toBe("https://example.church.tools/churchtools");
+  });
+
+  it("does not ask about git in a directory that is already a repository", async () => {
+    const directory = await temporaryDirectory();
+    await mkdir(join(directory, ".git"), { recursive: true });
+    const ask = vi.fn((question: string) => Promise.resolve(question.startsWith("Initialize") ? "y" : ""));
+    const gitInit = vi.fn(async () => undefined);
+
+    const result = await initializeConfigRepository(directory, { isTTY: true, ask, runGitInit: gitInit });
+
+    expect(ask.mock.calls.flat()).not.toContain("Initialize a Git repository? [y/N] ");
+    expect(result.gitInitialized).toBe(false);
+    expect(gitInit).not.toHaveBeenCalled();
+  });
+
+  it("gitignores the default backup directory of the standard scaffold", async () => {
+    const directory = await temporaryDirectory();
+    await initializeConfigRepository(directory, {
+      host: "https://example.church.tools",
+      yes: true,
+    });
+
+    // `ct apply` writes backups next to the state file, which the standard
+    // scaffold puts at the repository root.
+    expect((await readFile(join(directory, ".gitignore"), "utf8")).split("\n")).toContain("backups/");
+  });
+
   it("prints non-interactive process next steps with an explicit environment", async () => {
     const directory = await temporaryDirectory();
     let stderr = "";
