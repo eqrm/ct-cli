@@ -187,9 +187,12 @@ export const ref = {
    * is conventional REST (`[{id, name, sortKey}]`, plus POST/PUT/DELETE), live-probed on eqrm-dev
    * CT 3.135.2, 2026-08-14.
    *
-   * Catalog-only here, like {@link ref.securityLevel}: resolvable by name on any host, not declarable.
-   * Its REST surface would fit the resource registry unchanged, so promoting it later is a scope
-   * decision rather than a technical one.
+   * DECLARABLE since #151 — `ct.commentViewer({ key, name, sortKey })` — and the promotion was not
+   * cosmetic: this was the last scope dimension a config could not express portably, so a
+   * `churchdb:view comments` grant had to carry a raw host-specific `dataId` that silently means
+   * something else (or nothing) on another host. Resolution now goes managed-state-first, live
+   * `/person/commentviewers` catalog second, so an existing name ref against a viewer this config
+   * does not own keeps working unchanged.
    */
   commentViewer: (key: string): SimpleRef => ({
     __ctRef: true,

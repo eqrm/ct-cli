@@ -256,10 +256,11 @@ confirmation — and a declaration marked `preventDestroy: true` blocks even tha
 | Auto-groups (dynamic groups)                                               | the `dynamic` block on a group                                                                                 | [dynamic groups](docs/handbuch/dynamic-groups.md)           |
 | Group member field definitions (group-scoped, never deleted implicitly)    | the `memberFields` block on a group                                                                            | [group member fields](docs/handbuch/group-member-fields.md) |
 | Repeated structure, parametrized                                           | a plain function over the DSL                                                                                  | [blueprints](docs/handbuch/blueprints.md)                   |
+| Permission scope master data (Bereiche, security levels, comment viewers)  | `ct.department`, `ct.securityLevel`, `ct.commentViewer`                                                        | [permissions](docs/handbuch/permissions.md)                 |
 
-Read-only by design: the person master-data model, security levels and
-custom-field _definitions_ (`ct get person-masterdata`, `ct get data-fields`) —
-schema in scope, per-record values never. See
+Read-only by design: the person master-data model and custom-field
+_definitions_ (`ct get person-masterdata`, `ct get data-fields`) — schema in
+scope, per-record values never. See
 [field definitions](docs/handbuch/field-definitions.md).
 
 References are logical throughout: `groupType: "ministry_team"` resolves to that

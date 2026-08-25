@@ -288,7 +288,7 @@ function grantLines(g: CollapsedGrant, rev: Map<number, ReverseEntry>, state: St
     //     — the whole point of #98, since these ids are host-specific (dev Mainz = 6, prod Mainz = 0),
     //     so a numeric literal adopted from prod is a misgrant when replayed on dev. An unmanaged
     //     dataId keeps its number and earns a NOTE pointing at the one command that fixes it.
-    //  b) The dimension has none (`cc_securitylevel`, `cdb_bereich`, `oauth_client`, …) — its dataIds
+    //  b) The dimension has none (`ccm_data_category`, `oauth_client`, …) — its dataIds
     //     name something this tool has no managed representation for, so the numeric escape hatch
     //     (#49) is the only honest output and the grant is always emitted as an ACTIVE line.
     const out: string[] = [];
@@ -305,9 +305,11 @@ function grantLines(g: CollapsedGrant, rev: Map<number, ReverseEntry>, state: St
     }
     if (g.dataIds.length > 0) {
       const dimension = SCOPE_REF_KIND[entry.scopeField];
-      // A catalog-only dimension (departments) has no managed resource to look an id up in, and this
-      // emitter is deliberately pure — no client, no fetch — so it cannot turn the id into a name.
-      // Emit the number and point at the portable form the author can write by hand.
+      // A catalog-only dimension (`managed: false`) has no managed resource to look an id up in, and
+      // this emitter is deliberately pure — no client, no fetch — so it cannot turn the id into a
+      // name. Emit the number and point at the portable form the author can write by hand. No
+      // dimension is catalog-only today (comment viewers, the last one, became managed in #151);
+      // the branch stays because the flag is what a future read-only dimension would set.
       const sugar = dimension?.managed ? SCOPE_SUGAR_FIELD[dimension.type] : undefined;
       // #115: `-1` is not an id at all — it is ChurchTools' "alle" sentinel, meaning every value of
       // the dimension on whatever host reads it. So it is ALREADY portable, and none of the
@@ -361,9 +363,10 @@ function grantLines(g: CollapsedGrant, rev: Map<number, ReverseEntry>, state: St
             `and re-adopt to make ${one ? "it" : "them all"} portable.`,
         );
       } else if (!dimension) {
-        // Reached only for a dimension with NO logical form at all (`cc_securitylevel`, `oauth_client`,
-        // …). A catalog-only dimension (`cdb_bereich`) already got its own NOTE above — emitting this
-        // line there too would contradict it ("not a group, use numbers" vs "portable form exists").
+        // Reached only for a dimension with NO logical form at all (`ccm_data_category`,
+        // `oauth_client`, …). A catalog-only dimension would already have got its own NOTE above —
+        // emitting this line there too would contradict it ("not a group, use numbers" vs "portable
+        // form exists").
         out.push(
           `    // "${entry.name}" scopes by "${entry.scopeField}", not a group — using its numeric dataId(s) directly.`,
         );

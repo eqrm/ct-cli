@@ -514,6 +514,62 @@ export const RESOURCES: Record<string, AdoptableResource> = {
     deriveKey: (r) => slug(str(r, "name")),
     managedFields: (r) => ({ id: r.id, name: r.name }),
   }),
+  /**
+   * COMMENT VIEWERS (#151) — `cdb_comment_viewer`, the scope dimension of `churchdb:view comments`
+   * ("Kommentare-Viewer"). Managed so a `view comments` grant means the same thing on every host.
+   *
+   * It was catalog-only until now, and that is exactly what made the dimension unportable: a config
+   * granting `churchdb:view comments` had to write a raw, host-specific `dataId`, and the same
+   * number names a different viewer (or nothing) on another instance. Read on two hosts of the same
+   * deployment 2026-08-24: three of prod's six ids do not exist on dev at all, and the two that do
+   * exist on both name different categories on each. Nothing detected the
+   * mismatch — a plan compares the declared id against the live id, and they match; the id is simply
+   * meaningless on the target host. Switching to a name ref did not fix it either: dev lacks the
+   * NAMES too, so the ref failed to resolve rather than resolving wrongly. Only a declarable
+   * resource makes the names exist on both hosts, which is what makes a name ref portable.
+   *
+   * `/person/commentviewers` is conventional REST (`[{id, name, sortKey}]` plus POST/PUT/DELETE,
+   * live-probed on eqrm-dev CT 3.135.2, 2026-08-14), so this needs none of the machinery the other
+   * two awkward master-data types did: CT mints the id (unlike `security-level`) and writes are REST
+   * (unlike `department`).
+   *
+   * `name` and `sortKey` are the whole editable surface — `cdb_comment_viewer` is one of the 3-column
+   * tables in #109's list (`id`, `bezeichnung`, `sortkey`) — so the managed set is complete and a PUT
+   * carrying it cannot blank an unmanaged sibling.
+   */
+  "comment-viewer": define({
+    collectionPath: "/person/commentviewers",
+    updateMethod: "PUT",
+    // Tier 0: grants scope by comment viewer, and permissions apply after every resource tier.
+    tier: 0,
+    destroyWarning:
+      "deleting a comment viewer reaches every person comment restricted to it and every grant " +
+      "scoped to it (`churchdb:view comments`) — the viewer id is referenced instance-wide. Verify " +
+      "it is unused first (`ct get comment-viewers`, `ct report permissions`).",
+    deriveKey: (r) => slug(str(r, "name")),
+    managedFields: (r) => ({ name: r.name, sortKey: r.sortKey }),
+    // `sortKey` is managed but not mandatory in a hand-authored declaration; CT's create validator
+    // for the 3-column master-data tables rejects a missing integer column, so supply a neutral one
+    // (a declared value still wins — createDefaults merges UNDER the body).
+    createDefaults: () => ({ sortKey: 0 }),
+    /**
+     * Read one viewer out of the COLLECTION rather than through `GET {itemPath}`.
+     *
+     * The live probe behind this type recorded the collection read plus POST/PUT/DELETE on the item
+     * path; a GET on the item path was never probed. Guessing it is the one mistake with a genuinely
+     * bad failure mode (#108): a read that 404s reads as "vanished in ChurchTools", so every plan
+     * would propose creating the same viewer again and every apply would duplicate it. The
+     * collection read is the endpoint this tool has actually verified, and with ≤ a handful of rows
+     * per instance it costs nothing. NB `id: 0` ("Alle") is a real row — match on `=== id`, never on
+     * truthiness.
+     */
+    fetchOne: async (client, id) => {
+      const rows = client.getAll
+        ? (await client.getAll<Record<string, unknown>>("/person/commentviewers")).data
+        : ((await client.get?.<Record<string, unknown>[]>("/person/commentviewers")) ?? []);
+      return rows.find((r) => r.id === id) ?? null;
+    },
+  }),
   "group-role": define({
     collectionPath: "/group/roles",
     updateMethod: "PUT",

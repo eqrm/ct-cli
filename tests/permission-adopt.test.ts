@@ -491,19 +491,41 @@ describe("emitAdoptedGrants", () => {
     expect(block).toContain('scope: [{ campus: "koblenz" }, 99]');
   });
 
-  it("a catalog-only dimension gets ONE note — the portable form, not the 'not a group' line", () => {
+  it("points an UNMANAGED comment-viewer scope at `ct adopt comment-viewer` (#151)", () => {
+    // This dimension used to be the last catalog-only one, and got the weaker "portable form:
+    // { commentViewer: \"<name>\" }" note — honest then, useless in practice, because the NAME did
+    // not exist on the other host either. Comment viewers are a managed resource now, so the advice
+    // is the same as for every other dimension: adopt the viewer, then re-adopt the grants.
     const rows: RawPermission[] = [
-      // cdb_comment_viewer — a catalog ct reads but does not manage (#102). Bereiche used to be the
-      // example here; they became a managed resource in #108, so they now take the adopt-hint path.
       { authId: 113, dataId: 4, type: "grant", domainId: 42, meta: { modifiedPid: 5 } },
     ];
     const block = emitAdoptedGrants({ domainType: "group_role", domainId: 42, rows, state: emptyState() });
 
-    expect(block).toContain('Portable form: { commentViewer: "<name>" }');
-    // The numeric-escape-hatch line is for dimensions with NO logical form; emitting it here too
-    // would contradict the portable-form note directly above it.
+    expect(block).toContain("ct adopt comment-viewer 4");
+    // The numeric-escape-hatch line is for dimensions with NO logical form at all.
     expect(block).not.toContain("not a group");
     expect(block).toContain('{ right: "churchdb:view comments", scope: [4] }');
+  });
+
+  it("emits a MANAGED comment-viewer scope as the portable ref form (#151)", () => {
+    const state = emptyState();
+    state.resources.dienstbereich = {
+      type: "comment-viewer",
+      id: 4,
+      key: "dienstbereich",
+      fields: { name: "Dienstbereich", sortKey: 40 },
+      adoptedAt: "t",
+      updatedAt: "t",
+    };
+    const rows: RawPermission[] = [
+      { authId: 113, dataId: 4, type: "grant", domainId: 42, meta: { modifiedPid: 5 } },
+    ];
+    const block = emitAdoptedGrants({ domainType: "group_role", domainId: 42, rows, state });
+
+    // The whole point of #151: what used to be a raw host-specific 4 is now a name that means the
+    // same thing on the host this config is replayed against.
+    expect(block).toContain('scope: [{ commentViewer: "dienstbereich" }]');
+    expect(block).not.toContain("ct adopt comment-viewer");
   });
 
   it("points an unmanaged Bereich scope at `ct adopt department` now that Bereiche are managed (#108)", () => {

@@ -323,6 +323,23 @@ export interface ConfigContext {
    */
   securityLevel(input: ResourceInput): void;
   /**
+   * A COMMENT VIEWER (`/person/commentviewers` — "Kommentare-Viewer"), #151 — the `cdb_comment_viewer`
+   * scope dimension of `churchdb:view comments`.
+   *
+   * ```ts
+   * ct.commentViewer({ key: "dienstbereich", name: "Dienstbereich", sortKey: 40 });
+   * ...
+   * { right: "churchdb:view comments", scope: [{ commentViewer: "dienstbereich" }] }
+   * ```
+   *
+   * The last scope dimension a config could not express portably: before this, a `view comments`
+   * grant had to name a raw numeric `dataId`, which means a different viewer — or nothing — on
+   * another host, and neither `ct plan` nor a row count can see that. Declaring the viewer makes the
+   * NAME exist on every host, which is what makes `{ commentViewer: "…" }` resolve to the same thing
+   * everywhere. Master data (the enumeration), never a person or a comment.
+   */
+  commentViewer(input: ResourceInput): void;
+  /**
    * A BEREICH / department (`/departments`), #108 — the `cdb_bereich` scope dimension of
    * `churchdb:view alldata` ("Personen eines Bereiches sehen").
    *
@@ -772,6 +789,7 @@ export function createContext(): {
     relationshipType: define("relationship-type"),
     personStatus: define("person-status"),
     securityLevel: define("security-level"),
+    commentViewer: define("comment-viewer"),
     department: define("department"),
     roleDefinition: define("group-role"),
     groupRole: definePermission("group_role"),

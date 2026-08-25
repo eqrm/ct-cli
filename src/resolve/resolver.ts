@@ -74,6 +74,11 @@ const REF_KIND_TYPE: Partial<Record<RefKind, string>> = {
   // ordering is what lets a config declare a level and scope a grant to it in the same run (the ref
   // resolves to a PendingRef, carried as a pending scope).
   "security-level": "security-level",
+  // Comment viewers became a managed resource in #151 — same ordering as security levels above, and
+  // for the sharper reason: their ids genuinely differ across hosts of the same deployment, so a
+  // config that declares its viewers must resolve `{ commentViewer: "…" }` against what IT owns
+  // before falling back to `/person/commentviewers` for a viewer it does not.
+  "comment-viewer": "comment-viewer",
   "role-def": "group-role",
   group: "group",
 };

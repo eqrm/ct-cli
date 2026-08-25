@@ -463,14 +463,14 @@ ct.groupRole({
 `{ campus: "koblenz" }` is sugar for `ref.campus("koblenz")` — the same `Ref`
 the rest of the DSL uses — so both spellings are interchangeable.
 
-| `scopeField`         | Reference form                            | Resolved against                                           |
-| -------------------- | ----------------------------------------- | ---------------------------------------------------------- |
-| `cdb_gruppe`         | `{ group: "<key>" }` (or the bare string) | managed groups                                             |
-| `cdb_station`        | `{ campus: "<key>" }`                     | managed campuses, then `GET /campuses`                     |
-| `cdb_gruppentyp`     | `{ groupType: "<key>" }`                  | managed group types, then `GET /group/grouptypes`          |
-| `cdb_bereich`        | `{ department: "<name-slug>" }`           | managed Bereiche, then `GET /departments` (#108)           |
-| `cc_securitylevel`   | `{ securityLevel: "<name-slug>" }`        | managed security levels, then `GET /securitylevels` (#110) |
-| `cdb_comment_viewer` | `{ commentViewer: "<name-slug>" }`        | `GET /person/commentviewers` **only** (#102)               |
+| `scopeField`         | Reference form                            | Resolved against                                                  |
+| -------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
+| `cdb_gruppe`         | `{ group: "<key>" }` (or the bare string) | managed groups                                                    |
+| `cdb_station`        | `{ campus: "<key>" }`                     | managed campuses, then `GET /campuses`                            |
+| `cdb_gruppentyp`     | `{ groupType: "<key>" }`                  | managed group types, then `GET /group/grouptypes`                 |
+| `cdb_bereich`        | `{ department: "<name-slug>" }`           | managed Bereiche, then `GET /departments` (#108)                  |
+| `cc_securitylevel`   | `{ securityLevel: "<name-slug>" }`        | managed security levels, then `GET /securitylevels` (#110)        |
+| `cdb_comment_viewer` | `{ commentViewer: "<name-slug>" }`        | managed comment viewers, then `GET /person/commentviewers` (#151) |
 
 Two `Ref` kinds are deliberately **not** in that table because no permission
 dimension scopes by them: `group-type-role` (a `groupTypeRoleId`, addressed by
@@ -508,23 +508,46 @@ Three things are hard errors at **plan** time, never a guessed `dataId`:
   group", so on e.g. a `cdb_station` right it would either fail confusingly or —
   worse — match an unrelated group that happens to carry that key.
 
-### Catalog dimensions: referenceable, not declarable
+### Comment viewers: the last catalog-only dimension (#151)
 
-`cdb_comment_viewer` (Kommentare-Viewer) is the one remaining dimension `ct`
-**reads but does not manage**, and not because ChurchTools cannot do it:
+`cdb_comment_viewer` (Kommentare-Viewer) had a reference form since #102 but no
+declaration behind it, and that combination turned out to be the worst of both
+worlds. Every other option was worse still:
 
-- **Comment viewers have plain REST CRUD** — `/person/commentviewers` plus
-  `POST`/`PUT`/`DELETE` on the item path, which would fit the resource registry
-  unchanged. They are catalog-only purely because nothing has needed to declare
-  one yet ([#102](https://github.com/eqrm/ct-cli/issues/102)).
+- a **raw `dataId`** is host-specific. Read on two hosts of the same deployment
+  on 2026-08-24, three of the six viewer ids on one host did not exist on the
+  other at all, and the two ids present on both named _different_ categories on
+  each. An apply duly wrote a grant pointing at nothing, and nothing caught it —
+  `ct plan` compares the declared id against the live id, and they match; the id
+  is simply meaningless on the target host.
+- a **name reference** did not rescue it, because the second host was missing the
+  NAMES as well. The reference hard-errored instead of resolving wrongly — safer,
+  but still not a config that applies to both hosts.
+- **creating the viewers by hand** on each host is unmanaged master data, which
+  is the thing this tool exists not to need.
 
-So the reference resolves by name on every host — which is what makes
-`churchdb:view comments` declarable at all — but there is no `ct.commentViewer`
-resource, no `ct adopt` for it, and a name that matches nothing is a **hard
-error** rather than a create:
+So comment viewers are a managed resource now:
 
-(Security levels left this list in #110 and Bereiche in #108. Both are managed
-resources now — see below.)
+```ts
+ct.commentViewer({ key: "dienstbereich", name: "Dienstbereich", sortKey: 40 });
+...
+{ right: "churchdb:view comments", scope: [{ commentViewer: "dienstbereich" }] }
+```
+
+Declaring the viewer is what makes the NAME exist on both hosts, which is what
+makes the reference portable — a name reference is only worth anything once
+something guarantees the row is there.
+
+- **`ct adopt comment-viewer <id>`** puts an existing viewer under management and
+  emits the declaration; `ct get comment-viewers` lists the names.
+- **`/person/commentviewers` is conventional REST** (`[{id, name, sortKey}]` plus
+  POST/PUT/DELETE), so this type needs none of the special machinery the other
+  two awkward master-data types did: ChurchTools mints the id (unlike a security
+  level) and the writes are REST (unlike a Bereich).
+- **Resolution is managed-state first, live catalog second.** An existing
+  reference to a viewer your config does not own keeps resolving exactly as it
+  did in #102, and a name that matches nothing anywhere is still a hard error
+  rather than a create:
 
 ```
 Cannot resolve comment-viewer:nope referenced at … : no managed resource and
@@ -532,11 +555,14 @@ no live comment-viewer at /person/commentviewers matches key "nope".
 Declare/adopt it, fix the key/name, or use a numeric id.
 ```
 
-Discover the names with `ct get comment-viewers`. Because
-the id always comes from the live catalog, such a scope is never "pending" and is
-never re-resolved at apply time — it is host-correct the moment it resolves. A
-managed resource that happens to share the key does **not** shadow it (that would
-be exactly the misgrant this feature exists to prevent).
+- **`ct apply` never deletes**, as everywhere else. `ct destroy` can, and warns:
+  deleting a viewer reaches every person comment restricted to it and every grant
+  scoped to it.
+
+With this, every scope dimension `ct` can name is also one it can declare —
+Bereiche left the catalog-only list in #108, security levels in #110, and comment
+viewers here. What remains numeric-only (`ccm_data_category`, `oauth_client`,
+`cc_calcategory`, …) belongs to modules outside this tool's mandate.
 
 ### Bereiche: managed, but written through a non-REST endpoint (#108)
 
@@ -631,11 +657,11 @@ For these, a `dataId` like `1`, `2`, `3` names a security level or a
 comment-viewer bucket — **not** a group — so `GET /groups/{1,2,3}` 404s. A
 `scope` array entry may therefore be a plain number instead of a string:
 
-(Security levels gained a name-based form in #110 — see
-[Catalog dimensions](#catalog-dimensions-referenceable-not-declarable).
-Comment viewers gained one too, in #102. Numerics keep working for both;
-calendar categories, OAuth clients and the other module dimensions still have
-nothing but numerics.)
+(Both of those dimensions gained a name-based form and are declarable resources
+now — comment viewers in [#151](#comment-viewers-the-last-catalog-only-dimension-151),
+security levels in [#110](#security-levels-a-managed-resource-with-a-declared-id-110).
+Numerics keep working for both; calendar categories, OAuth clients and the other
+module dimensions still have nothing but numerics.)
 
 ```ts
 { right: "churchdb:security level view own data", scope: [1, 2, 3, 5] },
@@ -739,11 +765,13 @@ guaranteed to be accepted by `ct plan` (the round trip is locked by tests):
     clearly-marked placeholder comment telling you to `ct adopt group <id>`
     first — scope keys must be state keys (see [Scope
     resolution](#scope-resolution)).
-  - **A catalog dimension `ct` reads but does not manage** (`cdb_bereich`,
-    `cc_securitylevel`): the emitter is pure — no client, no fetch — so it cannot
-    turn the id into a name. It emits the number plus a `NOTE` giving the portable
-    form (`{ department: "<name>" }` / `{ securityLevel: "<name>" }`) to write by
-    hand.
+  - **Another dimension with a logical form** (`cdb_station`, `cdb_gruppentyp`,
+    `cdb_bereich`, `cc_securitylevel`, `cdb_comment_viewer`): a `dataId` that
+    matches a resource **managed in your state file** is emitted as the portable
+    reference (`scope: [{ commentViewer: "dienstbereich" }]`). An unmanaged one
+    keeps its number and earns a `NOTE` naming the one command that fixes it —
+    `ct adopt comment-viewer <id>`, then re-adopt the grants. The emitter is pure
+    (no client, no fetch), so it cannot turn an unmanaged id into a name itself.
   - **Any other scope dimension** (`cc_calcategory`, `oauth_client`,
     …): there is no group to adopt, so the `dataId`(s) are emitted directly
     as a numeric `scope: [1, 2, 3]` — always an active line, with a comment
