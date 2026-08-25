@@ -35,6 +35,32 @@ Each profile is a `(host, state file, token reference)` triple:
   token (for CI); never a literal secret, so the file is safe to commit.
 - **`protected`** — see the guardrail below.
 
+### Process workspaces
+
+`ct init <directory> --template process --host <url> --env <name>` creates a process-oriented
+workspace whose environment uses an explicit hostname-bound state path:
+
+```json
+{
+  "environments": {
+    "prod": {
+      "host": "https://example.church.tools",
+      "state": "instances/example.church.tools/ct-state.example.church.tools.json",
+      "protected": true
+    }
+  }
+}
+```
+
+The corresponding empty state is written immediately with the same normalized host. This makes the
+instance binding reviewable from the first commit and avoids creating a hostless `ct-state.json`.
+Additional instances follow the same invariant: hostname directory, state filename, state content
+and environment host must all identify the same ChurchTools instance.
+
+Run `plan` and `apply` from the process directory with an explicit environment, for example
+`ct plan -e prod`. The existence of `ct.envs.json` does not yet make `--env` mandatory: changing that
+single-instance fallback is a separate, engine-wide safety decision rather than scaffold behavior.
+
 ## Using them
 
 Every state/host-touching command takes `--env <name>` (`-e`):

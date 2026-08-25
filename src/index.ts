@@ -11,6 +11,7 @@ import { refreshCommand } from "./commands/refresh.js";
 import { planCommand } from "./commands/plan.js";
 import { applyCommand } from "./commands/apply.js";
 import { destroyCommand } from "./commands/destroy.js";
+import { initCommand } from "./commands/init.js";
 import { completionCommand } from "./commands/completion.js";
 import { plannedCommands } from "./commands/placeholders.js";
 import { isCompletionRequest, serveCompletionRequest } from "./completion/shell.js";
@@ -28,6 +29,7 @@ export function buildProgram(): Command {
     )
     .version(versionLine(import.meta.url));
 
+  program.addCommand(initCommand());
   program.addCommand(authCommand());
   program.addCommand(getCommand());
   program.addCommand(adoptCommand());

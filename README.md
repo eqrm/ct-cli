@@ -127,6 +127,84 @@ Open a new shell, then try `ct sta<Tab>`, `ct state rm <Tab>` or `ct plan --env 
 
 ## First run
 
+Create a config repository without having to assemble its files by hand:
+
+```bash
+mkdir bgk-ct-config
+cd bgk-ct-config
+ct init
+```
+
+In an interactive terminal, `ct init` collects the ChurchTools URL, the first environment name,
+whether to initialize Git, and optionally a personal login token. The token input is hidden; when
+provided on macOS, it is verified immediately and stored in the Keychain. On platforms without
+supported secure credential storage, `ct init` does not request a token and explains how to use
+`CT_HOST` and `CT_LOGINTOKEN` instead. For scripts, pass the non-secret answers explicitly and log
+in through environment variables:
+
+```bash
+ct init --host https://example.church.tools --env prod --git --yes
+CT_LOGINTOKEN=... ct auth login --host https://example.church.tools
+ct coverage --env prod
+```
+
+The command creates `ct.config.ts`, `ct.envs.json`, `.gitignore`, `config/`, and `blueprints/`. It
+refuses to overwrite existing scaffold files.
+
+### Portable process workspace
+
+Use the opt-in `process` template when one reusable ChurchTools process should live below
+`processes/<name>/` in an existing repository and target one or more instances. Git remains opt-in;
+pass `--no-git` when the parent repository already owns version control:
+
+```bash
+ct init processes/example-process \
+  --template process \
+  --host https://example.church.tools \
+  --env prod \
+  --protected \
+  --no-git \
+  --yes
+```
+
+The process template creates:
+
+```text
+processes/example-process/
+├── ct.config.ts
+├── ct.envs.json
+├── .gitignore
+├── README.md
+├── blueprint/
+├── configs/
+└── instances/
+    └── example.church.tools/
+        ├── ct-state.example.church.tools.json
+        ├── backups/
+        ├── reference/
+        └── reports/
+```
+
+`ct.config.ts` at the process root is the normal entry point, so no `-c` is needed. The generated
+environment binds the normalized host to the state below its matching hostname directory; the empty
+state is created immediately and no ambiguous `ct-state.json` is generated. Portable definitions
+stay in `blueprint/`, while `configs/` is reserved for exceptional entry points such as a staged
+bootstrap of an empty instance.
+
+Run commands from the process directory and select the target explicitly:
+
+```bash
+ct plan -e prod
+ct apply -e prod
+ct plan -c configs/<bootstrap-config>.ts -e prod
+```
+
+Do not omit `-e`: enforcing that rule automatically whenever `ct.envs.json` exists is a separate
+engine-wide safety change. Until then, an invocation without `-e` still selects the backward-
+compatible single-instance mode. The scaffold contains no credentials or live ChurchTools IDs;
+reports, backups and captured reference output are kept below their host-specific instance and
+ignored by default, while the host-bound state remains trackable.
+
 ```bash
 # The host is captured at login and stored with the token; CT_HOST overrides it for CI.
 ct auth login --host https://mychurch.church.tools --token <personal-login-token>

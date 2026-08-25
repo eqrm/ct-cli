@@ -5,7 +5,17 @@ describe("ct program", () => {
   it("registers the core command surface", () => {
     const names = buildProgram().commands.map((c) => c.name());
     expect(names).toEqual(
-      expect.arrayContaining(["auth", "get", "adopt", "report", "plan", "apply", "destroy", "completion"]),
+      expect.arrayContaining([
+        "init",
+        "auth",
+        "get",
+        "adopt",
+        "report",
+        "plan",
+        "apply",
+        "destroy",
+        "completion",
+      ]),
     );
   });
 
@@ -18,6 +28,13 @@ describe("ct program", () => {
   it("registers apply with --auto-approve", () => {
     const cmd = buildProgram().commands.find((c) => c.name() === "apply")!;
     expect(cmd.options.some((o) => o.long === "--auto-approve")).toBe(true);
+  });
+
+  it("registers the process init template and environment protection options", () => {
+    const cmd = buildProgram().commands.find((c) => c.name() === "init")!;
+    expect(cmd.options.some((o) => o.long === "--template")).toBe(true);
+    expect(cmd.options.some((o) => o.long === "--protected")).toBe(true);
+    expect(cmd.options.some((o) => o.long === "--no-git")).toBe(true);
   });
 
   it("registers destroy with a required --target", () => {

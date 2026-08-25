@@ -1,5 +1,24 @@
+import { PassThrough } from "node:stream";
 import { describe, it, expect } from "vitest";
-import { confirm, confirmTyped, confirmEnv } from "../src/ui/prompt.js";
+import { askSecret, confirm, confirmTyped, confirmEnv } from "../src/ui/prompt.js";
+
+describe("askSecret", () => {
+  it("returns the secret without echoing it", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let displayed = "";
+    output.on("data", (chunk) => {
+      displayed += chunk.toString();
+    });
+
+    const answer = askSecret("Token: ", { input, output });
+    input.end("super-secret\n");
+
+    await expect(answer).resolves.toBe("super-secret");
+    expect(displayed).toBe("Token: \n");
+    expect(displayed).not.toContain("super-secret");
+  });
+});
 
 describe("confirm", () => {
   it("short-circuits true with assumeYes", async () => {

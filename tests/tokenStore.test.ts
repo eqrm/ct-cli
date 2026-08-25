@@ -1,7 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { readToken, parseCredentials } from "../src/auth/tokenStore.js";
+import { readToken, parseCredentials, isSecureStorageAvailable } from "../src/auth/tokenStore.js";
 
 const original = process.env.CT_LOGINTOKEN;
+
+it("supports the macOS Keychain but not unsupported platform stores", () => {
+  expect(isSecureStorageAvailable()).toBe(process.platform === "darwin");
+});
 
 afterEach(() => {
   if (original === undefined) {

@@ -39,6 +39,29 @@ async function reportAllEnvs(): Promise<void> {
   }
 }
 
+/** Verify a personal token, cache the resulting session, store it, and report the login. */
+export async function verifyAndStoreLoginToken(rawHost: string, rawToken: string): Promise<void> {
+  const host = normalizeHost(rawHost.trim());
+  const token = rawToken.trim();
+  if (!token) throw new Error("No token provided.");
+
+  const client = new CtClient({ host }, { sessionCache: keychainSessionCache() });
+  // A login must actually prove the token, never be answered from a cached session.
+  const me = await client.authenticate(token, { fresh: true });
+  const location = await storeCredentials({ host, token });
+  success(`Logged in to ${host} as ${me.firstName ?? ""} ${me.lastName ?? ""} (#${me.id})`.trim());
+  info(`Host + token stored in ${location}.`);
+
+  const ctInfo = await client.get<CtInfo>("/info");
+  if (ctInfo.version) {
+    if (meetsMinVersion(ctInfo.version)) {
+      info(`ChurchTools ${ctInfo.version} (≥ ${MIN_CT_VERSION} required).`);
+    } else {
+      warn(`ChurchTools ${ctInfo.version} is below the required ${MIN_CT_VERSION} — plan/apply will refuse.`);
+    }
+  }
+}
+
 export function authCommand(): Command {
   const cmd = new Command("auth").description("Authenticate against ChurchTools");
 
@@ -96,24 +119,7 @@ export function authCommand(): Command {
         token = outcome.token;
       }
 
-      const client = new CtClient(config, { sessionCache: keychainSessionCache() });
-      // `fresh`: a login must actually prove the token, never be answered from a
-      // cached session — but the session it buys is cached for the next command.
-      const me = await client.authenticate(token, { fresh: true });
-      const location = await storeCredentials({ host: config.host, token });
-      success(`Logged in to ${config.host} as ${me.firstName ?? ""} ${me.lastName ?? ""} (#${me.id})`.trim());
-      info(`Host + token stored in ${location}.`);
-
-      const ctInfo = await client.get<CtInfo>("/info");
-      if (ctInfo.version) {
-        if (meetsMinVersion(ctInfo.version)) {
-          info(`ChurchTools ${ctInfo.version} (≥ ${MIN_CT_VERSION} required).`);
-        } else {
-          warn(
-            `ChurchTools ${ctInfo.version} is below the required ${MIN_CT_VERSION} — plan/apply will refuse.`,
-          );
-        }
-      }
+      await verifyAndStoreLoginToken(config.host, token);
     });
 
   cmd
