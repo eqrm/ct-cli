@@ -22,6 +22,36 @@ function subjectRightText(a: PermissionAssignment): string {
   return `${rightText(a)}${unscopedId}`;
 }
 
+/**
+ * Assignments arrive in raw API row order, which is neither grouped by right nor stable between
+ * runs. Sorting them makes the "* right / objects beneath it" nesting correct even when a
+ * subject's rows for one right are not contiguous, and keeps the report diff-stable — the point
+ * of grouping subjects by hash. Exact duplicates collapse, matching the hash's set semantics.
+ */
+function orderedAssignments(list: PermissionAssignment[]): PermissionAssignment[] {
+  const sortable = (value: string | number | undefined): string => {
+    if (value === undefined) return "";
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? String(numeric).padStart(12, "0") : String(value);
+  };
+  const key = (a: PermissionAssignment): string =>
+    [
+      sortable(a.right.authId),
+      a.right.name,
+      a.right.technicalName ?? "",
+      a.effect ?? "grant",
+      a.object?.type ?? "",
+      sortable(a.object?.id),
+      a.object?.label ?? "",
+    ].join("\u0000");
+  const unique = new Map<string, PermissionAssignment>();
+  for (const a of list) {
+    const k = key(a);
+    if (!unique.has(k)) unique.set(k, a);
+  }
+  return [...unique.entries()].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)).map(([, a]) => a);
+}
+
 export function renderBySubject(dataset: PermissionDataset): string {
   const bySubject = new Map<string, PermissionAssignment[]>();
   const subjects = new Map<string, PermissionSubject>();
@@ -66,7 +96,7 @@ export function renderBySubject(dataset: PermissionDataset): string {
     }
     // Every set in this hash group is canonically identical. Render it once; including each
     // subject's copy would repeat every right N times under an N-subject heading group.
-    const rights = subjectSets[0]?.assignments ?? [];
+    const rights = orderedAssignments(subjectSets[0]?.assignments ?? []);
     let lastRight = "";
     if (rights.length > 0) lines.push("");
     for (const a of rights) {

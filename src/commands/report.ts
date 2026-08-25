@@ -1,5 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import { format, parse } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, format, parse, resolve } from "node:path";
 import { Command } from "commander";
 import { authedSession } from "../api/session.js";
 import { prepareEnvHost } from "../env/context.js";
@@ -54,6 +54,15 @@ export function permissionReportTargets(opts: ReportOptions): PermissionReportTa
   return targets;
 }
 
+/**
+ * Reports are routinely written into a gitignored `reports/` directory that does not exist in a
+ * fresh clone. Create the directories up front so that fails immediately, rather than after the
+ * full read-only collection has already run.
+ */
+export async function ensureReportDirectories(targets: PermissionReportTarget[]): Promise<void> {
+  for (const target of targets) await mkdir(dirname(resolve(target.output)), { recursive: true });
+}
+
 export function reportCommand(): Command {
   const permissions = new Command("permissions")
     .description("Report the complete live permission assignment set (read-only)")
@@ -63,6 +72,7 @@ export function reportCommand(): Command {
     .option("-e, --env <name>", "environment profile from ct.envs.json")
     .action(async (opts: ReportOptions) => {
       const targets = permissionReportTargets(opts);
+      await ensureReportDirectories(targets);
       await prepareEnvHost(opts);
       const { client } = await authedSession();
       const dataset = await collectLivePermissions(client);

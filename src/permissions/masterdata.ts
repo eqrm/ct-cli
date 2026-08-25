@@ -1,4 +1,5 @@
 import type { CtClient } from "../api/ctClient.js";
+import { warn } from "../ui.js";
 
 export interface RawChurchAuthRight {
   id?: string | number;
@@ -39,21 +40,31 @@ export async function fetchChurchAuthMasterData(
   const response = await client.legacyPostForm<ChurchAuthMasterDataResponse>("churchauth/ajax", {
     func: "getMasterData",
   });
-  const master = response.data ?? response;
-  if (!master.auth_table || typeof master.auth_table !== "object" || Array.isArray(master.auth_table)) {
+  // The fallback is per FIELD, not per envelope: instances have been seen answering with a `data`
+  // object that carries only part of the payload, the rest sitting at the top level. Picking the
+  // envelope first and then reading every field out of it would reject those.
+  const authTable = response.data?.auth_table ?? response.auth_table;
+  if (!authTable || typeof authTable !== "object" || Array.isArray(authTable)) {
     throw new Error(
       "Unexpected response from churchauth/ajax getMasterData: no data.auth_table. The legacy endpoint " +
         "or its shape may have changed.",
     );
   }
+  const churchauth = response.data?.churchauth ?? response.churchauth;
   return {
-    auth_table: master.auth_table,
-    ...(master.churchauth ? { churchauth: master.churchauth } : {}),
+    auth_table: authTable,
+    ...(churchauth ? { churchauth } : {}),
   };
 }
 
-/** Normalize auth_table once for every consumer of the ChurchAuth master-data response. */
-export function permissionRightDefinitions(master: ChurchAuthMasterData): PermissionRightDefinition[] {
+/**
+ * Normalize auth_table once for every consumer of the ChurchAuth master-data response.
+ * `onDuplicate` is injectable so tests can assert the warning without capturing stderr.
+ */
+export function permissionRightDefinitions(
+  master: ChurchAuthMasterData,
+  onDuplicate: (message: string) => void = warn,
+): PermissionRightDefinition[] {
   const result: PermissionRightDefinition[] = [];
   const seen = new Set<number>();
   for (const [module, rights] of Object.entries(master.auth_table)) {
@@ -65,10 +76,14 @@ export function permissionRightDefinitions(master: ChurchAuthMasterData): Permis
         );
       }
       if (seen.has(authId)) {
-        throw new Error(
-          `Unexpected response from churchauth/ajax getMasterData: duplicate authId ${authId} ` +
-            `at ${module}:${technicalName}.`,
+        // An instance whose plugin set aliases one right under two modules must not break
+        // `ct permissions catalog --refresh` — that command is the only way to act on the
+        // staleness warning. Keep the first definition and say what was dropped.
+        onDuplicate(
+          `churchauth/ajax getMasterData reports authId ${authId} twice; ignoring the later ` +
+            `definition at ${module}:${technicalName}.`,
         );
+        continue;
       }
       seen.add(authId);
       const scopeField = raw.datenfeld == null ? "" : String(raw.datenfeld).trim();

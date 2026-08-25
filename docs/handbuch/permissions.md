@@ -2,11 +2,13 @@
 title: Permissions
 sources:
   - src/permissions/**
+  - src/reports/permissions/**
+  - src/commands/report.ts
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: f98e4836777ab248
-reviewed: 2026-08-17
+sources_hash: ed81ccd01fe7a4d5
+reviewed: 2026-08-25
 ---
 
 # Permissions (`ct.groupRole` / `ct.groupTypeRole` / `ct.status`)
@@ -50,9 +52,12 @@ aufgeführt, wenn mindestens eine direkte Permission existiert: Alle leeren
 Personen und Rollenpaarungen aufzulisten würde die relevanten Lücken zwischen
 tausenden bedeutungslosen Zeilen verstecken. Über Status oder Rollen geerbte
 effektive Personenrechte werden nicht zu einem synthetischen
-Personen-Rechte-Set verrechnet. `object` beantwortet „Wer darf auf dieses Objekt
-was?“ und sortiert vorhandene Subjekttypen fest nach Status, Gruppentyp, Gruppe
-und Person.
+Personen-Rechte-Set verrechnet. Innerhalb einer Hash-Gruppe werden die Rechte
+nach `authId`, Rechtename, Grant/Revoke und Objekt sortiert und exakte
+Dubletten fallen weg. Der Report ist damit unabhängig von der Zeilenreihenfolge
+der API und zwischen zwei Läufen diff-stabil. `object` beantwortet „Wer darf
+auf dieses Objekt was?“ und sortiert vorhandene Subjekttypen fest nach Status,
+Gruppentyp, Gruppe und Person.
 
 Objektbezeichnungen werden verlustfrei übernommen und insbesondere nicht
 getrimmt. Das ist fachlich relevant, weil ChurchTools zwei Objekte mit

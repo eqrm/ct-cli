@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { permissionReportTargets } from "../src/commands/report.js";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { ensureReportDirectories, permissionReportTargets } from "../src/commands/report.js";
 import { collectLivePermissions } from "../src/reports/permissions/collect.js";
 import { permissionSetHash } from "../src/reports/permissions/hash.js";
 import { renderByObject, renderBySubject } from "../src/reports/permissions/render.js";
@@ -49,6 +52,26 @@ describe("permission report targets", () => {
     expect(() => permissionReportTargets({})).toThrow("Select");
     expect(() => permissionReportTargets({ byBoth: "report", byObject: true })).toThrow("cannot be combined");
     expect(() => permissionReportTargets({ bySubject: "same.md", byObject: "same.md" })).toThrow("same file");
+  });
+});
+
+describe("permission report output directories", () => {
+  const directories: string[] = [];
+  afterEach(async () => {
+    await Promise.all(
+      directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+    );
+  });
+
+  it("creates a missing output directory instead of failing after the live collection", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "ct-report-"));
+    directories.push(directory);
+    const targets = permissionReportTargets({ byBoth: join(directory, "reports", "permissions.md") });
+
+    await ensureReportDirectories(targets);
+
+    // `reports/` is gitignored and absent in a fresh clone; writing must now succeed.
+    await Promise.all(targets.map((target) => writeFile(target.output, "x", "utf8")));
   });
 });
 
@@ -115,6 +138,38 @@ describe("permission report renderers", () => {
     expect(text).toContain("[1]");
     expect(text).not.toContain("unknown");
     expect(renderByObject(dataset(assignments))).toContain("## Personen sehen (auth_table: 1)");
+  });
+
+  it("emits one bullet per right and a stable order regardless of API row order", () => {
+    const subject: PermissionAssignment["subject"] = { type: "PRS", id: 1, label: "Anna" };
+    // The API can order rows by object rather than by right, so a subject's rows for one
+    // right are not necessarily contiguous.
+    const interleaved: PermissionAssignment[] = [
+      { ...assignment(subject, 42, 7), object: { type: "cc_wikicategory", id: 7, label: "Wiki A" } },
+      {
+        subject,
+        right: { authId: 9, name: "Anderes Recht", technicalName: "edit thing" },
+        object: { type: "cc_wikicategory", id: 8, label: "Wiki B" },
+      },
+      { ...assignment(subject, 42, 9), object: { type: "cc_wikicategory", id: 9, label: "Wiki C" } },
+    ];
+
+    const text = renderBySubject(dataset(interleaved));
+    expect(text.match(/^\* Ein Recht/gm)).toHaveLength(1);
+    expect(text).toContain("    * Wiki A (cc_wikicategory: 7) [7]");
+    expect(text).toContain("    * Wiki C (cc_wikicategory: 9) [9]");
+
+    // Same set, different row order → byte-identical report.
+    expect(renderBySubject(dataset([...interleaved].reverse()))).toBe(text);
+    // authId 9 sorts before 42 numerically, not lexically.
+    expect(text.indexOf("* Anderes Recht")).toBeLessThan(text.indexOf("* Ein Recht"));
+  });
+
+  it("collapses exactly duplicated rows the way the hash does", () => {
+    const subject: PermissionAssignment["subject"] = { type: "ST", id: 1, label: "active" };
+    const row = assignment(subject);
+    const text = renderBySubject(dataset([row, { ...row }]));
+    expect(text.match(/^ {4}\* Wiki/gm)).toHaveLength(1);
   });
 
   it("renders known subjects with no rights explicitly and without a fingerprint", () => {
