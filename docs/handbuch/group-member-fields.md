@@ -1,5 +1,5 @@
 ---
-sources_hash: 887a114f54798292
+sources_hash: 00dca3c03dacc9ff
 title: Group member fields
 sources:
   - src/engine/member-fields.ts
@@ -134,7 +134,12 @@ absent `memberFields:` block still means "unmanaged".
 
 Rows that could not be read (a 403, a rate-limited 429) are reported and the
 group is adopted **without** them, so one unreadable group never aborts a
-bulk adoption — re-run with `--with-member-fields` once the read succeeds.
+bulk adoption — re-run with `--with-member-fields` once the read succeeds. The
+same holds for rows that can be read but not captured cleanly: a row with no
+numeric id, or two rows whose names slug to one local key (`Wahl 1` and
+`wahl-1`). Adoption writes its state only after the whole `--children-of`
+subtree has been walked, so aborting on one group would discard every group
+already adopted in that run.
 
 ## Plan and apply
 
@@ -164,9 +169,10 @@ declared property remain managed.
 create runs first, then its owned sub-resources), and updates an existing field
 in place — matched by identity, never re-created.
 
-If the member-field read fails with anything other than a 404, the group is
-reported as `fetch-failed` and the plan says it is INCOMPLETE. It never
-manufactures "create every field" out of a transient error.
+If the member-field read itself fails with anything other than a 404, the group
+is reported as `fetch-failed` and the plan says it is INCOMPLETE. It never
+manufactures "create every field" out of a transient error. A stale state
+binding is a narrower fault and degrades more narrowly — see below.
 
 ## Nothing is ever deleted implicitly
 
@@ -241,16 +247,25 @@ Three things follow:
 Depending on the ChurchTools version, the read response is a bare array or is
 wrapped under `group`, `data`, `memberFields` or `groupMemberFields`; field ids
 may be numbers or decimal strings. Individual rows may also wrap the definition
-as `{ type: "group", field: { ... } }`. `ct` normalises those transport variants
-before identity matching. The outer wrapper or `group` bucket is the
+as `{ type: "group", field: { ... } }`, with the id sitting on either half.
+`ct` normalises those transport variants before identity matching: the inner
+definition wins on every key it names, and anything the wrapper alone carries
+(a scope discriminator, an id) is kept rather than dropped. The outer wrapper or `group` bucket is the
 authoritative scope marker; a row inside the bucket may still say
 `type: "person"` because values live on memberships, and is not discarded for
 that reason.
 
 When state already binds a portable field identity to a ChurchTools id but a
-live response does not contain that id, the plan is marked **INCOMPLETE**. `ct`
-will not turn an uncertain read into a replacement `POST`, because doing so can
-duplicate a field that is still present on the host.
+live response does not contain that id, **that one field** is left
+unreconciled and the plan is marked **INCOMPLETE**. `ct` will not turn an
+uncertain read into a replacement `POST`, because doing so can duplicate a
+field that is still present on the host — but the read itself succeeded, so
+the rest of the group keeps reconciling normally: its `name`, its `parents`,
+its ruleset, and its other member fields all still diff. The error names the
+field and the way out: if it was deleted or re-created in the ChurchTools UI,
+drop the stale binding with
+`ct destroy --member-field <group>::<field>` (which forgets an
+already-absent field) and re-run.
 
 `PATCH` is used because it is a partial update, so unmanaged sibling properties
 are left alone. An instance whose endpoint implements only `PUT` answers

@@ -706,7 +706,13 @@ describe("isGroupScopedMemberField (#135 review)", () => {
 
 describe("actualMemberFieldProps — defaultValue ↔ option id (#154 review)", () => {
   it("treats the option id CT echoes for a by-name default as no drift", () => {
-    const row = { defaultValue: 7, options: [{ id: 7, name: "Ja" }, { id: 8, name: "Nein" }] };
+    const row = {
+      defaultValue: 7,
+      options: [
+        { id: 7, name: "Ja" },
+        { id: 8, name: "Nein" },
+      ],
+    };
     expect(actualMemberFieldProps(row, { defaultValue: "Ja" })).toEqual({ defaultValue: "Ja" });
   });
 
@@ -715,9 +721,14 @@ describe("actualMemberFieldProps — defaultValue ↔ option id (#154 review)", 
     // and the declared default would never be written.
     const row = { options: [{ name: "Ja" }, { name: "Nein" }] };
     expect(actualMemberFieldProps(row, { defaultValue: "Ja" })).toEqual({ defaultValue: undefined });
-    expect(actualMemberFieldProps({ defaultValue: null, options: [{ id: null, name: "Ja" }] }, {
-      defaultValue: "Ja",
-    })).toEqual({ defaultValue: null });
+    expect(
+      actualMemberFieldProps(
+        { defaultValue: null, options: [{ id: null, name: "Ja" }] },
+        {
+          defaultValue: "Ja",
+        },
+      ),
+    ).toEqual({ defaultValue: null });
   });
 });
 

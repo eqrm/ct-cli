@@ -6,7 +6,7 @@ sources:
   - src/engine/dynamic.ts
   - src/engine/synthetic.ts
   - src/commands/adopt-group.ts
-sources_hash: de7874de18231755
+sources_hash: 02bcb67b91c897de
 reviewed: 2026-08-17
 ---
 
