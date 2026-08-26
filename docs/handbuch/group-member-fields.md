@@ -90,10 +90,11 @@ Two readable/writable properties are deliberately **not** managed:
 
 - **`id`** — host-specific; see above.
 - **`referenceName`** — this _is_ the local identity, not a diffable property.
-  It is what a create sends and what every later run matches on, so managing it
-  would let a rename silently re-key the resource and re-create the field
-  instead of updating it. (A field created in the ChurchTools UI, where CT may
-  mint its own `referenceName`, is matched by its slugged `name` as a fallback.)
+  It is what a create sends and, when no state-bound id exists, what a later run
+  matches on. Managing it would let a rename silently re-key the resource and
+  re-create the field instead of updating it. (A field created in the
+  ChurchTools UI, where CT may mint its own `referenceName`, is matched by its
+  slugged `name` as a fallback.)
 
 A property outside the managed list still passes through to ChurchTools
 unchanged — it only earns a warning, and it is never diffed.
@@ -222,6 +223,18 @@ Three things follow:
 | create    | `POST /groups/{groupId}/memberfields/group`             |
 | update    | `PATCH /groups/{groupId}/memberfields/group/{fieldId}`  |
 | delete    | `DELETE /groups/{groupId}/memberfields/group/{fieldId}` |
+
+Depending on the ChurchTools version, the read response is a bare array or is
+wrapped under `group`, `data`, `memberFields` or `groupMemberFields`; field ids
+may be numbers or decimal strings. `ct` normalises those transport variants
+before identity matching. The `group` bucket is itself the authoritative scope
+marker; a row inside it may still say `type: "person"` because values live on
+memberships, and is not discarded for that reason.
+
+When state already binds a portable field identity to a ChurchTools id but a
+live response does not contain that id, the plan is marked **INCOMPLETE**. `ct`
+will not turn an uncertain read into a replacement `POST`, because doing so can
+duplicate a field that is still present on the host.
 
 `PATCH` is used because it is a partial update, so unmanaged sibling properties
 are left alone. An instance whose endpoint implements only `PUT` answers

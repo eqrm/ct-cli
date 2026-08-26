@@ -20,14 +20,16 @@ import { slug } from "../resources/registry.js";
 import {
   actualMemberFieldProps,
   groupScopedRows,
+  knownMemberFieldId,
   memberFieldStateKey,
   localKeyOf,
-  matchesLocalKey,
+  memberFieldId,
   memberFieldIdentity,
   memberFieldItemPath,
   memberFieldLocalKey,
   memberFieldPseudo,
   memberFieldRowId,
+  matchingMemberFieldRows,
   memberFieldsCreatePath,
   memberFieldsReadPath,
   MEMBER_FIELD_PREFIX,
@@ -236,7 +238,23 @@ const memberFieldsField: SyntheticField = {
     const outcomes = await mapConcurrent(readable, MEMBER_FIELD_FETCH_CONCURRENCY, async (d) => {
       const managed = state.resources[d.key]!;
       try {
-        return { key: d.key, rows: await readMemberFields(client, managed.id), errors: [] as string[] };
+        const rows = await readMemberFields(client, managed.id);
+        const missing = d.memberFields!.flatMap((spec) => {
+          const knownId = knownMemberFieldId(state, d.key, spec.key);
+          if (knownId === undefined || rows.some((row) => memberFieldRowId(row) === knownId)) return [];
+          return [`${memberFieldIdentity(d.key, spec.key)} (#${knownId})`];
+        });
+        if (missing.length > 0) {
+          return {
+            key: d.key,
+            rows: undefined,
+            errors: [
+              `member fields ${d.key} (#${managed.id}): the live response did not contain the ` +
+                `state-bound field(s) ${missing.join(", ")}; refusing to plan replacement POSTs`,
+            ],
+          };
+        }
+        return { key: d.key, rows, errors: [] as string[] };
       } catch (err) {
         // Same honesty rule as the dynamic fold (#126): an unread actual is NOT a known-absent one,
         // so the desired side stays unfolded and the group is reported unreadable rather than having
@@ -263,7 +281,7 @@ const memberFieldsField: SyntheticField = {
         const pseudo = memberFieldPseudo(spec.key);
         fields[pseudo] = spec.props;
         if (!a || !rows) continue;
-        const matches = rows.filter((row) => matchesLocalKey(row, spec.key));
+        const matches = matchingMemberFieldRows(rows, spec.key, knownMemberFieldId(state, d.key, spec.key));
         // >1 live match means the local key is ambiguous on this host — a blind update would pick
         // one arbitrarily, so leave the actual side absent and let the ambiguity surface where it
         // can be acted on (the apply path refuses it by name).
@@ -297,7 +315,8 @@ const memberFieldsField: SyntheticField = {
     if (props === undefined || props === null) return;
 
     const rows = await readMemberFieldsForWrite(client, id, reads);
-    const matches = rows.filter((row) => matchesLocalKey(row, local));
+    const knownId = knownMemberFieldId(state, key, local);
+    const matches = matchingMemberFieldRows(rows, local, knownId);
     if (matches.length > 1) {
       throw new Error(
         `group member field "${memberFieldIdentity(key, local)}": ${matches.length} fields on group ` +
@@ -337,17 +356,25 @@ const memberFieldsField: SyntheticField = {
       return;
     }
 
+    if (knownId !== undefined) {
+      throw new Error(
+        `group member field "${memberFieldIdentity(key, local)}": state binds it to #${knownId}, ` +
+          `but the live response for group #${id} did not contain that id; refusing to create a ` +
+          `possible duplicate`,
+      );
+    }
+
     const createPath = memberFieldsCreatePath(id);
     assertNotPeople(createPath);
     // `referenceName` is the local key, not a managed property: it is CT's own stable, non-numeric
     // handle within the group, and sending it at create is what lets every later run find this
     // field by its portable identity instead of by a host-specific id.
-    const created = await client.request<{ id?: number } | undefined>("POST", createPath, {
+    const created = await client.request<unknown>("POST", createPath, {
       ...props,
       referenceName: local,
     });
-    const newId = created?.id;
-    if (typeof newId !== "number") {
+    const newId = memberFieldId(created);
+    if (newId === undefined) {
       throw new Error(
         `group member field "${memberFieldIdentity(key, local)}": create returned no numeric id ` +
           `(got ${JSON.stringify(created)}).`,

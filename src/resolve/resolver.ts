@@ -31,8 +31,8 @@ import type { DesiredResource } from "../engine/types.js";
 import { slug } from "../resources/registry.js";
 import {
   groupScopedRows,
-  memberFieldStateKey,
-  matchesLocalKey,
+  knownMemberFieldId,
+  matchingMemberFieldRows,
   memberFieldRowId,
   memberFieldsReadPath,
 } from "../engine/member-fields.js";
@@ -513,7 +513,7 @@ export class Resolver {
       );
     }
     const rows = await this.memberFieldList(managed.id);
-    const matches = rows.filter((row) => matchesLocalKey(row, r.field));
+    const matches = matchingMemberFieldRows(rows, r.field, knownMemberFieldId(this.state, r.group, r.field));
     if (matches.length > 1) {
       const list = matches
         .map((row) => `${JSON.stringify(row.name ?? row.referenceName)} (#${String(memberFieldRowId(row))})`)
@@ -758,8 +758,7 @@ function pendingIdFromState(r: Ref, state: State): number {
     // dynamic ruleset (engine/synthetic.ts orders the pseudo-fields ahead of `dynamic`, and
     // `applySyntheticFields` re-resolves each change immediately before applying it). So by the time
     // a ruleset carrying this marker is written, the id is already in state.
-    const group = state.resources[r.group];
-    const id = group?.memberFields?.[memberFieldStateKey(r.field)];
+    const id = knownMemberFieldId(state, r.group, r.field);
     if (typeof id !== "number") {
       throw new Error(
         `Pending ${refLabel(r)} did not resolve after its group applied — no member field "${r.field}" ` +

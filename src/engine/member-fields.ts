@@ -24,6 +24,7 @@
  */
 
 import { slug } from "../resources/registry.js";
+import type { State } from "../state/state.js";
 
 /**
  * The synthetic pseudo-field prefix. One declared member field folds into ONE pseudo-field on its
@@ -184,6 +185,27 @@ export function memberFieldStateKey(localKey: string): string {
   return slug(localKey);
 }
 
+/** Resolve a field id from the current owner-local state map. */
+export function knownMemberFieldId(state: State, groupKey: string, localKey: string): number | undefined {
+  const group = state.resources[groupKey];
+  return group?.memberFields?.[memberFieldStateKey(localKey)];
+}
+
+/** Prefer a state-bound id; use the portable live key only when no known id is present in the response. */
+export function matchingMemberFieldRows(
+  rows: MemberFieldRow[],
+  localKey: string,
+  knownId?: number,
+): MemberFieldRow[] {
+  if (knownId !== undefined) {
+    // State-bound identity is authoritative. Falling back to a name when the known id is absent
+    // can select a different field; falling all the way through to POST can duplicate a live field
+    // when a response variant was parsed incompletely.
+    return rows.filter((row) => memberFieldRowId(row) === knownId);
+  }
+  return rows.filter((row) => matchesLocalKey(row, localKey));
+}
+
 /**
  * The local key a live row answers to. `referenceName` is CT's own stable, non-numeric handle
  * within the group and is what a create sends, so it wins; `name` is the fallback for a row created
@@ -205,13 +227,30 @@ export function matchesLocalKey(row: MemberFieldRow, localKey: string): boolean 
   return typeof name === "string" && slug(name) === wanted;
 }
 
+function numericMemberFieldId(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  return undefined;
+}
+
+/**
+ * The numeric ChurchTools id of a live row or create response. CT versions differ here: ids may be
+ * JSON numbers or decimal strings, and create responses may wrap the row in `data` or
+ * `groupMemberField`.
+ */
+export function memberFieldId(raw: unknown): number | undefined {
+  const direct = numericMemberFieldId(raw);
+  if (direct !== undefined) return direct;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const row = raw as MemberFieldRow;
+  const fieldId = numericMemberFieldId(row.id ?? row.groupMemberFieldId);
+  if (fieldId !== undefined) return fieldId;
+  return memberFieldId(row.data ?? row.groupMemberField);
+}
+
 /** The numeric ChurchTools id of a live row, or `undefined` when it carries none. */
 export function memberFieldRowId(row: MemberFieldRow): number | undefined {
-  for (const name of ["id", "groupMemberFieldId"]) {
-    const value = row[name];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return undefined;
+  return memberFieldId(row);
 }
 
 /**
@@ -247,14 +286,43 @@ export function memberFieldItemPath(groupId: number, fieldId: number): string {
   return `/groups/${groupId}/memberfields/group/${fieldId}`;
 }
 
-/** Normalise CT's list envelope (bare array or `{ data: [...] }`) to the group-scoped rows only. */
+function memberFieldRows(raw: unknown): MemberFieldRow[] {
+  if (Array.isArray(raw)) {
+    return raw.filter(
+      (row): row is MemberFieldRow => row !== null && typeof row === "object" && !Array.isArray(row),
+    );
+  }
+  if (raw === null || typeof raw !== "object") return [];
+  const object = raw as Record<string, unknown>;
+  // Live CT versions have used all four envelopes. Treating an unfamiliar wrapper as an empty list
+  // could otherwise turn a readable field into a replacement create.
+  for (const key of ["group", "data", "memberFields", "groupMemberFields"]) {
+    if (object[key] === undefined) continue;
+    const rows = memberFieldRows(object[key]);
+    if (rows.length > 0) return rows;
+  }
+  return [];
+}
+
+function explicitlyScopedGroupRows(raw: unknown): MemberFieldRow[] | undefined {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const object = raw as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(object, "group")) {
+    return memberFieldRows(object.group);
+  }
+  for (const key of ["data", "memberFields", "groupMemberFields"]) {
+    const nested = explicitlyScopedGroupRows(object[key]);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
+/** Normalise CT's list envelopes to the group-scoped rows only. */
 export function groupScopedRows(raw: unknown): MemberFieldRow[] {
-  const list = Array.isArray(raw)
-    ? raw
-    : Array.isArray((raw as { data?: unknown } | null)?.data)
-      ? ((raw as { data: unknown[] }).data as unknown[])
-      : [];
-  return list
-    .filter((row): row is MemberFieldRow => row !== null && typeof row === "object" && !Array.isArray(row))
-    .filter(isGroupScopedMemberField);
+  // The `group` bucket is CT's authoritative scope discriminator. Its rows may still carry
+  // `type: "person"` because they store values on memberships/persons; applying the generic row
+  // heuristic again would discard exactly the definitions writable through `/memberfields/group`.
+  const explicit = explicitlyScopedGroupRows(raw);
+  if (explicit !== undefined) return explicit;
+  return memberFieldRows(raw).filter(isGroupScopedMemberField);
 }

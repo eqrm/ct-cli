@@ -318,6 +318,26 @@ describe("group member fields — plan (#135)", () => {
     expect(item.note).toBe("fetch-failed");
     expect(renderPlan(plan)).toContain("INCOMPLETE");
   });
+
+  it("refuses to plan a replacement POST when a state-bound field id is absent from the live response", async () => {
+    const ct = makeCt();
+    ct.memberFields[100] = [];
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    state.resources.praktikum_1!.memberFields = { wahl: 501 };
+
+    const { plan, fetchErrors } = await buildPlan(ct.client, state, [
+      praktikum("praktikum_1", "Praktikum 1"),
+    ]);
+    expect(plan.items[0]).toMatchObject({ action: "no-op", note: "fetch-failed" });
+    expect(fetchErrors.join("\n")).toMatch(/praktikum_1::wahl \(#501\).*refusing to plan replacement POSTs/);
+    expect(renderPlan(plan)).toContain("INCOMPLETE");
+  });
 });
 
 describe("group member fields — apply (#135)", () => {
@@ -349,6 +369,62 @@ describe("group member fields — apply (#135)", () => {
     expect(ct.calls.filter((c) => c.startsWith("PATCH /groups/") && c.includes("memberfields"))).toHaveLength(
       1,
     );
+  });
+
+  it("normalises live response variants and PATCHes the current state-bound id", async () => {
+    const ct = makeCt();
+    ct.memberFields[100] = [{ id: 501, type: "group", name: "Birkman", fieldTypeCode: "textarea" }];
+    const realGet = ct.get.getMockImplementation()!;
+    ct.get.mockImplementation(async (path: string) => {
+      if (path === "/groups/100/memberfields") {
+        // The live endpoint used by the process wraps group-owned rows in `group` and serialises
+        // their ids as strings. Losing either compatibility makes the list look empty and causes a
+        // duplicate POST even though the current owner-local state already knows id 501.
+        return {
+          group: ct.memberFields[100]!.map((row) => ({
+            ...row,
+            id: String(row.id),
+            // On the live endpoint this describes where VALUES live, while the `group` bucket
+            // already identifies the definition's writable scope.
+            type: "person",
+          })),
+        };
+      }
+      return realGet(path);
+    });
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    state.resources.praktikum_1!.memberFields = { birkmann: 501 };
+    const { ct: dsl, resources } = createContext();
+    dsl.group({
+      key: "praktikum_1",
+      name: "Praktikum 1",
+      groupTypeId: 5,
+      groupStatusId: 1,
+      memberFields: [
+        {
+          key: "birkmann",
+          name: "Birkman (neu)",
+          fieldTypeCode: "textarea",
+        },
+      ],
+    });
+
+    const { plan } = await buildPlan(ct.client, state, resources);
+    expect(plan.items[0]!.changes.map((change) => change.field)).toContain("memberField:birkmann");
+    ct.calls.length = 0;
+    await executePlan(plan, { client: ct.client, state, statePath: "s.json", save: async () => {} });
+
+    expect(ct.calls.filter((call) => call === "POST /groups/100/memberfields/group")).toHaveLength(0);
+    expect(ct.calls.filter((call) => call === "PATCH /groups/100/memberfields/group/501")).toHaveLength(1);
+    expect(ct.memberFields[100]).toHaveLength(1);
+    expect(ct.memberFields[100]![0]!.name).toBe("Birkman (neu)");
+    expect(state.resources.praktikum_1!.memberFields).toEqual({ birkmann: 501 });
   });
 
   it("orders field creation before the dependent dynamic ruleset is installed", async () => {
