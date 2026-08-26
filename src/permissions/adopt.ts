@@ -35,7 +35,13 @@ import {
   type GrantTuple,
   type RawPermission,
 } from "./grants.js";
-import { ALL_SCOPE_SENTINEL, GROUP_SCOPE_FIELD, SCOPE_REF_KIND } from "./scope.js";
+import {
+  ALL_SCOPE_SENTINEL,
+  builtinScopeIdName,
+  GROUP_SCOPE_FIELD,
+  isBuiltinScopeId,
+  SCOPE_REF_KIND,
+} from "./scope.js";
 
 /** DSL function name for each domain type — the call the emitted block should be pasted as. */
 const DSL_FN: Record<DomainType, string> = {
@@ -316,11 +322,28 @@ function grantLines(g: CollapsedGrant, rev: Map<number, ReverseEntry>, state: St
       // host-specific-id advice below applies to it. Emitting `ct adopt department -1` sent people
       // looking for a resource that cannot exist, and in a real adoption run this fires on most of
       // the broadly-scoped grants — the interesting ones.
-      const realIds = g.dataIds.filter((id) => id !== ALL_SCOPE_SENTINEL);
-      const hasSentinel = g.dataIds.length > realIds.length;
+      //
+      // #151 generalised that: a dataId is ALREADY PORTABLE when it means the same thing on every
+      // host, which covers the `-1` sentinel AND a BUILT-IN row of the dimension (`cdb_comment_viewer`
+      // 0 = "Alle"). Both are emitted verbatim and neither counts as an unmanaged host-specific id.
+      // They differ in one respect worth keeping straight: `-1` is not an id at all, while a built-in
+      // IS a real row — just one every instance has. See `isBuiltinScopeId` for why adopting one is
+      // actively harmful rather than merely useless.
+      const portable = (id: number): boolean =>
+        id === ALL_SCOPE_SENTINEL || isBuiltinScopeId(entry.scopeField!, id);
+      const realIds = g.dataIds.filter((id) => !portable(id));
+      const hasSentinel = g.dataIds.includes(ALL_SCOPE_SENTINEL);
       if (hasSentinel) {
         const what = dimension ? `every ${dimension.type}` : `every value of "${entry.scopeField}"`;
         out.push(`    // scope -1 is ChurchTools' "alle" sentinel — ${what}; host-independent.`);
+      }
+      for (const id of g.dataIds) {
+        const builtin = builtinScopeIdName(entry.scopeField!, id);
+        if (builtin === null) continue;
+        out.push(
+          `    // scope ${id} is the built-in "${builtin}" ${dimension?.type ?? entry.scopeField} — ` +
+            `present on every instance, so the number is already portable (do not adopt it).`,
+        );
       }
       if (dimension && !dimension.managed && realIds.length > 0) {
         const field = SCOPE_SUGAR_FIELD[dimension.type] ?? dimension.type;
@@ -334,7 +357,7 @@ function grantLines(g: CollapsedGrant, rev: Map<number, ReverseEntry>, state: St
       const entries: string[] = [];
       const unmanaged: number[] = [];
       for (const id of [...g.dataIds].sort((a, b) => a - b)) {
-        if (id === ALL_SCOPE_SENTINEL) {
+        if (portable(id)) {
           // Portable as-is (see above) — emitted, but never counted as an unmanaged host-specific id.
           entries.push(String(id));
           continue;

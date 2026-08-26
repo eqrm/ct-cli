@@ -38,6 +38,40 @@ export interface ScopeResolution {
 export const ALL_SCOPE_SENTINEL = -1;
 
 /**
+ * Per-dimension dataIds that are BUILT IN to every ChurchTools instance, and therefore already
+ * portable — a config may write the number and mean the same thing on every host.
+ *
+ * Unlike {@link ALL_SCOPE_SENTINEL} these are REAL rows: `cdb_comment_viewer` `0` is the "Alle"
+ * comment viewer, which CT ships on every instance (verified live on two hosts of the same
+ * deployment, 2026-08-26). That difference matters — a built-in row can be renamed or deleted by an
+ * admin, so it is emitted as its NUMBER (exact, and immune to a rename) rather than resolved to a
+ * name, and it is never counted as an unmanaged host-specific id.
+ *
+ * Adopting one would be actively harmful, which is why this table exists: `ct adopt comment-viewer 0`
+ * yields `ct.commentViewer({ key: "alle", name: "Alle" })`, and replaying THAT config on a second
+ * host with a fresh state file finds no state entry, POSTs a SECOND "Alle" (CT mints a fresh id),
+ * scopes the grant to the duplicate instead of the built-in — the exact host-specific misgrant #151
+ * exists to prevent — and leaves a catalog with two "Alle" rows, which makes `{ commentViewer: "alle" }`
+ * fail `resolveFromCatalog`'s ambiguity check from then on.
+ *
+ * Deliberately keyed BY DIMENSION, not a blanket "`0` is portable" rule: on any other scope field `0`
+ * is an ordinary host-specific id, and a global rule would silently stop flagging it.
+ */
+const BUILTIN_SCOPE_IDS: Readonly<Record<string, readonly number[]>> = {
+  cdb_comment_viewer: [0], // "Alle"
+};
+
+/** Whether `id` on `scopeField` is a built-in row present on every host — see {@link BUILTIN_SCOPE_IDS}. */
+export function isBuiltinScopeId(scopeField: string, id: number): boolean {
+  return BUILTIN_SCOPE_IDS[scopeField]?.includes(id) ?? false;
+}
+
+/** The human name of a built-in scope id, for the note the adopter emits next to the number. */
+export function builtinScopeIdName(scopeField: string, id: number): string | null {
+  return scopeField === "cdb_comment_viewer" && id === 0 ? "Alle" : null;
+}
+
+/**
  * The catalog `scopeField` naming the GROUP dimension. The only dimension a bare string scope entry
  * may address — every other one needs a typed ref (see {@link SCOPE_REF_KIND}) or a numeric dataId.
  */

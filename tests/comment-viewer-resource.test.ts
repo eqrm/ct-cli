@@ -11,10 +11,13 @@
  * NAMES were missing on the second host too, so the ref hard-errored rather than resolving wrongly.
  *
  * Declaring the viewer is what makes the name exist on both hosts, which is what makes the ref
- * portable. `/person/commentviewers` is conventional REST (`[{id, name, sortKey}]` plus
- * POST/PUT/DELETE, live-probed CT 3.135.2, 2026-08-14), so this type needs none of the machinery the
- * other two awkward master-data types did: CT mints the id (unlike `security-level`) and the writes
- * are REST (unlike `department`).
+ * portable. `/person/commentviewers` is conventional REST, so this type needs none of the machinery
+ * the other two awkward master-data types did: CT mints the id (unlike `security-level`) and the
+ * writes are REST (unlike `department`). Fully live-probed on eqrm-dev, CT 3.135.2 (2026-08-26):
+ * collection GET/POST, item GET/PUT/DELETE, absent item id → clean 404.
+ *
+ * The one dataId that is NOT host-specific is `0`, the built-in "Alle" viewer CT ships everywhere —
+ * so it is emitted as a number and never offered for adoption (see the "Alle" test below).
  */
 import { describe, it, expect, vi } from "vitest";
 import { evaluateConfig } from "../src/config/context.js";
@@ -149,22 +152,16 @@ describe("declaring, creating and updating a comment viewer (#151)", () => {
 });
 
 describe("adopt → config → plan round-trips to a no-op (#151)", () => {
-  it("reads the row out of the COLLECTION, not a guessed item path", async () => {
-    // The probe behind this type recorded the collection read plus POST/PUT/DELETE on the item path;
-    // a GET on the item path was never probed. Guessing it has a genuinely bad failure mode (#108):
-    // a 404 reads as "vanished in ChurchTools", so every plan proposes creating the viewer again.
-    const rows = [
-      { id: 0, name: "Alle", sortKey: 0 },
-      { id: 4, name: "Dienstbereich", sortKey: 40 },
-    ];
-    const getAll = vi.fn(async () => ({ data: rows }));
-    const client = { request: async () => ({}), getAll } as never;
-
-    expect(await SPEC.fetchOne!(client, 4)).toEqual(rows[1]);
-    expect(getAll).toHaveBeenCalledWith(PATH);
-    // `id: 0` ("Alle") is a real row on every instance — a lookup that tests truthiness would drop it.
-    expect(await SPEC.fetchOne!(client, 0)).toEqual(rows[0]);
-    expect(await SPEC.fetchOne!(client, 99)).toBeNull();
+  it("uses the DEFAULT item read — `GET {itemPath}` exists here (probed 2026-08-26)", () => {
+    // This type briefly carried a collection-filtering `fetchOne` because a GET on the item path was
+    // unprobed, and guessing it has a genuinely bad failure mode (#108): a 404 reads as "vanished in
+    // ChurchTools", so every plan proposes creating the viewer again. The live probe retired the
+    // guess — `GET /person/commentviewers/{id}` returns the row, and an ABSENT id returns a clean
+    // 404 `error.notfound`, which is exactly the distinction the default read needs. Keeping the hook
+    // would cost one full collection read per managed viewer per plan/apply/destroy (`fetchActual`
+    // fans out concurrently) against a rate-limited API. `department` is the only type that still
+    // needs the hook, because `/departments/{id}` genuinely does not exist.
+    expect(SPEC.fetchOne).toBeUndefined();
   });
 
   it("emits a declaration that diffs clean against the row it was adopted from", async () => {

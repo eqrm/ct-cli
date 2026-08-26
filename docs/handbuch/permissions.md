@@ -7,8 +7,8 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: eaea3f87de51a46f
-reviewed: 2026-08-25
+sources_hash: bd920e2a1991c0d8
+reviewed: 2026-08-26
 ---
 
 # Permissions (`ct.groupRole` / `ct.groupTypeRole` / `ct.status`)
@@ -508,7 +508,7 @@ Three things are hard errors at **plan** time, never a guessed `dataId`:
   group", so on e.g. a `cdb_station` right it would either fail confusingly or —
   worse — match an unrelated group that happens to carry that key.
 
-### Comment viewers: the last catalog-only dimension (#151)
+### Comment viewers: from catalog-only to declarable (#151)
 
 `cdb_comment_viewer` (Kommentare-Viewer) had a reference form since #102 but no
 declaration behind it, and that combination turned out to be the worst of both
@@ -540,10 +540,27 @@ something guarantees the row is there.
 
 - **`ct adopt comment-viewer <id>`** puts an existing viewer under management and
   emits the declaration; `ct get comment-viewers` lists the names.
-- **`/person/commentviewers` is conventional REST** (`[{id, name, sortKey}]` plus
-  POST/PUT/DELETE), so this type needs none of the special machinery the other
-  two awkward master-data types did: ChurchTools mints the id (unlike a security
-  level) and the writes are REST (unlike a Bereich).
+- **`/person/commentviewers` is conventional REST**, so this type needs none of
+  the special machinery the other two awkward master-data types did: ChurchTools
+  mints the id (unlike a security level) and the writes are REST (unlike a
+  Bereich). Fully live-probed on eqrm-dev, CT 3.135.2 (2026-08-26) — one
+  throwaway row created, read, updated and deleted, instance left as found:
+
+  | Call                                 | Result                                            |
+  | ------------------------------------ | ------------------------------------------------- |
+  | `GET /person/commentviewers`         | flat `[{id, name, nameTranslated, sortKey}]`      |
+  | `POST /person/commentviewers`        | 200 — **CT mints the id**; body `{name, sortKey}` |
+  | `GET /person/commentviewers/{id}`    | 200; an absent id → clean 404 `error.notfound`    |
+  | `PUT /person/commentviewers/{id}`    | 200                                               |
+  | `DELETE /person/commentviewers/{id}` | 200                                               |
+
+  The minted id is an auto-increment that does **not** reuse deleted rows and
+  moves faster than the visible row count (three consecutive probe creates on a
+  three-row instance minted 5, 8 and 11), which is why a viewer can never carry a
+  declared id the way a security level does — nothing can predict it.
+  `nameTranslated` is derived from `name`, not independently writable, so the
+  managed set (`name`, `sortKey`) is complete and a `PUT` cannot blank a sibling.
+
 - **Resolution is managed-state first, live catalog second.** An existing
   reference to a viewer your config does not own keeps resolving exactly as it
   did in #102, and a name that matches nothing anywhere is still a hard error
@@ -558,6 +575,19 @@ Declare/adopt it, fix the key/name, or use a numeric id.
 - **`ct apply` never deletes**, as everywhere else. `ct destroy` can, and warns:
   deleting a viewer reaches every person comment restricted to it and every grant
   scoped to it.
+- **`dataId: 0` — the built-in "Alle" viewer — is the one id you should _not_
+  adopt.** ChurchTools ships it on every instance, so the number already means the
+  same thing everywhere, and it is the likely `dataId` on a real
+  `churchdb:view comments` grant. Adopting it would be actively harmful rather
+  than merely pointless: the emitted
+  `ct.commentViewer({ key: "alle", name: "Alle" })` finds no state entry on a
+  second host, so `ct apply` creates a **second** "Alle" with a fresh id, scopes
+  the grant to the duplicate, and leaves a catalog where
+  `{ commentViewer: "alle" }` is ambiguous forever after. The adopter therefore
+  treats it like the `-1` sentinel — emitted as the bare number with a comment
+  saying what it is, never with an adoption hint. It stays a **number** rather
+  than a name reference on purpose: an admin can rename the row, and the id is
+  what does not move.
 
 With this, every scope dimension `ct` can name is also one it can declare —
 Bereiche left the catalog-only list in #108, security levels in #110, and comment
@@ -658,7 +688,7 @@ comment-viewer bucket — **not** a group — so `GET /groups/{1,2,3}` 404s. A
 `scope` array entry may therefore be a plain number instead of a string:
 
 (Both of those dimensions gained a name-based form and are declarable resources
-now — comment viewers in [#151](#comment-viewers-the-last-catalog-only-dimension-151),
+now — comment viewers in [#151](#comment-viewers-from-catalog-only-to-declarable-151),
 security levels in [#110](#security-levels-a-managed-resource-with-a-declared-id-110).
 Numerics keep working for both; calendar categories, OAuth clients and the other
 module dimensions still have nothing but numerics.)
@@ -785,6 +815,14 @@ guaranteed to be accepted by `ct plan` (the round trip is locked by tests):
   host reads it. It is therefore already portable, and it is emitted with a
   one-line comment saying what it is — never with an adoption hint, because
   `ct adopt department -1` names a resource that cannot exist.
+- **Built-in rows are already portable too** (#151). Same treatment as `-1`, for a
+  different reason: `cdb_comment_viewer` `0` ("Alle") _is_ a real row, but one every
+  instance has, so the number means the same thing on every host. It is emitted
+  verbatim with a comment naming it, never counted as an unmanaged host-specific
+  id, and never offered for adoption — see
+  [comment viewers](#comment-viewers-from-catalog-only-to-declarable-151) for what
+  adopting it would do to the second host. This is keyed **by dimension**: `0` on
+  any other scope field is an ordinary host-specific id and is still flagged.
 - **Admin-authored member rights are emitted as active grants** — **including**
   the writable `authId >= 10000` `churchdb:+…` member rights CT lets you set on
   `group_type_role`. There is no authId cutoff (#65).

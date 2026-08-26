@@ -27,11 +27,13 @@ export type ScopeSugar =
  * - a **logical group key** (`string`) — a group managed by this tool. Group dimension only.
  * - a **typed logical ref** ({@link ScopeSugar} / {@link Ref}, #98) — the portable form for the other
  *   dimensions this tool can name by key: campuses (`cdb_station`), group types (`cdb_gruppentyp`),
- *   departments (`cdb_bereich`) and security levels (`cc_securitylevel`, #110). The last two are
- *   catalogs `ct` reads but does not manage: referenceable by name on any host, never declarable.
+ *   departments (`cdb_bereich`, #108), security levels (`cc_securitylevel`, #110) and comment viewers
+ *   (`cdb_comment_viewer`, #151). All of them are DECLARABLE resources — every dimension with a
+ *   logical form is managed today, so a ref can resolve against the config's own state as well as
+ *   against the live catalog.
  * - a **raw numeric dataId** (`number`, #49 escape hatch) — still supported everywhere, and the only
  *   form for dimensions this tool cannot yet address by a host-independent name
- *   (`ccm_data_category`, `cdb_comment_viewer`, `oauth_client`, …).
+ *   (`ccm_data_category`, `oauth_client`, `cc_calcategory`, …).
  */
 export type ScopeEntry = string | number | Ref | ScopeSugar;
 
