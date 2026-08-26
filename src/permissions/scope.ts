@@ -42,33 +42,41 @@ export const ALL_SCOPE_SENTINEL = -1;
  * portable — a config may write the number and mean the same thing on every host.
  *
  * Unlike {@link ALL_SCOPE_SENTINEL} these are REAL rows: `cdb_comment_viewer` `0` is the "Alle"
- * comment viewer, which CT ships on every instance (verified live on two hosts of the same
- * deployment, 2026-08-26). That difference matters — a built-in row can be renamed or deleted by an
- * admin, so it is emitted as its NUMBER (exact, and immune to a rename) rather than resolved to a
- * name, and it is never counted as an unmanaged host-specific id.
+ * comment viewer, which CT ships on every instance (present on both hosts of the same deployment in
+ * the 2026-08-24 two-host read; re-read on eqrm-dev 2026-08-26). That difference matters — a built-in
+ * row can be renamed or deleted by an admin, so it is emitted as its NUMBER (exact, and immune to a
+ * rename) rather than resolved to a name, and it is never counted as an unmanaged host-specific id.
  *
  * Adopting one would be actively harmful, which is why this table exists: `ct adopt comment-viewer 0`
  * yields `ct.commentViewer({ key: "alle", name: "Alle" })`, and replaying THAT config on a second
- * host with a fresh state file finds no state entry, POSTs a SECOND "Alle" (CT mints a fresh id),
+ * host with a fresh state file finds no state entry, POSTs a SECOND "Alle" (CT mints a fresh id) and
  * scopes the grant to the duplicate instead of the built-in — the exact host-specific misgrant #151
- * exists to prevent — and leaves a catalog with two "Alle" rows, which makes `{ commentViewer: "alle" }`
- * fail `resolveFromCatalog`'s ambiguity check from then on.
+ * exists to prevent. Note the duplicate does NOT announce itself on the host that created it:
+ * resolution is managed-state-first (`Resolver.resolve`), so `{ commentViewer: "alle" }` there
+ * silently resolves to the config's own duplicate and never reaches `resolveFromCatalog`'s ambiguity
+ * check. The two "Alle" rows only hard-error for a config reading that catalog WITHOUT a state entry
+ * — so the failure surfaces on a third host, or after a state reset, not where it was caused.
  *
  * Deliberately keyed BY DIMENSION, not a blanket "`0` is portable" rule: on any other scope field `0`
  * is an ordinary host-specific id, and a global rule would silently stop flagging it.
+ *
+ * The NAME lives in this same table rather than in a parallel lookup: `isBuiltinScopeId` suppresses
+ * the adoption hint and `builtinScopeIdName` supplies the comment that explains the suppression, so
+ * two tables that disagreed would emit a bare `scope: [0]` with nothing saying why it was not flagged
+ * — precisely the confusion this exists to prevent.
  */
-const BUILTIN_SCOPE_IDS: Readonly<Record<string, readonly number[]>> = {
-  cdb_comment_viewer: [0], // "Alle"
+const BUILTIN_SCOPE_IDS: Readonly<Record<string, Readonly<Record<number, string>>>> = {
+  cdb_comment_viewer: { 0: "Alle" },
 };
 
 /** Whether `id` on `scopeField` is a built-in row present on every host — see {@link BUILTIN_SCOPE_IDS}. */
 export function isBuiltinScopeId(scopeField: string, id: number): boolean {
-  return BUILTIN_SCOPE_IDS[scopeField]?.includes(id) ?? false;
+  return builtinScopeIdName(scopeField, id) !== null;
 }
 
 /** The human name of a built-in scope id, for the note the adopter emits next to the number. */
 export function builtinScopeIdName(scopeField: string, id: number): string | null {
-  return scopeField === "cdb_comment_viewer" && id === 0 ? "Alle" : null;
+  return BUILTIN_SCOPE_IDS[scopeField]?.[id] ?? null;
 }
 
 /**

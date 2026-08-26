@@ -7,7 +7,7 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: bd920e2a1991c0d8
+sources_hash: becf78e8e94dbfed
 reviewed: 2026-08-26
 ---
 
@@ -581,9 +581,13 @@ Declare/adopt it, fix the key/name, or use a numeric id.
   `churchdb:view comments` grant. Adopting it would be actively harmful rather
   than merely pointless: the emitted
   `ct.commentViewer({ key: "alle", name: "Alle" })` finds no state entry on a
-  second host, so `ct apply` creates a **second** "Alle" with a fresh id, scopes
-  the grant to the duplicate, and leaves a catalog where
-  `{ commentViewer: "alle" }` is ambiguous forever after. The adopter therefore
+  second host, so `ct apply` creates a **second** "Alle" with a fresh id and
+  scopes the grant to the duplicate. Worse, that host never complains:
+  resolution is managed-state-first, so `{ commentViewer: "alle" }` quietly
+  resolves to the config's own duplicate. The two identically named rows only
+  hard-error for a config reading the catalog _without_ a state entry — a third
+  host, or the same one after a state reset — so the damage surfaces somewhere
+  other than where it was caused. The adopter therefore
   treats it like the `-1` sentinel — emitted as the bare number with a comment
   saying what it is, never with an adoption hint. It stays a **number** rather
   than a name reference on purpose: an admin can rename the row, and the id is
