@@ -6,7 +6,12 @@ import { renderPlan } from "../src/engine/render.js";
 import { createContext, evaluateConfig, ref } from "../src/config/context.js";
 import { emptyState, type State } from "../src/state/state.js";
 import type { DesiredResource } from "../src/engine/types.js";
-import { memberFieldPseudo, isGroupScopedMemberField } from "../src/engine/member-fields.js";
+import {
+  memberFieldPseudo,
+  isGroupScopedMemberField,
+  actualMemberFieldProps,
+  groupScopedRows,
+} from "../src/engine/member-fields.js";
 
 const HOST = "https://mychurch.church.tools";
 
@@ -364,7 +369,7 @@ describe("group member fields — plan (#135)", () => {
     expect(renderPlan(plan)).toContain("INCOMPLETE");
   });
 
-  it("refuses to plan a replacement POST when a state-bound field id is absent from the live response", async () => {
+  it("leaves a stale-bound field unreconciled without blocking the rest of its group", async () => {
     const ct = makeCt();
     ct.memberFields[100] = [];
     const state = stateWith({
@@ -376,12 +381,24 @@ describe("group member fields — plan (#135)", () => {
     });
     state.resources.praktikum_1!.memberFields = { wahl: 501 };
 
+    // The group itself has real drift (a rename): a stale binding on ONE member field must not stop
+    // the group's own properties — or its other sub-resources — from being planned.
     const { plan, fetchErrors } = await buildPlan(ct.client, state, [
-      praktikum("praktikum_1", "Praktikum 1"),
+      praktikum("praktikum_1", "Praktikum 2"),
     ]);
-    expect(plan.items[0]).toMatchObject({ action: "no-op", note: "fetch-failed" });
-    expect(fetchErrors.join("\n")).toMatch(/praktikum_1::wahl \(#501\).*refusing to plan replacement POSTs/);
-    expect(renderPlan(plan)).toContain("INCOMPLETE");
+    const item = plan.items.find((i) => i.key === "praktikum_1")!;
+    expect(item.action).toBe("update");
+    expect(item.note).toBeUndefined();
+    expect(item.changes.map((c) => c.field)).toEqual(["name"]);
+    // …and no replacement POST is planned for the stale field.
+    expect(item.changes.some((c) => c.field.startsWith("memberField:"))).toBe(false);
+    expect(fetchErrors.join("\n")).toMatch(
+      /praktikum_1::wahl: state binds it to #501.*ct destroy --member-field praktikum_1::wahl/s,
+    );
+    // A non-empty `fetchErrors` still makes `ct plan` INCOMPLETE and exit 1 (see commands/plan.ts);
+    // what changed is that the group is no longer rendered as an unreadable resource.
+    expect(fetchErrors).toHaveLength(1);
+    expect(renderPlan(plan)).not.toContain("could not be read");
   });
 });
 
@@ -684,5 +701,40 @@ describe("isGroupScopedMemberField (#135 review)", () => {
     expect(isGroupScopedMemberField({ id: 1, type: "person" })).toBe(false);
     expect(isGroupScopedMemberField({ id: 1, source: "masterdata" })).toBe(false);
     expect(isGroupScopedMemberField({ id: 1, fieldSource: "group-type" })).toBe(false);
+  });
+});
+
+describe("actualMemberFieldProps — defaultValue ↔ option id (#154 review)", () => {
+  it("treats the option id CT echoes for a by-name default as no drift", () => {
+    const row = { defaultValue: 7, options: [{ id: 7, name: "Ja" }, { id: 8, name: "Nein" }] };
+    expect(actualMemberFieldProps(row, { defaultValue: "Ja" })).toEqual({ defaultValue: "Ja" });
+  });
+
+  it("does not match an ABSENT default against an id-less option", () => {
+    // Both sides stringify to "undefined": coercing them would report the field converged forever
+    // and the declared default would never be written.
+    const row = { options: [{ name: "Ja" }, { name: "Nein" }] };
+    expect(actualMemberFieldProps(row, { defaultValue: "Ja" })).toEqual({ defaultValue: undefined });
+    expect(actualMemberFieldProps({ defaultValue: null, options: [{ id: null, name: "Ja" }] }, {
+      defaultValue: "Ja",
+    })).toEqual({ defaultValue: null });
+  });
+});
+
+describe("groupScopedRows — { type, field } wrapper (#154 review)", () => {
+  it("keeps a wrapper-held id when the inner definition carries none", () => {
+    // Losing it would make adopt skip the group and apply refuse the update for want of a row id.
+    const rows = groupScopedRows([{ type: "group", id: 42, field: { name: "Wahl", referenceName: "wahl" } }]);
+    expect(rows).toEqual([{ type: "group", id: 42, name: "Wahl", referenceName: "wahl" }]);
+  });
+
+  it("lets the inner definition win on every key it names", () => {
+    const rows = groupScopedRows([{ type: "group", id: 42, name: "Outer", field: { id: 7, name: "Wahl" } }]);
+    expect(rows).toEqual([{ type: "group", id: 7, name: "Wahl" }]);
+  });
+
+  it("leaves a plain row that merely carries an unrelated `field` object alone", () => {
+    const row = { id: 3, name: "Wahl", referenceName: "wahl", field: { label: "irrelevant" } };
+    expect(groupScopedRows([row])).toEqual([row]);
   });
 });

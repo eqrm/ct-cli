@@ -271,12 +271,17 @@ export function actualMemberFieldProps(
   const out: Record<string, unknown> = {};
   for (const [name, desired] of Object.entries(declaredProps)) {
     const actual = row[name];
-    if (name === "defaultValue" && actual !== desired && Array.isArray(row.options)) {
+    // CT may answer `defaultValue` as the chosen OPTION'S ID where the declaration names the
+    // option by name. Both sides must actually carry a value before they are compared as strings:
+    // an absent `defaultValue` next to an id-less option would otherwise match `"undefined"` to
+    // `"undefined"`, report the field converged forever, and never write the declared default.
+    if (name === "defaultValue" && actual !== desired && actual != null && Array.isArray(row.options)) {
       const option = row.options.find(
         (candidate) =>
           candidate !== null &&
           typeof candidate === "object" &&
           !Array.isArray(candidate) &&
+          (candidate as Record<string, unknown>).id != null &&
           String((candidate as Record<string, unknown>).id) === String(actual),
       ) as Record<string, unknown> | undefined;
       if (option?.name === desired) {
@@ -333,6 +338,15 @@ export function memberFieldItemPath(groupId: number, fieldId: number): string {
   return `/groups/${groupId}/memberfields/group/${fieldId}`;
 }
 
+/** Does this nested object carry a member field's own identity — i.e. is it a wrapped definition? */
+function looksLikeMemberFieldDefinition(nested: MemberFieldRow): boolean {
+  return (
+    typeof nested.name === "string" ||
+    typeof nested.referenceName === "string" ||
+    memberFieldId(nested) !== undefined
+  );
+}
+
 function memberFieldRows(raw: unknown): MemberFieldRow[] {
   if (Array.isArray(raw)) {
     return raw.flatMap((candidate): MemberFieldRow[] => {
@@ -340,10 +354,19 @@ function memberFieldRows(raw: unknown): MemberFieldRow[] {
       const wrapper = candidate as MemberFieldRow;
       const nested = wrapper.field;
       if (nested === null || typeof nested !== "object" || Array.isArray(nested)) return [wrapper];
+      const inner = nested as MemberFieldRow;
+      // Only a nested object that actually looks like a DEFINITION is a wrapper. A plain row that
+      // merely carries an unrelated `field` sub-object keeps its own shape rather than being
+      // replaced by it.
+      if (!looksLikeMemberFieldDefinition(inner)) return [wrapper];
       // Some CT versions wrap every definition as `{ type: "group", field: { ...definition } }`.
-      // Keep the wrapper's scope discriminator, but expose the inner definition to every identity,
-      // diff, adoption, and write-path helper.
-      return [{ ...(nested as MemberFieldRow), type: wrapper.type ?? (nested as MemberFieldRow).type }];
+      // Merge wrapper-under-nested rather than dropping the wrapper: the inner definition wins on
+      // every key it names, while a scope discriminator — or an id — that the variant parked on the
+      // wrapper still reaches every identity, diff, adoption, and write-path helper. Losing a
+      // wrapper-held id would make adopt skip the group and apply refuse the update.
+      const outer = { ...wrapper };
+      delete outer.field;
+      return [{ ...outer, ...inner, type: wrapper.type ?? inner.type }];
     });
   }
   if (raw === null || typeof raw !== "object") return [];

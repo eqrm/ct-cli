@@ -239,22 +239,30 @@ const memberFieldsField: SyntheticField = {
       const managed = state.resources[d.key]!;
       try {
         const rows = await readMemberFields(client, managed.id);
-        const missing = d.memberFields!.flatMap((spec) => {
-          const knownId = knownMemberFieldId(state, d.key, spec.key);
-          if (knownId === undefined || rows.some((row) => memberFieldRowId(row) === knownId)) return [];
-          return [`${memberFieldIdentity(d.key, spec.key)} (#${knownId})`];
+        // A state-bound id the live response no longer carries is a STALE BINDING on ONE field, not
+        // an unreadable group: the read succeeded and every other field on this group still has a
+        // trustworthy actual side. So the affected fields are dropped from the desired side (no key,
+        // no change, no replacement POST — the same mechanism that makes a dropped declaration a
+        // no-op) while `name`, `parents`, `dynamic` and the group's other member fields keep
+        // reconciling. The error still names the field, and names the command that clears it.
+        const stale = new Set(
+          d.memberFields!.flatMap((spec) => {
+            const knownId = knownMemberFieldId(state, d.key, spec.key);
+            if (knownId === undefined || rows.some((row) => memberFieldRowId(row) === knownId)) return [];
+            return [spec.key];
+          }),
+        );
+        const errors = [...stale].map((localKey) => {
+          const identity = memberFieldIdentity(d.key, localKey);
+          return (
+            `member field ${identity}: state binds it to #${knownMemberFieldId(state, d.key, localKey)}, ` +
+            `but the live response for group #${managed.id} no longer contains that id; leaving this ` +
+            `field unreconciled rather than planning a replacement POST. If it was deleted or ` +
+            `re-created in ChurchTools, drop the stale binding with ` +
+            `\`ct destroy --member-field ${identity}\` and re-run.`
+          );
         });
-        if (missing.length > 0) {
-          return {
-            key: d.key,
-            rows: undefined,
-            errors: [
-              `member fields ${d.key} (#${managed.id}): the live response did not contain the ` +
-                `state-bound field(s) ${missing.join(", ")}; refusing to plan replacement POSTs`,
-            ],
-          };
-        }
-        return { key: d.key, rows, errors: [] as string[] };
+        return { key: d.key, rows, stale, errors };
       } catch (err) {
         // Same honesty rule as the dynamic fold (#126): an unread actual is NOT a known-absent one,
         // so the desired side stays unfolded and the group is reported unreadable rather than having
@@ -262,6 +270,7 @@ const memberFieldsField: SyntheticField = {
         return {
           key: d.key,
           rows: undefined,
+          stale: new Set<string>(),
           errors: [`member fields ${d.key} (#${managed.id}): ${formatError(err)}`],
         };
       }
@@ -270,6 +279,7 @@ const memberFieldsField: SyntheticField = {
     const unreadable = outcomes.filter((o) => o.rows === undefined).map((o) => o.key);
     const unreadableKeys = new Set(unreadable);
     const rowsByKey = new Map(outcomes.filter((o) => o.rows !== undefined).map((o) => [o.key, o.rows!]));
+    const staleByKey = new Map(outcomes.map((o) => [o.key, o.stale]));
 
     const augmented = desired.map((d) => {
       if (d.type !== "group" || d.memberFields === undefined) return d;
@@ -277,7 +287,9 @@ const memberFieldsField: SyntheticField = {
       const rows = rowsByKey.get(d.key);
       const a = actual.get(d.key);
       const fields = { ...d.fields };
+      const stale = staleByKey.get(d.key);
       for (const spec of d.memberFields) {
+        if (stale?.has(spec.key)) continue; // stale state binding — reported above, left unreconciled
         const pseudo = memberFieldPseudo(spec.key);
         fields[pseudo] = spec.props;
         if (!a || !rows) continue;
@@ -360,7 +372,8 @@ const memberFieldsField: SyntheticField = {
       throw new Error(
         `group member field "${memberFieldIdentity(key, local)}": state binds it to #${knownId}, ` +
           `but the live response for group #${id} did not contain that id; refusing to create a ` +
-          `possible duplicate`,
+          `possible duplicate. If the field was deleted or re-created in ChurchTools, drop the stale ` +
+          `binding with \`ct destroy --member-field ${memberFieldIdentity(key, local)}\` and re-run.`,
       );
     }
 

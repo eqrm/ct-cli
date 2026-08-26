@@ -246,19 +246,32 @@ async function captureMemberFields(
     const localKey = localKeyOf(row);
     const canonical = memberFieldStateKey(localKey);
     const fieldId = memberFieldId(row);
+    // Same rule as the read failure above: a group whose member fields cannot be captured CLEANLY
+    // is not a reason to abort a bulk adoption. `saveState` runs only after the whole `--children-of`
+    // loop, so throwing here would discard every group already processed in this run.
     if (!canonical) {
-      throw new Error(`group #${id}: a group-scoped member field has neither referenceName nor name.`);
+      warn(
+        `group #${id}: a group-scoped member field has neither referenceName nor name — adopted ` +
+          `WITHOUT member fields. Give it a name in ChurchTools, then re-run ` +
+          `\`ct adopt group ${id} --with-member-fields\`.`,
+      );
+      return undefined;
     }
     if (fieldId === undefined) {
-      throw new Error(
-        `group #${id} member field "${localKey}": the live response contains no numeric field id.`,
+      warn(
+        `group #${id} member field "${localKey}": the live response contains no numeric field id — ` +
+          `adopted WITHOUT member fields. Re-run \`ct adopt group ${id} --with-member-fields\` once ` +
+          `the response carries ids.`,
       );
+      return undefined;
     }
     if (ids[canonical] !== undefined) {
-      throw new Error(
-        `group #${id}: multiple group-scoped member fields resolve to the local key "${canonical}"; ` +
-          `rename one in ChurchTools before adopting them.`,
+      warn(
+        `group #${id}: multiple group-scoped member fields resolve to the local key "${canonical}" — ` +
+          `adopted WITHOUT member fields. Rename one in ChurchTools, then re-run ` +
+          `\`ct adopt group ${id} --with-member-fields\`.`,
       );
+      return undefined;
     }
     ids[canonical] = fieldId;
     const declaration: Record<string, unknown> = { key: localKey };
@@ -525,7 +538,14 @@ export function adoptGroupCommand(): Command {
           continue;
         }
         const action = upsert(state, { type: "group", id, key, fields }, now);
-        if (memberFields) state.resources[key]!.memberFields = memberFields.ids;
+        // An empty map is not the same as no map: `ct destroy --member-field` DELETES the key when
+        // the last id is forgotten (see destroy.ts), so writing `memberFields: {}` here would make
+        // a no-op re-adoption churn the state file against the two paths' shared contract.
+        if (memberFields) {
+          const managed = state.resources[key]!;
+          if (Object.keys(memberFields.ids).length > 0) managed.memberFields = memberFields.ids;
+          else delete managed.memberFields;
+        }
         results.push({ id, key, fields, snippet });
         reports.push({ action, id, key });
       }

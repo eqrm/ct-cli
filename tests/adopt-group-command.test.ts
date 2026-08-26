@@ -670,6 +670,59 @@ describe("ct adopt group --with-member-fields (#135)", () => {
     }
   });
 
+  it("two fields sharing one local key do not abort the run — it warns and adopts without them", async () => {
+    // `saveState` runs only after the whole `--children-of` loop, so throwing here would discard
+    // every group already adopted in this run. Same rule as the unreadable-fields path above.
+    const warnings: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      warnings.push(String(chunk));
+      return true;
+    });
+    const original = client.get.getMockImplementation()!;
+    client.get.mockImplementation((async (path: string) => {
+      if (path === "/groups/31/memberfields") {
+        return [
+          { type: "group", field: { id: 701, name: "Wahl 1" } },
+          { type: "group", field: { id: 702, name: "wahl-1" } },
+        ];
+      }
+      return original(path);
+    }) as never);
+    try {
+      await run(["group", "31", "--with-member-fields", "--state", statePath]);
+      const state = await loadState(statePath, HOST);
+      expect(state.resources.static_group).toBeDefined(); // the run completed and wrote state
+      expect(state.resources.static_group!.memberFields).toBeUndefined();
+      expect(warnings.join("")).toMatch(/resolve to the local key "wahl_1"/);
+    } finally {
+      client.get.mockImplementation(original as never);
+      spy.mockRestore();
+    }
+  });
+
+  it("a member field with no numeric id does not abort the run either", async () => {
+    const warnings: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      warnings.push(String(chunk));
+      return true;
+    });
+    const original = client.get.getMockImplementation()!;
+    client.get.mockImplementation((async (path: string) => {
+      if (path === "/groups/31/memberfields") return [{ type: "group", field: { name: "Wahl" } }];
+      return original(path);
+    }) as never);
+    try {
+      await run(["group", "31", "--with-member-fields", "--state", statePath]);
+      const state = await loadState(statePath, HOST);
+      expect(state.resources.static_group).toBeDefined();
+      expect(state.resources.static_group!.memberFields).toBeUndefined();
+      expect(warnings.join("")).toMatch(/contains no numeric field id/);
+    } finally {
+      client.get.mockImplementation(original as never);
+      spy.mockRestore();
+    }
+  });
+
   it("emits no memberFields block for a group that has none", async () => {
     const snippet = await snippetFor([
       "group",
@@ -682,9 +735,11 @@ describe("ct adopt group --with-member-fields (#135)", () => {
     expect(snippet).not.toContain("memberFields");
   });
 
-  it("records an empty owner-local map when the live read succeeds with no fields", async () => {
+  it("records no owner-local map when the live read succeeds with no fields", async () => {
+    // `ct destroy --member-field` DELETES the key once the last id is forgotten, so an empty map
+    // here would make a no-op re-adoption churn the state file against that same contract.
     await run(["group", "10", "--with-member-fields", "--state", statePath]);
     const state = await loadState(statePath, HOST);
-    expect(state.resources.area_a!.memberFields).toEqual({});
+    expect(state.resources.area_a!.memberFields).toBeUndefined();
   });
 });
