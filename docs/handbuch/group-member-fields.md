@@ -1,5 +1,5 @@
 ---
-sources_hash: 34e868cb911e7b9b
+sources_hash: 887a114f54798292
 title: Group member fields
 sources:
   - src/engine/member-fields.ts
@@ -153,6 +153,13 @@ The actual side is narrowed to exactly the properties the declaration names, so
 a server default ChurchTools returns can never make the two sides differ
 forever: **a clean apply re-plans as a no-op.**
 
+The same projection applies inside `options`: ChurchTools assigns host-specific
+ids to select options, while a portable config can declare `{ name }`. Those
+server ids are ignored unless the config explicitly declares them. If CT stores
+`defaultValue` as one of those option ids, the comparison resolves it back to
+the declared option name. Option order, count, names, and every explicitly
+declared property remain managed.
+
 `apply` creates a field only after its owning group exists (the group's own
 create runs first, then its owned sub-resources), and updates an existing field
 in place — matched by identity, never re-created.
@@ -233,10 +240,12 @@ Three things follow:
 
 Depending on the ChurchTools version, the read response is a bare array or is
 wrapped under `group`, `data`, `memberFields` or `groupMemberFields`; field ids
-may be numbers or decimal strings. `ct` normalises those transport variants
-before identity matching. The `group` bucket is itself the authoritative scope
-marker; a row inside it may still say `type: "person"` because values live on
-memberships, and is not discarded for that reason.
+may be numbers or decimal strings. Individual rows may also wrap the definition
+as `{ type: "group", field: { ... } }`. `ct` normalises those transport variants
+before identity matching. The outer wrapper or `group` bucket is the
+authoritative scope marker; a row inside the bucket may still say
+`type: "person"` because values live on memberships, and is not discarded for
+that reason.
 
 When state already binds a portable field identity to a ChurchTools id but a
 live response does not contain that id, the plan is marked **INCOMPLETE**. `ct`

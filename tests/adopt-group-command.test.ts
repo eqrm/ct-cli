@@ -77,16 +77,34 @@ function makeClient(childrenResponse: ChildrenResponse = "array") {
   const memberFields: Record<number, Array<Record<string, unknown>>> = {
     31: [
       {
-        id: 701,
         type: "group",
-        referenceName: "wahl",
-        name: "Wahl",
-        fieldTypeCode: "text",
-        requiredInRegistrationForm: true,
-        sortKey: 1,
+        field: {
+          id: 701,
+          referenceName: "wahl",
+          name: "Wahl",
+          fieldTypeCode: "text",
+          requiredInRegistrationForm: true,
+          sortKey: 1,
+        },
       },
-      { id: 702, type: "group", referenceName: "notiz", name: "Notiz", fieldTypeCode: "textarea" },
-      { id: 703, type: "person", referenceName: "vorname", name: "Vorname", fieldTypeCode: "text" },
+      {
+        type: "group",
+        field: {
+          id: 702,
+          referenceName: "notiz",
+          name: "Notiz",
+          fieldTypeCode: "textarea",
+        },
+      },
+      {
+        type: "person",
+        field: {
+          id: 703,
+          referenceName: "vorname",
+          name: "Vorname",
+          fieldTypeCode: "text",
+        },
+      },
     ],
   };
 

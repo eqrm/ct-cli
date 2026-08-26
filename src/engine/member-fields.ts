@@ -266,11 +266,58 @@ export function memberFieldRowId(row: MemberFieldRow): number | undefined {
  */
 export function actualMemberFieldProps(
   row: MemberFieldRow,
-  declaredProps: readonly string[],
+  declaredProps: Record<string, unknown>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const name of declaredProps) out[name] = row[name];
+  for (const [name, desired] of Object.entries(declaredProps)) {
+    const actual = row[name];
+    if (name === "defaultValue" && actual !== desired && Array.isArray(row.options)) {
+      const option = row.options.find(
+        (candidate) =>
+          candidate !== null &&
+          typeof candidate === "object" &&
+          !Array.isArray(candidate) &&
+          String((candidate as Record<string, unknown>).id) === String(actual),
+      ) as Record<string, unknown> | undefined;
+      if (option?.name === desired) {
+        out[name] = desired;
+        continue;
+      }
+    }
+    out[name] = projectDeclaredShape(actual, desired);
+  }
   return out;
+}
+
+/**
+ * Project server-enriched nested values onto the shape authored in config. CT assigns ids to
+ * select options, while a portable declaration commonly contains only `{ name }`; those ids are
+ * transport metadata, not drift. Array length and order remain visible, and every key the config
+ * does declare is still compared.
+ */
+function projectDeclaredShape(actual: unknown, desired: unknown): unknown {
+  if (Array.isArray(actual) && Array.isArray(desired)) {
+    return actual.map((value, index) =>
+      index < desired.length ? projectDeclaredShape(value, desired[index]) : value,
+    );
+  }
+  if (
+    actual !== null &&
+    desired !== null &&
+    typeof actual === "object" &&
+    typeof desired === "object" &&
+    !Array.isArray(actual) &&
+    !Array.isArray(desired)
+  ) {
+    const actualObject = actual as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(desired as Record<string, unknown>).map(([key, value]) => [
+        key,
+        projectDeclaredShape(actualObject[key], value),
+      ]),
+    );
+  }
+  return actual;
 }
 
 /** `GET`/`POST` path for a group's group-scoped member fields. */
@@ -288,9 +335,16 @@ export function memberFieldItemPath(groupId: number, fieldId: number): string {
 
 function memberFieldRows(raw: unknown): MemberFieldRow[] {
   if (Array.isArray(raw)) {
-    return raw.filter(
-      (row): row is MemberFieldRow => row !== null && typeof row === "object" && !Array.isArray(row),
-    );
+    return raw.flatMap((candidate): MemberFieldRow[] => {
+      if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+      const wrapper = candidate as MemberFieldRow;
+      const nested = wrapper.field;
+      if (nested === null || typeof nested !== "object" || Array.isArray(nested)) return [wrapper];
+      // Some CT versions wrap every definition as `{ type: "group", field: { ...definition } }`.
+      // Keep the wrapper's scope discriminator, but expose the inner definition to every identity,
+      // diff, adoption, and write-path helper.
+      return [{ ...(nested as MemberFieldRow), type: wrapper.type ?? (nested as MemberFieldRow).type }];
+    });
   }
   if (raw === null || typeof raw !== "object") return [];
   const object = raw as Record<string, unknown>;

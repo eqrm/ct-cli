@@ -286,7 +286,7 @@ const memberFieldsField: SyntheticField = {
         // one arbitrarily, so leave the actual side absent and let the ambiguity surface where it
         // can be acted on (the apply path refuses it by name).
         if (matches.length === 1) {
-          a[pseudo] = actualMemberFieldProps(matches[0]!, Object.keys(spec.props));
+          a[pseudo] = actualMemberFieldProps(matches[0]!, spec.props);
         }
       }
       if (rows) {

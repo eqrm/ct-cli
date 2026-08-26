@@ -269,6 +269,51 @@ describe("group member fields — plan (#135)", () => {
     expect(plain(renderPlan(again.plan))).toBe("No changes. Desired state matches ChurchTools.");
   });
 
+  it("treats server-assigned option ids and an id-backed default as the portable name declaration", async () => {
+    const ct = makeCt();
+    ct.memberFields[100] = [
+      {
+        id: 501,
+        type: "group",
+        referenceName: "wahl",
+        name: "Wahl",
+        fieldTypeCode: "select",
+        defaultValue: "702",
+        options: [
+          { id: "701", name: "A" },
+          { id: "702", name: "B" },
+        ],
+      },
+    ];
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    state.resources.praktikum_1!.memberFields = { wahl: 501 };
+    const { ct: dsl, resources } = createContext();
+    dsl.group({
+      key: "praktikum_1",
+      name: "Praktikum 1",
+      groupTypeId: 5,
+      groupStatusId: 1,
+      memberFields: [
+        {
+          key: "wahl",
+          name: "Wahl",
+          fieldTypeCode: "select",
+          defaultValue: "B",
+          options: [{ name: "A" }, { name: "B" }],
+        },
+      ],
+    });
+
+    const { plan } = await buildPlan(ct.client, state, resources);
+    expect(plain(renderPlan(plan))).toBe("No changes. Desired state matches ChurchTools.");
+  });
+
   it("surfaces an undeclared live field as a DELETE CANDIDATE and never plans a delete", async () => {
     const ct = makeCt();
     ct.memberFields[100] = [
