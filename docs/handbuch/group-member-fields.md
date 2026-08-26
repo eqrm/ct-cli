@@ -1,5 +1,5 @@
 ---
-sources_hash: 777badbcc7fbbd7f
+sources_hash: 34e868cb911e7b9b
 title: Group member fields
 sources:
   - src/engine/member-fields.ts
@@ -109,6 +109,13 @@ ct adopt group --children-of ojbp_2025_26 --with-member-fields
 The emitted snippet carries a `memberFields:` block with every group-scoped
 field and **no ChurchTools ids** — paste it, re-key it for the next year, and
 `ct plan` proposes fresh groups and fresh fields.
+
+The same adoption stores each live field id in the owning group's
+instance-specific `memberFields` state map. This is deliberately separate from
+the portable snippet: re-adopting a group refreshes identity from ChurchTools
+without leaking host-specific ids into config. A successful read replaces that
+map (including with an empty map when the group has no fields); a failed read
+leaves an existing map untouched.
 
 Rows the group's member form shows but that are not group-scoped (person master
 data, group-type defaults) are not emitted: only `/memberfields/group` rows can
