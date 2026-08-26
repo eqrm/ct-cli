@@ -218,6 +218,76 @@ describe("plain-language Markdown plan", () => {
     expect(output).toContain("REDACTED");
   });
 
+  it("shows the before/after table for a group update instead of a bare heading", () => {
+    const plan: Plan = {
+      items: [
+        {
+          type: "group",
+          key: "youth",
+          displayName: "Jugend",
+          id: 7,
+          action: "update",
+          changes: [{ field: "name", from: "Jugendkreis", to: "Jugend", source: "config" }],
+        },
+      ],
+    };
+    const output = renderPlanMarkdown(plan, [], context);
+    expect(output).toContain("## Geänderte Ressourcen");
+    expect(output).toContain("### Jugend");
+    expect(output).toContain("Jugendkreis");
+    expect(output).toContain("| Feld |");
+  });
+
+  it("renders a new member field on an existing group in its own section", () => {
+    const plan: Plan = {
+      items: [
+        { type: "group", key: "youth", displayName: "Jugend", id: 7, action: "no-op", changes: [] },
+        {
+          type: "group-member-field",
+          key: "youth::consent",
+          displayName: "Einwilligung",
+          id: null,
+          action: "create",
+          changes: [
+            { field: "name", from: undefined, to: "Einwilligung", source: "config" },
+            { field: "referenceName", from: undefined, to: "consent", source: "config" },
+          ],
+        },
+      ],
+    };
+    const output = renderPlanMarkdown(plan, [], context);
+    expect(output).toContain("## Neue Ressourcen");
+    expect(output).toContain("Einwilligung");
+  });
+
+  it("names a group type that is created in the same run instead of printing the raw ref", () => {
+    const plan: Plan = {
+      items: [
+        { type: "group-type", key: "team", displayName: "Team", id: null, action: "create", changes: [] },
+        {
+          type: "group",
+          key: "new_team",
+          displayName: "Neues Team",
+          id: null,
+          action: "create",
+          changes: [
+            { field: "name", from: undefined, to: "Neues Team", source: "config" },
+            {
+              field: "groupTypeId",
+              from: undefined,
+              to: { __pendingRef: { kind: "group-type", key: "team" } },
+              source: "config",
+            },
+          ],
+        },
+      ],
+    };
+    const output = renderPlanMarkdown(plan, [], context);
+    expect(output).toContain("Gruppentyp: Team (wird beim Anwenden erzeugt)");
+    expect(output).not.toContain("[object Object]");
+    expect(output).not.toContain("unbekannt (#");
+  });
+
   it("is byte-identical for a fixed clock and supports English without changing plan semantics", () => {
     const plan: Plan = {
       items: [{ type: "campus", key: "mainz", displayName: "Mainz", id: 1, action: "no-op", changes: [] }],

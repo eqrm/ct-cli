@@ -381,11 +381,17 @@ function sourceLabel(source: FieldChangeSource | undefined, copy: Copy): string 
   return copy.configReason;
 }
 
+function pendingRefOf(value: unknown): Parameters<typeof refLabel>[0] | null {
+  if (value !== null && typeof value === "object" && "__pendingRef" in value) {
+    return (value as { __pendingRef: Parameters<typeof refLabel>[0] }).__pendingRef;
+  }
+  return null;
+}
+
 function valueText(value: unknown, copy: Copy): string {
   if (value === undefined) return copy.none;
-  if (value !== null && typeof value === "object" && "__pendingRef" in value) {
-    return `${refLabel((value as { __pendingRef: Parameters<typeof refLabel>[0] }).__pendingRef)} (${copy.pending})`;
-  }
+  const pending = pendingRefOf(value);
+  if (pending) return `${refLabel(pending)} (${copy.pending})`;
   if (Array.isArray(value)) return value.length > 0 ? value.map((v) => stableJson(v)).join(", ") : copy.none;
   return stableJson(value);
 }
@@ -554,7 +560,11 @@ function dynamicDetails(dynamic: unknown, plan: Plan, locale: PlanMarkdownLocale
 }
 
 function memberFieldsFor(group: PlanItem, plan: Plan): PlanItem[] {
-  if (group.type !== "group") return [];
+  // Only a group that is itself being created renders its member fields inline (see
+  // `renderGroupOverview`). For any other group the fields must stay in their own section,
+  // otherwise a new member field on an existing group is filtered out of the creates and
+  // rendered nowhere but the technical appendix.
+  if (group.type !== "group" || group.action !== "create") return [];
   return plan.items.filter(
     (item) =>
       item.action === "create" &&
@@ -576,11 +586,22 @@ function renderGroupOverview(item: PlanItem, plan: Plan, locale: PlanMarkdownLoc
     ? fields.parents.map((key) => names.get(String(key)) ?? String(key))
     : [];
   const dynamic = fields.dynamic;
-  const groupType = groupTypeNames.get(Number(fields.groupTypeId)) ?? copy.unknown;
+  // `groupTypeId` is a pending ref whenever the group type is created in the same run
+  // (the bootstrap case). Resolving it as a number would render `#[object Object]`.
+  const groupTypeRef = pendingRefOf(fields.groupTypeId);
+  const groupTypeRefKey = groupTypeRef && "key" in groupTypeRef ? String(groupTypeRef.key) : null;
+  const groupType = groupTypeRef
+    ? ((groupTypeRefKey === null ? undefined : names.get(groupTypeRefKey)) ?? refLabel(groupTypeRef))
+    : (groupTypeNames.get(Number(fields.groupTypeId)) ?? copy.unknown);
+  const groupTypeSuffix = groupTypeRef
+    ? ` (${copy.pending})`
+    : fields.groupTypeId === undefined
+      ? ""
+      : ` (#${escapeMarkdown(fields.groupTypeId)})`;
   const ownedFields = memberFieldsFor(item, plan);
   const lines = [
     `- ${locale === "de-DE" ? "Technischer Schlüssel" : "Technical key"}: \`${escapeMarkdown(item.key)}\``,
-    `- ${locale === "de-DE" ? "Gruppentyp" : "Group type"}: ${escapeMarkdown(groupType)}${fields.groupTypeId === undefined ? "" : ` (#${escapeMarkdown(fields.groupTypeId)})`}`,
+    `- ${locale === "de-DE" ? "Gruppentyp" : "Group type"}: ${escapeMarkdown(groupType)}${groupTypeSuffix}`,
     `- ${locale === "de-DE" ? "Gruppenstatus" : "Group status"}: ${escapeMarkdown(fields.groupStatusId ?? copy.unknown)}`,
     `- ${locale === "de-DE" ? "Übergeordnete Gruppe(n)" : "Parent group(s)"}: ${escapeMarkdown(parents.length > 0 ? parents.join(", ") : copy.none)}`,
     `- ${locale === "de-DE" ? "Neue Gruppenmitgliedsfelder" : "New group member fields"}: ${ownedFields.length}`,
@@ -649,7 +670,8 @@ function renderResourceSection(
   const lines = [`## ${title}`, ""];
   for (const item of items) {
     lines.push(resourceHeading(item, locale), "");
-    lines.push(...renderGroupOverview(item, plan, locale, copy));
+    const overview = renderGroupOverview(item, plan, locale, copy);
+    lines.push(...overview);
     if (item.note === "recreate") {
       lines.push(
         locale === "de-DE"
@@ -658,7 +680,9 @@ function renderResourceSection(
         "",
       );
     }
-    if (item.changes.length > 0 && item.type !== "group") {
+    // Groups that rendered an overview already state their fields in prose; every other item —
+    // including a group *update* — still needs its before/after table (#155 review).
+    if (item.changes.length > 0 && overview.length === 0) {
       lines.push(
         ...table(
           [copy.field, copy.before, copy.after, copy.reason].map(escapeMarkdown),
