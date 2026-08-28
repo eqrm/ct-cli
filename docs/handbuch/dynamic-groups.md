@@ -6,8 +6,8 @@ sources:
   - src/engine/dynamic.ts
   - src/engine/synthetic.ts
   - src/application/operations/adopt-group.ts
-sources_hash: c49d089ed6662ea7
-reviewed: 2026-08-17
+sources_hash: e4e2d552d54802f9
+reviewed: 2026-08-28
 ---
 
 # Auto-groups (dynamic groups)
@@ -87,16 +87,24 @@ inside a ruleset, so the wrong id applies cleanly and silently computes the
 wrong membership. Use the group-scoped reference instead:
 
 ```ts
-ref.groupMemberField("ojbp_2026_27_praktikum_1", "wahl");
+ref.groupMemberField("ojbp_2026_27_praktikum_1", "stand_bewerbung");
 ```
 
-The resolver maps it to this host's id from
-`GET /groups/{groupId}/memberfields`. A field this config declares but that does
-not exist on the host yet resolves to a pending marker and is completed during
-apply, right after the create that minted it. A reference to a field the target
-group does not declare fails at config-eval time, before any network call — the
-declared key and the referenced one being compared in their normalised form, so
-`"Wahl"` finds a field declared as `wahl`. See
+The second argument is the portable local ct-cli key, not ChurchTools' API
+identity. Its field declaration may map it explicitly to an exact
+`referenceName`, for example `key: "stand_bewerbung"` and
+`referenceName: "stand-bewerbung"`. The resolver uses that declaration to find
+the host's numeric id from `GET /groups/{groupId}/memberfields`; the live
+`referenceName` is compared byte-for-byte, so `stand-bewerbung` and
+`stand_bewerbung` are not interchangeable (#158).
+
+A field this config declares but that does not exist on the host yet resolves
+to a pending marker and is completed during apply, right after the create that
+minted it. A reference to a field the target group does not declare fails at
+config-eval time, before any network call. Local keys are compared in their
+normalised form, so `"Stand Bewerbung"` finds a declaration keyed
+`stand_bewerbung`; that normalization never changes the declaration's exact API
+`referenceName`. See
 [Group member fields](group-member-fields.md).
 
 ## Supplying a ruleset — three ways

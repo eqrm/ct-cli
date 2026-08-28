@@ -1,5 +1,5 @@
 ---
-sources_hash: 984c67a4f952f9fc
+sources_hash: 740acdc4e12e5d8e
 title: Group member fields
 sources:
   - src/engine/member-fields.ts
@@ -7,10 +7,10 @@ sources:
   - src/config/context.ts
   - src/application/operations/adopt-group.ts
   - src/application/operations/destroy.ts
-reviewed: 2026-08-26
+reviewed: 2026-08-28
 ---
 
-# Group member fields (#135)
+# Group member fields (#135, #158)
 
 A ChurchTools group can ask its members for extra information — "Wahl",
 "Praktikumsplatz", a free-text note. Those are **group member fields**: field
@@ -114,7 +114,9 @@ ct adopt group --children-of ojbp_2025_26 --with-member-fields
 
 The emitted snippet carries a `memberFields:` block with every group-scoped
 field and **no ChurchTools ids** — paste it, re-key it for the next year, and
-`ct plan` proposes fresh groups and fresh fields.
+`ct plan` proposes fresh groups and fresh fields. Adoption keeps every non-empty
+live `referenceName` byte-for-byte in the snippet while deriving the separate
+local `key` as a portable slug.
 
 The same adoption stores each live field id in the owning group's
 instance-specific `memberFields` state map. This is deliberately separate from
@@ -160,9 +162,10 @@ already adopted in that run.
       memberField:wahl: {"name":"Wahl"} -> {"name":"Wahl (neu)"}
 ```
 
-The actual side is narrowed to exactly the properties the declaration names, so
-a server default ChurchTools returns can never make the two sides differ
-forever: **a clean apply re-plans as a no-op.**
+The actual side includes the exact `referenceName` and is otherwise narrowed to
+the mutable properties the declaration names, so a server default ChurchTools
+returns can never make the two sides differ forever: **a clean apply re-plans
+as a no-op.**
 
 The same projection applies inside `options`: ChurchTools assigns host-specific
 ids to select options, while a portable config can declare `{ name }`. Those

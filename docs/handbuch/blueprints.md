@@ -4,8 +4,8 @@ sources:
   - src/config/context.ts
   - src/engine/graph.ts
   - src/engine/hierarchy.ts
-sources_hash: bb6f89956ace833d
-reviewed: 2026-08-26
+sources_hash: 6f4be8d3a93113ce
+reviewed: 2026-08-28
 ---
 
 # Blueprints (parametrized, reusable config)
@@ -248,6 +248,12 @@ declares that field, or `evaluateConfig` throws before any plan runs. Member
 fields are the surface where this matters most in a blueprint, because a field
 is owned by exactly one group: a blueprint instantiated twice creates two
 independent `wahl` fields, and a reference must say _which group's_.
+
+The reference's `<field>` is the portable local ct-cli key. Its declaration may
+map that key to a different, exact ChurchTools `referenceName` (#158), for
+example `key: "stand_bewerbung"` plus `referenceName: "stand-bewerbung"`.
+Ruleset resolution follows that mapping; it never treats `-` and `_` as the
+same API identity.
 
 This matters more in a blueprint than in a hand-written flat config,
 because the `${campus}_`-prefixed key is itself computed

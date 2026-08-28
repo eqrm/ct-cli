@@ -7,8 +7,8 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: b5486f5d014a5912
-reviewed: 2026-08-26
+sources_hash: 469fab5b33c1e5c4
+reviewed: 2026-08-28
 ---
 
 # Permissions (`ct.groupRole` / `ct.groupTypeRole` / `ct.status`)
@@ -479,7 +479,9 @@ group-scoped member-field definition, addressed by its portable
 `(group key, local field key)` pair — #135). They share this file's resolver and
 its "managed state first, then live lookup, else a hard error at plan time"
 rules, but they are referenced from **dynamic-group rulesets**, not from grant
-scopes. See [Group member fields](group-member-fields.md).
+scopes. For `group-member-field`, the logical pair selects a declaration; that
+declaration's exact ChurchTools `referenceName` selects the live row (#158).
+See [Group member fields](group-member-fields.md).
 
 **Why this matters:** campus ids are host-specific — Mainz is `0` on eqrm prod
 and `6` on eqrm dev. A campus-scoped grant written as a numeric literal is
