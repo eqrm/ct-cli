@@ -230,6 +230,26 @@ describe("ct destroy --member-field (#135)", () => {
     expect(after.resources.area!.memberFields).toBeUndefined();
   });
 
+  it("deletes the STATE-BOUND row even when its live name no longer matches the key", async () => {
+    // Every identity-mismatch message hands the operator exactly this command, and those are the
+    // cases where the live row drifted away from the local key. Matching on the key alone would
+    // report "already absent", drop the binding, and let the next apply POST a duplicate.
+    getMock.mockImplementation((async (path: string) => {
+      if (path === "/groups/hierarchies") return [];
+      if (path === "/groups/1/memberfields") return [{ id: 701, type: "group", name: "Birkman" }];
+      return { name: path };
+    }) as never);
+    const state = emptyState(HOST);
+    state.resources.area = group("area", 1, { memberFields: { birkmann: 701 } });
+    await saveState(statePath, state);
+
+    await runDestroy(["--member-field", "area::birkmann", "--state", statePath, "--force"]);
+
+    expect(calls).toEqual([{ method: "DELETE", path: "/groups/1/memberfields/group/701" }]);
+    const after = await loadState(statePath, HOST);
+    expect(after.resources.area!.memberFields).toBeUndefined();
+  });
+
   it("still refuses to delete anything with neither --target nor --member-field", async () => {
     await saveState(statePath, emptyState(HOST));
     await expect(runDestroy(["--state", statePath, "--force"])).rejects.toThrow(

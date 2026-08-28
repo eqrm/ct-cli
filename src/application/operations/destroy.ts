@@ -14,7 +14,8 @@ import { writeBackup } from "../../engine/backup.js";
 import {
   groupScopedRows,
   memberFieldStateKey,
-  matchesLocalKey,
+  knownMemberFieldId,
+  matchingMemberFieldRows,
   memberFieldItemPath,
   memberFieldRowId,
   memberFieldsReadPath,
@@ -294,8 +295,8 @@ export async function runMemberFieldDeleteLoop(ctx: {
     const forget = async (): Promise<void> => {
       const managed = state.resources[target.groupKey];
       // Slugged, exactly as the apply that wrote it keyed the entry (`memberFieldStateKey`) and as
-      // `matchesLocalKey` matched the live row — otherwise `--member-field g::Wahl` deletes the
-      // field in ChurchTools but leaves `memberFields.wahl` pointing at the id it just destroyed.
+      // the live row was resolved above — otherwise `--member-field g::Wahl` deletes the field in
+      // ChurchTools but leaves `memberFields.wahl` pointing at the id it just destroyed.
       const stateKey = memberFieldStateKey(target.fieldKey);
       if (managed?.memberFields && stateKey in managed.memberFields) {
         const rest = { ...managed.memberFields };
@@ -308,7 +309,16 @@ export async function runMemberFieldDeleteLoop(ctx: {
     let fieldId: number | undefined;
     try {
       const rows = groupScopedRows(await client.get(memberFieldsReadPath(target.groupId)));
-      const matches = rows.filter((row) => matchesLocalKey(row, target.fieldKey));
+      // The state binding wins where there is one. `--member-field g::wahl` is exactly the command
+      // every identity-mismatch message hands the operator, and those are the cases where the live
+      // row's name or referenceName has drifted away from the local key: matching on the key alone
+      // would report "already absent", drop the binding, and let the next apply POST a duplicate.
+      const matches = matchingMemberFieldRows(
+        rows,
+        target.fieldKey,
+        undefined,
+        knownMemberFieldId(state, target.groupKey, target.fieldKey),
+      );
       if (matches.length > 1) {
         record(outcomes, ctx.observer, {
           kind: "member-field",
@@ -446,7 +456,13 @@ export async function prepareDestroy(
   for (const target of memberFieldTargets) {
     try {
       const rows = groupScopedRows(await client.get(memberFieldsReadPath(target.groupId)));
-      const match = rows.find((row) => matchesLocalKey(row, target.fieldKey));
+      // Same resolution as the delete loop below, so the backup holds the row that is deleted.
+      const match = matchingMemberFieldRows(
+        rows,
+        target.fieldKey,
+        undefined,
+        knownMemberFieldId(state, target.groupKey, target.fieldKey),
+      )[0];
       if (match) actual.set(target.identity, match);
     } catch (err) {
       throw new CtApplicationError(

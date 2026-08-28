@@ -197,11 +197,17 @@ export function knownMemberFieldId(state: State, groupKey: string, localKey: str
  * Prefer a state-bound id; otherwise match ChurchTools' identity-bearing `referenceName` EXACTLY.
  * A name fallback is permitted only for old/UI rows that genuinely carry no referenceName. Once CT
  * supplies one, punctuation and case are data: `foo-bar` and `foo_bar` are different identities.
+ *
+ * `referenceName === undefined` means the caller has NO declared exact identity to compare against —
+ * a ref into a group that is adopted but does not declare `memberFields`, or a `ct destroy
+ * --member-field` target. Those callers keep the pre-#158 local-key affinity ({@link
+ * matchesLocalKey}), because there is no config to state the exact string and demanding one would
+ * turn a working reference into a hard error.
  */
 export function matchingMemberFieldRows(
   rows: MemberFieldRow[],
   localKey: string,
-  referenceName: string,
+  referenceName: string | undefined,
   knownId?: number,
 ): MemberFieldRow[] {
   if (knownId !== undefined) {
@@ -210,12 +216,29 @@ export function matchingMemberFieldRows(
     // when a response variant was parsed incompletely.
     return rows.filter((row) => memberFieldRowId(row) === knownId);
   }
+  if (referenceName === undefined) return rows.filter((row) => matchesLocalKey(row, localKey));
   return rows.filter((row) => {
     const liveReference = memberFieldReferenceName(row);
     if (liveReference !== undefined) return liveReference === referenceName;
     const name = row.name;
     return typeof name === "string" && slug(name) === slug(localKey);
   });
+}
+
+/**
+ * The live exact identity that CONTRADICTS `referenceName`, or `undefined` when nothing does.
+ *
+ * A row carrying no `referenceName` at all contradicts nothing: it is the legacy/UI row the name
+ * fallback in {@link matchingMemberFieldRows} exists for, and since ct never PATCHes
+ * `referenceName` there is no rename to refuse. Treating "missing" as "different" would make every
+ * such row unreconcilable — no update, no create, just a permanent error.
+ */
+export function conflictingReferenceName(
+  row: MemberFieldRow,
+  referenceName: string,
+): string | undefined {
+  const live = memberFieldReferenceName(row);
+  return live !== undefined && live !== referenceName ? live : undefined;
 }
 
 /**

@@ -14,10 +14,12 @@ import { assertNotPeople } from "./guard.js";
 import { deepEqual } from "./plan.js";
 import { mapConcurrent } from "../util/concurrency.js";
 import { info, warn, formatError } from "../ui.js";
+import { slug } from "../resources/registry.js";
 import { normalizeDynamic, normalizeRuleset, putRulesetBody, resolveRulesetRef } from "./dynamic.js";
 import { formatPortablizeWarnings, scanUnportablized } from "../config/query-refs.js";
 import {
   actualMemberFieldProps,
+  conflictingReferenceName,
   groupScopedRows,
   knownMemberFieldId,
   memberFieldStateKey,
@@ -266,42 +268,104 @@ const memberFieldsField: SyntheticField = {
           );
         });
         const mismatched = new Set<string>();
+        // Every row a declaration accounts for — matched by identity, or merely a look-alike that
+        // was reported. Collected here so the DELETE CANDIDATE pass below can skip them by row
+        // rather than by reference name: a legacy row carries none, and comparing `"" ` against the
+        // declared names would flag a field the config demonstrably declares.
+        const claimed = new Set<MemberFieldRow>();
+        const notes: string[] = [];
         for (const spec of d.memberFields!) {
           if (stale.has(spec.key)) continue;
+          const identity = memberFieldIdentity(d.key, spec.key);
           const knownId = knownMemberFieldId(state, d.key, spec.key);
           const matches = matchingMemberFieldRows(rows, spec.key, spec.referenceName, knownId);
-          const affinity =
-            matches.length > 0 ? matches : rows.filter((row) => matchesLocalKey(row, spec.key));
-          if (affinity.length === 0) continue;
-          if (affinity.length > 1) {
+          for (const row of matches) claimed.add(row);
+          if (matches.length > 1) {
             mismatched.add(spec.key);
-            const identity = memberFieldIdentity(d.key, spec.key);
             errors.push(
-              `member field ${identity}: no row has the exact ChurchTools referenceName ` +
-                `${JSON.stringify(spec.referenceName)}, but ${affinity.length} rows collapse onto local ` +
-                `ct-cli key ${JSON.stringify(spec.key)} (${affinity
-                  .map((row) => JSON.stringify(memberFieldReferenceName(row) ?? "<missing>"))
-                  .join(", ")}). "-" and "_" are not equivalent API identities. Refusing to plan a ` +
-                `duplicate; choose a distinct local key or replace the intended field explicitly.`,
+              `member field ${identity}: ${matches.length} live fields on group #${managed.id} carry ` +
+                `this identity (${matches
+                  .map(
+                    (row) =>
+                      `#${String(memberFieldRowId(row) ?? "unknown")} ` +
+                      JSON.stringify(memberFieldReferenceName(row) ?? "<missing referenceName>"),
+                  )
+                  .join(", ")}). ct will not guess which one the declaration means; remove or rename ` +
+                `one in ChurchTools, then re-run plan/apply.`,
             );
             continue;
           }
-          const row = affinity[0]!;
-          const liveReference = memberFieldReferenceName(row);
-          if (liveReference === spec.referenceName) continue;
-          mismatched.add(spec.key);
-          const identity = memberFieldIdentity(d.key, spec.key);
-          errors.push(
-            `member field ${identity} (#${String(memberFieldRowId(row) ?? "unknown")}): exact ` +
-              `ChurchTools referenceName is ${liveReference === undefined ? "missing" : JSON.stringify(liveReference)}, ` +
-              `but config requires ${JSON.stringify(spec.referenceName)}. Local ct-cli key ` +
-              `${JSON.stringify(spec.key)} does not change that API identity; "-" and "_" are not ` +
-              `equivalent. ct will not rename an identity-bearing field silently. Replace it ` +
-              `explicitly with \`ct destroy --member-field ${identity}\`, then re-run plan/apply.`,
-          );
+          if (matches.length === 1) {
+            const row = matches[0]!;
+            // A row with NO referenceName is the legacy/UI row the name fallback exists for: there
+            // is no competing identity to refuse, and ct never PATCHes referenceName, so it is
+            // reconciled on its mutable properties exactly as before #158.
+            const conflicting = conflictingReferenceName(row, spec.referenceName);
+            if (conflicting === undefined) continue;
+            mismatched.add(spec.key);
+            errors.push(
+              `member field ${identity} (#${String(memberFieldRowId(row) ?? "unknown")}): exact ` +
+                `ChurchTools referenceName is ${JSON.stringify(conflicting)}, but config requires ` +
+                `${JSON.stringify(spec.referenceName)}. Local ct-cli key ${JSON.stringify(spec.key)} ` +
+                `does not change that API identity; "-" and "_" are not equivalent. ct will not ` +
+                `rename an identity-bearing field silently. Either MANAGE the existing field by ` +
+                `declaring \`referenceName: ${JSON.stringify(conflicting)}\` on it, or REPLACE it ` +
+                `(destructive — the field and its member values are deleted) with ` +
+                `\`ct destroy --member-field ${identity}\`, then re-run plan/apply.`,
+            );
+            continue;
+          }
+          // No row carries this identity, so the field will be CREATED. Two very different kinds of
+          // live row can still look related, and they are treated differently on purpose.
+          //
+          // A NEAR-IDENTITY — a live referenceName that differs from the declared one (or from the
+          // local key) only in punctuation or case — is refused: "-" and "_" are not equivalent API
+          // identities, so creating would mint a second, near-indistinguishable field, and the
+          // declaration is far more likely to be a typo or a half-finished rename.
+          const nearIdentities = rows.filter((row) => {
+            const live = memberFieldReferenceName(row);
+            return (
+              live !== undefined &&
+              (slug(live) === slug(spec.referenceName) || slug(live) === slug(spec.key))
+            );
+          });
+          for (const row of nearIdentities) claimed.add(row);
+          if (nearIdentities.length > 0) {
+            mismatched.add(spec.key);
+            errors.push(
+              `member field ${identity}: live field ` +
+                `#${String(memberFieldRowId(nearIdentities[0]!) ?? "unknown")} on group ` +
+                `#${managed.id} carries referenceName ` +
+                `${JSON.stringify(memberFieldReferenceName(nearIdentities[0]!))}, which differs from ` +
+                `the declared ${JSON.stringify(spec.referenceName)} only in punctuation or case. ` +
+                `"-" and "_" are not equivalent API identities, so ct will neither rename that field ` +
+                `nor plan a near-duplicate create. Either declare ` +
+                `\`referenceName: ${JSON.stringify(memberFieldReferenceName(nearIdentities[0]!))}\` to ` +
+                `manage the existing field, or replace it (destructive) with ` +
+                `\`ct destroy --member-field ${identity}\`, then re-run plan/apply.`,
+            );
+            continue;
+          }
+          // A row that merely shares the declaration's slugged NAME is only a warning. `name` is a
+          // mutable display property, its ChurchTools-minted referenceName says the field was never
+          // ct-managed, and a fold error marks the WHOLE run incomplete — aborting apply for every
+          // other resource over a coincidence of naming.
+          const lookalikes = rows.filter((row) => matchesLocalKey(row, spec.key));
+          for (const row of lookalikes) claimed.add(row);
+          for (const row of lookalikes) {
+            notes.push(
+              `member field ${identity}: will be CREATED, but live field ` +
+                `#${String(memberFieldRowId(row) ?? "unknown")} on group #${managed.id} ` +
+                `(name ${JSON.stringify(typeof row.name === "string" ? row.name : "<unnamed>")}, ` +
+                `referenceName ${JSON.stringify(memberFieldReferenceName(row) ?? "<missing>")}) looks ` +
+                `like it. referenceName is the exact identity and does not match, so ct plans a ` +
+                `second field. To manage the existing one instead, declare ` +
+                `\`referenceName: ${JSON.stringify(memberFieldReferenceName(row) ?? spec.referenceName)}\`.`,
+            );
+          }
         }
-        for (const message of errors) warn(message);
-        return { key: d.key, rows, stale, mismatched, errors };
+        for (const message of [...errors, ...notes]) warn(message);
+        return { key: d.key, rows, stale, mismatched, claimed, errors };
       } catch (err) {
         // Same honesty rule as the dynamic fold (#126): an unread actual is NOT a known-absent one,
         // so the desired side stays unfolded and the group is reported unreadable rather than having
@@ -311,6 +375,7 @@ const memberFieldsField: SyntheticField = {
           rows: undefined,
           stale: new Set<string>(),
           mismatched: new Set<string>(),
+          claimed: new Set<MemberFieldRow>(),
           errors: [`member fields ${d.key} (#${managed.id}): ${formatError(err)}`],
         };
       }
@@ -321,6 +386,7 @@ const memberFieldsField: SyntheticField = {
     const rowsByKey = new Map(outcomes.filter((o) => o.rows !== undefined).map((o) => [o.key, o.rows!]));
     const staleByKey = new Map(outcomes.map((o) => [o.key, o.stale]));
     const mismatchedByKey = new Map(outcomes.map((o) => [o.key, o.mismatched]));
+    const claimedByKey = new Map(outcomes.map((o) => [o.key, o.claimed]));
 
     const augmented = desired.map((d) => {
       if (d.type !== "group" || d.memberFields === undefined) return d;
@@ -347,16 +413,19 @@ const memberFieldsField: SyntheticField = {
         // can be acted on (the apply path refuses it by name).
         if (matches.length === 1) {
           a[pseudo] = {
-            referenceName: memberFieldReferenceName(matches[0]!),
+            // A legacy row carries no referenceName and ct never PATCHes one onto it, so reporting
+            // the live `undefined` here would diff against the declared string on every run — an
+            // update that can never converge. Absent means "not knowable on this row", not drift.
+            referenceName: memberFieldReferenceName(matches[0]!) ?? spec.referenceName,
             ...actualMemberFieldProps(matches[0]!, spec.props),
           };
         }
       }
       if (rows) {
-        const declared = new Set(d.memberFields.map((f) => f.referenceName));
+        const claimed = claimedByKey.get(d.key) ?? new Set<MemberFieldRow>();
         for (const row of rows) {
           const local = localKeyOf(row);
-          if (!local || declared.has(memberFieldReferenceName(row) ?? "")) continue;
+          if (!local || claimed.has(row)) continue;
           warn(
             `group "${d.key}": member field "${memberFieldIdentity(d.key, local)}" exists in ` +
               `ChurchTools but is not declared — DELETE CANDIDATE, left untouched. ct never removes a ` +
@@ -389,8 +458,8 @@ const memberFieldsField: SyntheticField = {
     if (matches.length > 1) {
       throw new Error(
         `group member field "${memberFieldIdentity(key, local)}": ${matches.length} fields on group ` +
-          `#${id} answer to the local key "${local}". Rename one in ChurchTools so the key is unique ` +
-          `within the group, then re-apply.`,
+          `#${id} carry the identity ${JSON.stringify(referenceName)}. Remove or rename one in ` +
+          `ChurchTools so it is unique within the group, then re-apply.`,
       );
     }
 
@@ -403,15 +472,19 @@ const memberFieldsField: SyntheticField = {
     };
 
     if (matches.length === 1) {
-      const liveReference = memberFieldReferenceName(matches[0]!);
-      if (liveReference !== referenceName) {
+      // Only a row carrying a DIFFERENT referenceName is a contradiction. One carrying none is the
+      // legacy/UI row matched by name; its mutable properties are updated and its (absent) identity
+      // is left exactly as it was, since referenceName is never PATCHed.
+      const conflicting = conflictingReferenceName(matches[0]!, referenceName);
+      if (conflicting !== undefined) {
         throw new Error(
           `group member field "${memberFieldIdentity(key, local)}": ChurchTools field ` +
             `#${String(memberFieldRowId(matches[0]!) ?? "unknown")} has exact referenceName ` +
-            `${liveReference === undefined ? "<missing>" : JSON.stringify(liveReference)}, but config ` +
-            `requires ${JSON.stringify(referenceName)}. Refusing to rename it silently; replace it ` +
-            `explicitly with \`ct destroy --member-field ${memberFieldIdentity(key, local)}\`, then ` +
-            `re-run plan/apply.`,
+            `${JSON.stringify(conflicting)}, but config requires ${JSON.stringify(referenceName)}. ` +
+            `Refusing to rename it silently; either declare ` +
+            `\`referenceName: ${JSON.stringify(conflicting)}\` to manage the existing field, or ` +
+            `replace it (destructive) with ` +
+            `\`ct destroy --member-field ${memberFieldIdentity(key, local)}\`, then re-run plan/apply.`,
         );
       }
       const fieldId = memberFieldRowId(matches[0]!);

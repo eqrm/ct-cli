@@ -1,5 +1,5 @@
 ---
-sources_hash: 740acdc4e12e5d8e
+sources_hash: 560ebcf34c58867c
 title: Group member fields
 sources:
   - src/engine/member-fields.ts
@@ -96,11 +96,27 @@ Two readable/writable properties need special handling:
 - **`referenceName`** — exact ChurchTools identity, kept separate from the local
   key. It is sent unchanged on create and compared byte-for-byte on every later
   plan; punctuation and case are significant, so `foo-bar` and `foo_bar` are
-  different. It is never silently PATCHed. A mismatch makes the plan
-  **INCOMPLETE** and tells the operator to perform an explicit replacement with
-  `ct destroy --member-field <group>::<local-key>` followed by plan/apply. A
-  name fallback is used only for legacy/UI rows that genuinely carry no
-  `referenceName`; an existing different value is never ignored.
+  different. It is never silently PATCHed.
+
+  A live field whose `referenceName` **differs** from the declared one makes the
+  plan **INCOMPLETE** and offers two ways out: manage the existing field by
+  declaring its `referenceName` in config, or replace it — destructively, the
+  field and its member values go — with
+  `ct destroy --member-field <group>::<local-key>` followed by plan/apply. The
+  same refusal covers a live identity that differs only in punctuation or case
+  (`stand_bewerbung` next to a declared `stand-bewerbung`): ct neither renames it
+  nor mints a near-duplicate beside it.
+
+  A live field that carries **no** `referenceName` at all — a legacy row, or one
+  created in the ChurchTools UI on a version that mints none — is matched by its
+  slugged `name`, reconciled on its mutable properties, and left without a
+  reference name, exactly as before. There is no competing identity to refuse.
+
+  A live field that merely shares a declaration's display **name** while carrying
+  its own ChurchTools identity (`eigenesfeld_3`) is a coincidence, not a
+  contradiction: `ct plan` warns, names the `referenceName` to declare if that
+  field was meant, and otherwise proposes the create. `name` is mutable display
+  text, and refusing here would abort the run for every other resource too.
 
 A property outside the managed list still passes through to ChurchTools
 unchanged — it only earns a warning, and it is never diffed.
@@ -165,7 +181,9 @@ already adopted in that run.
 The actual side includes the exact `referenceName` and is otherwise narrowed to
 the mutable properties the declaration names, so a server default ChurchTools
 returns can never make the two sides differ forever: **a clean apply re-plans
-as a no-op.**
+as a no-op.** (A row that carries no reference name reports the declared one:
+ct never PATCHes `referenceName`, so diffing it there would propose the same
+update on every run.)
 
 The same projection applies inside `options`: ChurchTools assigns host-specific
 ids to select options, while a portable config can declare `{ name }`. Those
@@ -227,8 +245,10 @@ Local ct-cli keys are compared in their **normalised** form throughout —
 `"Wahl"` and `"wahl"` are the same local key in declarations, typed references,
 state and `ct destroy --member-field`. Two declarations in one group that
 differ only in case are therefore rejected as duplicates. ChurchTools
-`referenceName` is a separate value and is always compared exactly; local-key
-normalisation never applies to it.
+`referenceName` is a separate value and is always compared exactly wherever a
+declaration states one; local-key normalisation never applies to it. A group
+that is adopted but declares no `memberFields` states none, so a reference into
+it keeps matching the live row on the normalised local key.
 
 Three things follow:
 

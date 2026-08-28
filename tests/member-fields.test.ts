@@ -922,3 +922,191 @@ describe("groupScopedRows — { type, field } wrapper (#154 review)", () => {
     expect(groupScopedRows([row])).toEqual([row]);
   });
 });
+
+/**
+ * #159 review: the exact-identity rule of #158 must not swallow the rows it was never about.
+ *
+ * A live row that carries NO `referenceName` — the legacy/UI row the name fallback exists for — has
+ * no competing identity, so it is reconciled exactly as it was before #158. And a live row that
+ * merely shares a declaration's display NAME is a coincidence, not a contradiction: it is reported,
+ * never allowed to mark the run incomplete.
+ */
+describe("group member fields — rows without a referenceName (#158 follow-up)", () => {
+  const legacyRow = { id: 501, type: "group", name: "Birkman", fieldTypeCode: "text" };
+
+  function declaringPraktikum(memberFields: { key: string; [prop: string]: unknown }[]): {
+    resources: DesiredResource[];
+  } {
+    const { ct: dsl, resources } = createContext();
+    dsl.group({
+      key: "praktikum_1",
+      name: "Praktikum 1",
+      groupTypeId: 5,
+      groupStatusId: 1,
+      memberFields,
+    });
+    return { resources };
+  }
+
+  it("reconciles a state-bound row that carries no referenceName instead of blocking the plan", async () => {
+    const ct = makeCt();
+    ct.memberFields[100] = [legacyRow];
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    state.resources.praktikum_1!.memberFields = { birkmann: 501 };
+    const { resources } = declaringPraktikum([
+      { key: "birkmann", name: "Birkmann", fieldTypeCode: "text" },
+    ]);
+
+    const { plan, fetchErrors } = await buildPlan(ct.client, state, resources);
+    expect(fetchErrors).toEqual([]);
+    expect(plan.items[0]!.changes.find((c) => c.field === memberFieldPseudo("birkmann"))).toMatchObject({
+      to: { referenceName: "birkmann", name: "Birkmann" },
+    });
+
+    await executePlan(plan, { client: ct.client, state, statePath: "s.json", save: async () => {} });
+    // PATCHed in place — a row without a referenceName must never be re-created as a duplicate.
+    expect(ct.calls).toContain("PATCH /groups/100/memberfields/group/501");
+    expect(ct.memberFields[100]).toHaveLength(1);
+  });
+
+  it("re-plans as a no-op once a referenceName-less row is converged", async () => {
+    // The actual side cannot report the live `undefined` here: ct never PATCHes referenceName, so
+    // diffing it against the declared string would propose the same update on every single run.
+    const ct = makeCt();
+    ct.memberFields[100] = [{ id: 501, type: "group", name: "Birkmann", fieldTypeCode: "text" }];
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    state.resources.praktikum_1!.memberFields = { birkmann: 501 };
+    const { resources } = declaringPraktikum([
+      { key: "birkmann", name: "Birkmann", fieldTypeCode: "text" },
+    ]);
+
+    const { plan } = await buildPlan(ct.client, state, resources);
+    expect(plan.items[0]!.changes.some((c) => c.field.startsWith("memberField:"))).toBe(false);
+  });
+
+  it("matches an unbound referenceName-less row by name and never calls it a delete candidate", async () => {
+    const ct = makeCt();
+    ct.memberFields[100] = [{ id: 501, type: "group", name: "Wahl", fieldTypeCode: "text" }];
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    const { resources } = declaringPraktikum([{ key: "wahl", name: "Wahl (neu)", fieldTypeCode: "text" }]);
+
+    const { plan, fetchErrors } = await buildPlan(ct.client, state, resources);
+    expect(fetchErrors).toEqual([]);
+    expect(warnings.join("\n")).not.toContain("DELETE CANDIDATE");
+    await executePlan(plan, { client: ct.client, state, statePath: "s.json", save: async () => {} });
+    expect(ct.calls).toContain("PATCH /groups/100/memberfields/group/501");
+    expect(ct.memberFields[100]).toHaveLength(1);
+  });
+
+  it("warns but still creates when only the display name of an unmanaged field collides", async () => {
+    // `name` is a mutable display property and `eigenesfeld_3` is a different API identity, so this
+    // is a coincidence — and a fold error here would abort apply for every other resource too.
+    const ct = makeCt();
+    ct.memberFields[100] = [{ id: 501, type: "group", referenceName: "eigenesfeld_3", name: "Wahl" }];
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    const { resources } = declaringPraktikum([{ key: "wahl", name: "Wahl", fieldTypeCode: "text" }]);
+
+    const { plan, fetchErrors } = await buildPlan(ct.client, state, resources);
+    expect(fetchErrors).toEqual([]);
+    expect(warnings.join("\n")).toMatch(/will be CREATED.*eigenesfeld_3.*declare/s);
+    expect(warnings.join("\n")).not.toContain("DELETE CANDIDATE");
+    expect(plan.items[0]!.changes.some((c) => c.field === memberFieldPseudo("wahl"))).toBe(true);
+  });
+
+  it("offers the non-destructive remedy alongside the destructive one on a real identity mismatch", async () => {
+    const ct = makeCt();
+    ct.memberFields[100] = [{ id: 501, type: "group", referenceName: "eigenesfeld_3", name: "Wahl" }];
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    state.resources.praktikum_1!.memberFields = { wahl: 501 };
+    const { resources } = declaringPraktikum([{ key: "wahl", name: "Wahl", fieldTypeCode: "text" }]);
+
+    const { fetchErrors } = await buildPlan(ct.client, state, resources);
+    expect(fetchErrors.join("\n")).toContain('declaring `referenceName: "eigenesfeld_3"`');
+    expect(fetchErrors.join("\n")).toContain("ct destroy --member-field praktikum_1::wahl");
+  });
+
+  it("does not claim the exact referenceName is absent when two rows genuinely carry it", async () => {
+    const ct = makeCt();
+    ct.memberFields[100] = [
+      { id: 501, type: "group", referenceName: "wahl", name: "Wahl" },
+      { id: 502, type: "group", referenceName: "wahl", name: "Wahl (Kopie)" },
+    ];
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    const { resources } = declaringPraktikum([{ key: "wahl", name: "Wahl", fieldTypeCode: "text" }]);
+
+    const { fetchErrors } = await buildPlan(ct.client, state, resources);
+    expect(fetchErrors.join("\n")).toMatch(/2 live fields on group #100 carry this identity/);
+    expect(fetchErrors.join("\n")).not.toContain("no row has the exact");
+  });
+
+  it("resolves a ref into an adopted group that declares no memberFields, as it always has", async () => {
+    // Nothing in config states the exact ChurchTools spelling for such a group, so the ref names
+    // the local ct-cli key and the pre-#158 normalised match still applies.
+    const ct = makeCt();
+    ct.memberFields[100] = [{ id: 504, type: "group", referenceName: "stand-bewerbung", name: "Stand" }];
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    state.resources.praktikum_1!.memberFields = { stand_bewerbung: 504 };
+    const { ct: dsl, resources } = createContext();
+    dsl.group({
+      key: "praktikum_1",
+      name: "Praktikum 1",
+      groupTypeId: 5,
+      groupStatusId: 1,
+      dynamic: {
+        status: "active",
+        ruleset: {
+          description: "stand",
+          query: {
+            "==": [{ var: "memberfield.id" }, ref.groupMemberField("praktikum_1", "stand_bewerbung")],
+          },
+          process: {},
+        },
+      },
+    });
+
+    const { plan } = await buildPlan(ct.client, state, resources);
+    expect(JSON.stringify(plan)).toContain("504");
+  });
+});
