@@ -959,9 +959,7 @@ describe("group member fields — rows without a referenceName (#158 follow-up)"
       },
     });
     state.resources.praktikum_1!.memberFields = { birkmann: 501 };
-    const { resources } = declaringPraktikum([
-      { key: "birkmann", name: "Birkmann", fieldTypeCode: "text" },
-    ]);
+    const { resources } = declaringPraktikum([{ key: "birkmann", name: "Birkmann", fieldTypeCode: "text" }]);
 
     const { plan, fetchErrors } = await buildPlan(ct.client, state, resources);
     expect(fetchErrors).toEqual([]);
@@ -988,9 +986,7 @@ describe("group member fields — rows without a referenceName (#158 follow-up)"
       },
     });
     state.resources.praktikum_1!.memberFields = { birkmann: 501 };
-    const { resources } = declaringPraktikum([
-      { key: "birkmann", name: "Birkmann", fieldTypeCode: "text" },
-    ]);
+    const { resources } = declaringPraktikum([{ key: "birkmann", name: "Birkmann", fieldTypeCode: "text" }]);
 
     const { plan } = await buildPlan(ct.client, state, resources);
     expect(plan.items[0]!.changes.some((c) => c.field.startsWith("memberField:"))).toBe(false);

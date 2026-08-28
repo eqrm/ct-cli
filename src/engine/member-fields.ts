@@ -233,10 +233,7 @@ export function matchingMemberFieldRows(
  * `referenceName` there is no rename to refuse. Treating "missing" as "different" would make every
  * such row unreconcilable — no update, no create, just a permanent error.
  */
-export function conflictingReferenceName(
-  row: MemberFieldRow,
-  referenceName: string,
-): string | undefined {
+export function conflictingReferenceName(row: MemberFieldRow, referenceName: string): string | undefined {
   const live = memberFieldReferenceName(row);
   return live !== undefined && live !== referenceName ? live : undefined;
 }

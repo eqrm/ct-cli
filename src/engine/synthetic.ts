@@ -325,8 +325,7 @@ const memberFieldsField: SyntheticField = {
           const nearIdentities = rows.filter((row) => {
             const live = memberFieldReferenceName(row);
             return (
-              live !== undefined &&
-              (slug(live) === slug(spec.referenceName) || slug(live) === slug(spec.key))
+              live !== undefined && (slug(live) === slug(spec.referenceName) || slug(live) === slug(spec.key))
             );
           });
           for (const row of nearIdentities) claimed.add(row);
