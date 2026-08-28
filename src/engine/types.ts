@@ -31,6 +31,7 @@ export interface DesiredResource {
    * and `dynamic`: `undefined` = member fields are not managed for this group; `[]` = managed with
    * none declared (which still never deletes an existing one — see engine/synthetic.ts). Only valid
    * on a group, because a member field belongs to exactly one group and is not globally reusable.
+   * Each spec keeps its local ct-cli `key` separate from the exact ChurchTools `referenceName`.
    */
   memberFields?: MemberFieldSpec[];
   /** Logical keys this resource must be applied after (includes `parent`/`parents`). */

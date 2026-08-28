@@ -67,9 +67,9 @@ export function parseMemberFieldIdentity(raw: string): { group: string; field: s
  * writable, minus the two that must never be managed:
  *
  *  - `id` — host-specific, and the entire portability guarantee is that it never appears in config.
- *  - `referenceName` — this IS the local identity (see {@link matchesLocalKey}), not a diffable
- *    property. Managing it would let a plain rename silently re-key the resource, and the field
- *    would then be re-created rather than updated on the next apply.
+ *  - `referenceName` — exact ChurchTools identity, kept separately on {@link MemberFieldSpec}.
+ *    It is compared exactly and sent on create, but never PATCHed: changing it requires an explicit
+ *    replacement because dynamic-group rulesets address this exact string.
  *
  * A declared property outside this list still passes through to ChurchTools untouched (the escape
  * hatch, mirroring the registry's unknown-field behaviour) — it only earns a warning.
@@ -101,7 +101,9 @@ export function isManagedMemberFieldProp(name: string): boolean {
 export interface MemberFieldSpec {
   /** Local key, unique within the owning group. Half of the portable `<group>::<key>` identity. */
   key: string;
-  /** The declared properties — never an id, never `referenceName`. Diffed as one unit. */
+  /** Exact identity used by ChurchTools and by ruleset `groupMemberFields` assignments (#158). */
+  referenceName: string;
+  /** The declared mutable properties — never an id, never `referenceName`. Diffed as one unit. */
   props: Record<string, unknown>;
 }
 
@@ -191,10 +193,15 @@ export function knownMemberFieldId(state: State, groupKey: string, localKey: str
   return group?.memberFields?.[memberFieldStateKey(localKey)];
 }
 
-/** Prefer a state-bound id; use the portable live key only when no known id is present in the response. */
+/**
+ * Prefer a state-bound id; otherwise match ChurchTools' identity-bearing `referenceName` EXACTLY.
+ * A name fallback is permitted only for old/UI rows that genuinely carry no referenceName. Once CT
+ * supplies one, punctuation and case are data: `foo-bar` and `foo_bar` are different identities.
+ */
 export function matchingMemberFieldRows(
   rows: MemberFieldRow[],
   localKey: string,
+  referenceName: string,
   knownId?: number,
 ): MemberFieldRow[] {
   if (knownId !== undefined) {
@@ -203,23 +210,37 @@ export function matchingMemberFieldRows(
     // when a response variant was parsed incompletely.
     return rows.filter((row) => memberFieldRowId(row) === knownId);
   }
-  return rows.filter((row) => matchesLocalKey(row, localKey));
+  return rows.filter((row) => {
+    const liveReference = memberFieldReferenceName(row);
+    if (liveReference !== undefined) return liveReference === referenceName;
+    const name = row.name;
+    return typeof name === "string" && slug(name) === slug(localKey);
+  });
 }
 
 /**
- * The local key a live row answers to. `referenceName` is CT's own stable, non-numeric handle
- * within the group and is what a create sends, so it wins; `name` is the fallback for a row created
- * in the ChurchTools UI, where CT may mint its own referenceName. Slugged on both sides so a key
- * derived from a German name (`Wahl` → `wahl`) matches either spelling.
+ * The exact identity-bearing ChurchTools reference name, when the row carries one.
+ */
+export function memberFieldReferenceName(row: MemberFieldRow): string | undefined {
+  const reference = row.referenceName;
+  return typeof reference === "string" && reference.length > 0 ? reference : undefined;
+}
+
+/**
+ * A stable local key for adoption/delete-candidate display. This is deliberately NOT API identity:
+ * it remains a ct-cli slug, while {@link memberFieldReferenceName} preserves the exact CT string.
  */
 export function localKeyOf(row: MemberFieldRow): string {
-  const reference = row.referenceName;
-  if (typeof reference === "string" && reference.length > 0) return slug(reference);
+  const reference = memberFieldReferenceName(row);
+  if (reference !== undefined) return slug(reference);
   const name = row.name;
   return typeof name === "string" ? slug(name) : "";
 }
 
-/** Does this live row carry the declared local key? (See {@link localKeyOf}.) */
+/**
+ * Legacy/local-key affinity used only for diagnostics and destructive target lookup. Never use it
+ * to establish API identity for plan/apply; use {@link matchingMemberFieldRows} there.
+ */
 export function matchesLocalKey(row: MemberFieldRow, localKey: string): boolean {
   const wanted = slug(localKey);
   if (localKeyOf(row) === wanted) return true;

@@ -11,6 +11,7 @@ import {
   isGroupScopedMemberField,
   actualMemberFieldProps,
   groupScopedRows,
+  matchingMemberFieldRows,
 } from "../src/engine/member-fields.js";
 
 const HOST = "https://mychurch.church.tools";
@@ -225,7 +226,9 @@ describe("group member fields — plan (#135)", () => {
     const { plan } = await buildPlan(ct.client, state, [praktikum("praktikum_1", "Praktikum 1")]);
     const rendered = plain(renderPlan(plan));
     expect(rendered).toContain("+ group.praktikum_1");
-    expect(rendered).toContain('memberField:wahl: {"name":"Wahl","fieldTypeCode":"text"}');
+    expect(rendered).toContain(
+      'memberField:wahl: {"referenceName":"wahl","name":"Wahl","fieldTypeCode":"text"}',
+    );
     expect(rendered).toContain("Plan: 1 to create, 0 to update, 0 to delete.");
   });
 
@@ -253,7 +256,7 @@ describe("group member fields — plan (#135)", () => {
     const rendered = plain(renderPlan(plan));
     expect(rendered).toContain("~ group.praktikum_1 (#100)");
     expect(rendered).toContain(
-      'memberField:wahl: {"name":"Wahl","fieldTypeCode":"text"} -> {"name":"Wahl (neu)","fieldTypeCode":"text"}',
+      'memberField:wahl: {"referenceName":"wahl","name":"Wahl","fieldTypeCode":"text"} -> {"referenceName":"wahl","name":"Wahl (neu)","fieldTypeCode":"text"}',
     );
     expect(rendered).toContain("Plan: 0 to create, 1 to update, 0 to delete.");
   });
@@ -435,7 +438,9 @@ describe("group member fields — apply (#135)", () => {
 
   it("normalises live response variants and PATCHes the current state-bound id", async () => {
     const ct = makeCt();
-    ct.memberFields[100] = [{ id: 501, type: "group", name: "Birkman", fieldTypeCode: "textarea" }];
+    ct.memberFields[100] = [
+      { id: 501, type: "group", referenceName: "birkmann", name: "Birkman", fieldTypeCode: "textarea" },
+    ];
     const realGet = ct.get.getMockImplementation()!;
     ct.get.mockImplementation(async (path: string) => {
       if (path === "/groups/100/memberfields") {
@@ -523,6 +528,174 @@ describe("group member fields — apply (#135)", () => {
     const gid = state.resources.praktikum_1!.id;
     const stored = ct.rulesets[gid] as { query: { "==": unknown[] } };
     expect(stored.query["=="][1]).toBe(state.resources.praktikum_1!.memberFields!.wahl);
+  });
+
+  it("keeps local key, exact API referenceName, and ruleset assignment separate (#158)", async () => {
+    const ct = makeCt();
+    const state = stateWith({});
+    const { ct: dsl, resources } = createContext();
+    dsl.group({
+      key: "praktikum_1",
+      name: "Praktikum 1",
+      groupTypeId: 5,
+      groupStatusId: 1,
+      memberFields: [
+        {
+          key: "stand_bewerbung",
+          referenceName: "stand-bewerbung",
+          name: "Stand",
+          fieldTypeCode: "select",
+        },
+      ],
+      dynamic: {
+        status: "active",
+        ruleset: {
+          description: "Stand Bewerbung",
+          query: {},
+          process: {
+            queryResultOnly: {
+              none: {
+                handleMembership: {
+                  groupMemberFields: { "stand-bewerbung": "❓Offen" },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const { plan } = await buildPlan(ct.client, state, resources);
+    expect(
+      plan.items[0]!.changes.find((change) => change.field === "memberField:stand_bewerbung")?.to,
+    ).toMatchObject({ referenceName: "stand-bewerbung" });
+    await executePlan(plan, { client: ct.client, state, statePath: "s.json", save: async () => {} });
+
+    const groupId = state.resources.praktikum_1!.id;
+    expect(ct.memberFields[groupId]).toEqual([
+      expect.objectContaining({ referenceName: "stand-bewerbung", name: "Stand" }),
+    ]);
+    expect(state.resources.praktikum_1!.memberFields).toEqual({ stand_bewerbung: expect.any(Number) });
+    expect(ct.rulesets[groupId]).toMatchObject({
+      process: {
+        queryResultOnly: {
+          none: {
+            handleMembership: {
+              groupMemberFields: { "stand-bewerbung": "❓Offen" },
+            },
+          },
+        },
+      },
+    });
+  });
+});
+
+describe("group member fields — exact referenceName identity (#158)", () => {
+  it("marks an existing punctuation mismatch incomplete and never plans a silent rename", async () => {
+    const ct = makeCt();
+    ct.memberFields[100] = [
+      {
+        id: 501,
+        type: "group",
+        referenceName: "stand_bewerbung",
+        name: "Stand",
+        fieldTypeCode: "select",
+      },
+    ];
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    state.resources.praktikum_1!.memberFields = { stand_bewerbung: 501 };
+    const { ct: dsl, resources } = createContext();
+    dsl.group({
+      key: "praktikum_1",
+      name: "Praktikum 1",
+      groupTypeId: 5,
+      groupStatusId: 1,
+      memberFields: [
+        {
+          key: "stand_bewerbung",
+          referenceName: "stand-bewerbung",
+          name: "Stand",
+          fieldTypeCode: "select",
+        },
+      ],
+    });
+
+    const { plan, fetchErrors } = await buildPlan(ct.client, state, resources);
+    expect(fetchErrors.join("\n")).toMatch(
+      /stand_bewerbung.*"stand_bewerbung".*"stand-bewerbung".*not rename.*ct destroy --member-field praktikum_1::stand_bewerbung/s,
+    );
+    expect(warnings.join("\n")).toContain('exact ChurchTools referenceName is "stand_bewerbung"');
+    expect(plan.items[0]!.changes.some((change) => change.field.startsWith("memberField:"))).toBe(false);
+  });
+
+  it("refuses a duplicate create for an unbound row whose normalised spelling merely looks equal", async () => {
+    const ct = makeCt();
+    ct.memberFields[100] = [{ id: 501, type: "group", referenceName: "stand_bewerbung", name: "Stand" }];
+    const state = stateWith({
+      praktikum_1: {
+        type: "group",
+        id: 100,
+        fields: { name: "Praktikum 1", groupTypeId: 5, groupStatusId: 1 },
+      },
+    });
+    const { ct: dsl, resources } = createContext();
+    dsl.group({
+      key: "praktikum_1",
+      name: "Praktikum 1",
+      groupTypeId: 5,
+      groupStatusId: 1,
+      memberFields: [
+        {
+          key: "stand_bewerbung",
+          referenceName: "stand-bewerbung",
+          name: "Stand",
+        },
+      ],
+    });
+
+    const { plan, fetchErrors } = await buildPlan(ct.client, state, resources);
+    expect(fetchErrors.join("\n")).toMatch(/"stand_bewerbung".*"stand-bewerbung"/s);
+    expect(plan.items[0]!.changes.some((change) => change.field.startsWith("memberField:"))).toBe(false);
+  });
+
+  it("does not collapse hyphens and underscores when matching API reference names", () => {
+    const rows = [
+      { id: 1, referenceName: "foo-bar", name: "Foo" },
+      { id: 2, referenceName: "foo_bar", name: "Foo" },
+    ];
+    expect(matchingMemberFieldRows(rows, "foo_bar", "foo-bar")).toEqual([rows[0]]);
+    expect(matchingMemberFieldRows(rows, "foo-bar", "foo_bar")).toEqual([rows[1]]);
+  });
+
+  it("rejects duplicate exact API identities but permits hyphen/underscore as distinct", () => {
+    const { ct } = createContext();
+    expect(() =>
+      ct.group({
+        key: "duplicate",
+        name: "Duplicate",
+        memberFields: [
+          { key: "first", referenceName: "same", name: "First" },
+          { key: "second", referenceName: "same", name: "Second" },
+        ],
+      }),
+    ).toThrow(/duplicate member field referenceName "same"/);
+
+    expect(() =>
+      ct.group({
+        key: "distinct",
+        name: "Distinct",
+        memberFields: [
+          { key: "first", referenceName: "foo-bar", name: "First" },
+          { key: "second", referenceName: "foo_bar", name: "Second" },
+        ],
+      }),
+    ).not.toThrow();
   });
 });
 

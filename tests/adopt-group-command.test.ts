@@ -607,10 +607,12 @@ describe("ct adopt group --with-member-fields (#135)", () => {
     ]);
     expect(snippet).toContain("memberFields:");
     expect(snippet).toContain('key: "wahl"');
+    expect(snippet).toContain('referenceName: "wahl"');
     expect(snippet).toContain('name: "Wahl"');
     expect(snippet).toContain('fieldTypeCode: "text"');
     expect(snippet).toContain("requiredInRegistrationForm: true");
     expect(snippet).toContain('key: "notiz"');
+    expect(snippet).toContain('referenceName: "notiz"');
     // The whole portability guarantee: no host-specific field id anywhere in the emitted config.
     expect(snippet).not.toContain("701");
     expect(snippet).not.toContain("702");

@@ -101,6 +101,8 @@ export type DynamicInput = boolean | string | { status: DynamicStatus; ruleset: 
  */
 export interface MemberFieldInput {
   key: string;
+  /** Exact ChurchTools/ruleset identity; defaults to the local ct-cli key. Never silently renamed. */
+  referenceName?: string;
   [prop: string]: unknown;
 }
 
@@ -132,6 +134,8 @@ export interface ResourceInput {
    * (`ojbp_2026_27_praktikum_1::wahl`), because a member field belongs to exactly one group and is
    * not globally reusable. Two groups declaring `wahl` stay independent fields with different
    * ChurchTools ids. A declaration may never carry a ChurchTools field id.
+   * `referenceName` is separate exact ChurchTools identity and defaults to `key`; hyphens and
+   * underscores are not equivalent there because dynamic rulesets use that string verbatim.
    *
    * A field dropped from this list is NEVER deleted — see `ct destroy --member-field`.
    */
@@ -430,11 +434,12 @@ function normalizeMemberFields(
   }
   const specs: MemberFieldSpec[] = [];
   const seen = new Set<string>();
+  const seenReferenceNames = new Set<string>();
   for (const raw of input) {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       throw new Error(`group "${key}": each entry of "memberFields" must be an object with a "key".`);
     }
-    const { key: localKey, ...props } = raw as MemberFieldInput;
+    const { key: localKey, referenceName: configuredReferenceName, ...props } = raw as MemberFieldInput;
     if (typeof localKey !== "string" || localKey.length === 0) {
       throw new Error(`group "${key}": each entry of "memberFields" needs a non-empty string "key".`);
     }
@@ -450,6 +455,22 @@ function normalizeMemberFields(
       );
     }
     seen.add(canonical);
+    if (
+      configuredReferenceName !== undefined &&
+      (typeof configuredReferenceName !== "string" || configuredReferenceName.length === 0)
+    ) {
+      throw new Error(
+        `group "${key}" member field "${localKey}": "referenceName" must be a non-empty string when provided.`,
+      );
+    }
+    const referenceName = configuredReferenceName ?? localKey;
+    if (seenReferenceNames.has(referenceName)) {
+      throw new Error(
+        `group "${key}": duplicate member field referenceName ${JSON.stringify(referenceName)}. ` +
+          `ChurchTools reference names are exact identities and must be unique within a group.`,
+      );
+    }
+    seenReferenceNames.add(referenceName);
     for (const forbidden of MEMBER_FIELD_FORBIDDEN_PROPS) {
       if (props[forbidden] !== undefined) {
         throw new Error(
@@ -476,7 +497,7 @@ function normalizeMemberFields(
         );
       }
     }
-    specs.push({ key: localKey, props });
+    specs.push({ key: localKey, referenceName, props });
   }
   return specs;
 }
@@ -685,8 +706,8 @@ function validateMemberFieldRefs(resources: DesiredResource[], byKey: Map<string
             `does not manage member fields. Add a "memberFields" list declaring "${ref.field}" to it.`,
         );
       }
-      // Normalised on both sides, exactly as the live row is matched (`matchesLocalKey`) and as the
-      // created id is keyed in state (`memberFieldStateKey`) — one spelling of identity everywhere.
+      // A ref names the local ct-cli key. That key remains normalised for config portability, while
+      // the matched declaration carries the separate exact ChurchTools referenceName (#158).
       if (!target.memberFields.some((f) => memberFieldStateKey(f.key) === memberFieldStateKey(ref.field))) {
         const declared = target.memberFields.map((f) => f.key).join(", ");
         throw new Error(

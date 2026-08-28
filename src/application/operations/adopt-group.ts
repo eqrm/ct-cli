@@ -224,8 +224,8 @@ interface MemberFieldsCapture {
  * Emits `{ key, ...managed properties }` per field and **never a ChurchTools id** — the field's
  * identity in config is the group key plus its local key (`ojbp_2026_27_praktikum_1::wahl`), so the
  * same blueprint applied to another group, or another host, mints its own fields rather than
- * resolving against this host's numbering. The local key comes from CT's own `referenceName`
- * (slugged), falling back to the slugged name for a field created in the ChurchTools UI.
+ * resolving against this host's numbering. The local key is a slug for ct-cli/state only; the live
+ * `referenceName` is emitted separately and byte-for-byte so punctuation remains API identity.
  *
  * Opt-in only (`--with-member-fields`) — and that opt-in is TRANSITIONAL, not a statement that
  * member fields are optional: they are a category-2 owned structural child, so the flip to
@@ -296,6 +296,9 @@ async function captureMemberFields(
     }
     ids[canonical] = fieldId;
     const declaration: Record<string, unknown> = { key: localKeyOf(row) };
+    if (typeof row.referenceName === "string" && row.referenceName.length > 0) {
+      declaration.referenceName = row.referenceName;
+    }
     for (const prop of MEMBER_FIELD_PROPS) {
       if (row[prop] !== undefined) declaration[prop] = row[prop];
     }
