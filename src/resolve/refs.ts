@@ -24,6 +24,9 @@ export type RefKind =
   | "security-level"
   | "comment-viewer"
   | "group-type"
+  | "age-group"
+  | "target-group"
+  | "relationship-type"
   | "group-status"
   | "person-status"
   | "role-def"
@@ -31,21 +34,6 @@ export type RefKind =
   | "group-role"
   | "group-type-role"
   | "group-member-field";
-
-/**
- * Shared explanation for why a group-status reference can never be resolved by name (#67):
- * ChurchTools exposes no REST catalog for group statuses — `GET /group/memberstatus` is a
- * different dimension (member statuses, string ids), live-verified 2026-07-10 on eqrm prod.
- * Used verbatim by both guards that can see a group-status reference, so their messages can't
- * drift apart:
- *  - the eval-time guard (src/config/context.ts) for a declared `status:` field, and
- *  - the plan-time guard (src/resolve/resolver.ts) for a `groupStatusId: ref.status(...)` value
- *    that bypassed the eval-time guard (the id-field escape hatch accepts any Ref) and reached
- *    the resolver directly.
- */
-export const GROUP_STATUS_NO_CATALOG =
-  `group statuses have no REST catalog (GET /group/memberstatus is a different dimension: member ` +
-  `statuses, string ids — verified 2026-07-10). Declare a numeric "groupStatusId" instead (e.g. "groupStatusId: 1").`;
 
 /** Simple key-addressed reference: campus / department / security level / group type / group status / person status / role definition / group. */
 export interface SimpleRef {
@@ -56,6 +44,9 @@ export interface SimpleRef {
     | "security-level"
     | "comment-viewer"
     | "group-type"
+    | "age-group"
+    | "target-group"
+    | "relationship-type"
     | "group-status"
     | "person-status"
     | "role-def"
@@ -204,6 +195,21 @@ export const ref = {
     kind: "group-type",
     key: requireKey("group-type", key),
   }),
+  ageGroup: (key: string): SimpleRef => ({
+    __ctRef: true,
+    kind: "age-group",
+    key: requireKey("age-group", key),
+  }),
+  targetGroup: (key: string): SimpleRef => ({
+    __ctRef: true,
+    kind: "target-group",
+    key: requireKey("target-group", key),
+  }),
+  relationshipType: (key: string): SimpleRef => ({
+    __ctRef: true,
+    kind: "relationship-type",
+    key: requireKey("relationship-type", key),
+  }),
   status: (key: string): SimpleRef => ({
     __ctRef: true,
     kind: "group-status",
@@ -211,9 +217,8 @@ export const ref = {
   }),
   /**
    * A PERSON status (`/statuses` — "0 - First", "3 - Group Active", …), the domain of a `status`
-   * permission declaration. Unrelated to {@link ref.status} (GROUP status, `groupStatusId`), which
-   * has no catalog at all (#67) — person statuses do, so this one resolves by name like any other
-   * master-data ref.
+   * permission declaration. Unrelated to {@link ref.status} (GROUP status, `groupStatusId`), whose
+   * separate catalog is nested under `/person/masterdata.groupStatuses` (#157).
    */
   personStatus: (key: string): SimpleRef => ({
     __ctRef: true,

@@ -10,6 +10,7 @@ import { PreparedOperationStore } from "../../src/application/prepared-operation
 import type { Clock } from "../../src/application/ports.js";
 import type { Plan } from "../../src/engine/types.js";
 import { emptyState } from "../../src/state/state.js";
+import { ExternalReferenceError } from "../../src/resolve/external.js";
 
 const host = "https://example.church.tools";
 const statePath = "/project/ct-state.prod.json";
@@ -28,6 +29,7 @@ const resourcePlan: Plan = {
 function harness(options: { protected?: boolean; environment?: string | null } = {}) {
   let now = new Date("2026-08-25T20:00:00.000Z");
   let stateFile = "state-v1";
+  let configFile = "config-v1";
   const clock: Clock = { now: () => now };
   const store = new PreparedOperationStore<PreparedApplyExecution>(clock, {
     nextId: () => "prepared-1",
@@ -45,7 +47,7 @@ function harness(options: { protected?: boolean; environment?: string | null } =
   const dependencies: ApplyOperationDependencies = {
     clock,
     store,
-    readStateFile: async () => stateFile,
+    readStateFile: async (path) => (path === statePath ? stateFile : configFile),
     resolveProject: vi.fn(async () => ({
       cwd: "/project",
       configPath: "/project/ct.config.ts",
@@ -85,6 +87,9 @@ function harness(options: { protected?: boolean; environment?: string | null } =
     changeState(value: string) {
       stateFile = value;
     },
+    changeConfig(value: string) {
+      configFile = value;
+    },
   };
 }
 
@@ -93,6 +98,34 @@ async function expectCode(promise: Promise<unknown>, code: CtApplicationError["c
 }
 
 describe("prepared apply operation", () => {
+  it("blocks before backup and writes when an external prerequisite diagnostic is raised", async () => {
+    const test = harness();
+    const diagnostic = new ExternalReferenceError({
+      reason: "EXTERNAL_BINDING_MISSING",
+      type: "group",
+      key: "shared",
+      site: 'group "consumer".parents',
+      context: { host, consumer: "consumer", environment: "prod" },
+      evidence: ["No persisted external binding exists."],
+      consequence: "Apply is blocked before writes.",
+      remediation: [{ command: "ct use group 77 --key shared", description: "Bind the live group." }],
+      verification: "ct plan --env prod",
+    });
+    test.dependencies.buildPlan = vi.fn(async () => {
+      throw diagnostic;
+    });
+
+    await expect(prepareApply({}, test.dependencies)).rejects.toMatchObject({
+      code: "EXTERNAL_REFERENCE_BLOCKED",
+      details: {
+        reason: "EXTERNAL_BINDING_MISSING",
+        remediation: [{ command: "ct use group 77 --key shared" }],
+      },
+    });
+    expect(test.backup).not.toHaveBeenCalled();
+    expect(test.execute).not.toHaveBeenCalled();
+  });
+
   it("requires the exact protected environment and writes the backup before resources", async () => {
     const test = harness();
     const prepared = await prepareApply({}, test.dependencies);
@@ -202,5 +235,19 @@ describe("prepared apply operation", () => {
     );
     expect(test.backup).not.toHaveBeenCalled();
     expect(test.execute).not.toHaveBeenCalled();
+  });
+
+  it("binds execution to the exact config digest", async () => {
+    const test = harness({ protected: false, environment: "dev" });
+    const prepared = await prepareApply({}, test.dependencies);
+    expect(prepared.bindings.configDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(prepared.bindings.planDigest).toMatch(/^[a-f0-9]{64}$/);
+    test.changeConfig("config-v2");
+
+    await expectCode(
+      executePreparedApply(prepared, { type: "yes" }, test.dependencies),
+      "PLAN_CONFIRMATION_MISMATCH",
+    );
+    expect(test.backup).not.toHaveBeenCalled();
   });
 });

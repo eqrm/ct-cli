@@ -190,7 +190,12 @@ describe("the same config means the same thing on two hosts (#151)", () => {
   /** A client whose permission reads are empty and whose viewer catalog is host-specific. */
   function mockClient(viewers: { id: number; name: string }[] = [], newId = 555) {
     const calls: { method: string; path: string; body?: unknown }[] = [];
-    const get = vi.fn(async (path: string) => (path === PATH ? viewers : []));
+    const get = vi.fn(async (path: string) => {
+      if (path === PATH) return viewers;
+      const match = /^\/person\/commentviewers\/(\d+)$/.exec(path);
+      if (match) return viewers.find((viewer) => viewer.id === Number(match[1]));
+      return [];
+    });
     const request = vi.fn(async (method: string, path: string, body?: unknown) => {
       calls.push({ method, path, body });
       if (method === "POST" && path === PATH) return { id: newId };
@@ -262,13 +267,18 @@ describe("the same config means the same thing on two hosts (#151)", () => {
     expect(put?.body).toEqual({ authId: 113, type: "grant", dataId: [555] });
   });
 
-  it("still falls back to the live catalog for a viewer this config does not own", async () => {
-    // The compatibility half of the promotion: a name ref against an unmanaged viewer keeps working
-    // exactly as it did in #102, so no existing config has to change.
+  it("resolves an explicitly bound external viewer without managing it", async () => {
     const { client } = mockClient([{ id: 2, name: "Dienstbereich" }]);
-    const { items, fetchErrors } = await buildPermissionPlan(client, emptyState(HOST), [viewerScoped]);
+    const state = emptyState(HOST);
+    state.externals!.dienstbereich = {
+      type: "comment-viewer",
+      id: 2,
+      key: "dienstbereich",
+      identity: { name: "Dienstbereich" },
+      boundAt: "t",
+    };
+    const { items, fetchErrors } = await buildPermissionPlan(client, state, [viewerScoped]);
     expect(fetchErrors).toEqual([]);
-    // Catalog-resolved: already host-correct, so no managed identity is carried for re-resolution.
     expect(items[0]?.diff.toPut).toEqual([{ authId: 113, dataId: [2], type: "grant" }]);
   });
 });

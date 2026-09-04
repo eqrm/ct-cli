@@ -5,14 +5,14 @@
  *
  * References resolve from, in order: (1) resources managed by this tool (declared
  * here or already in state), (2) live master-data catalogs (group types, campuses,
- * roles) matched by name. An unresolvable name fails the plan with a
+ * group statuses, roles) matched by name. An unresolvable name fails the plan with a
  * clear error naming the reference and where it was used — never a silent wrong id.
  *
  * The numeric escape hatch remains available everywhere (`groupTypeId: 2`,
  * `campusId: 3`, `q.eq("ctgroup.campusId", 4)`, `id: <domainId>`) for the rare case
- * where you deliberately target one instance's id — and is the ONLY way to set a
- * group's `groupStatusId`: group statuses have no REST catalog to resolve a name
- * against (#67), so unlike `groupType`/`campus` there is no `status:` sugar.
+ * where you deliberately target one instance's id. A group's lifecycle status can
+ * instead use `status: "active"`; it resolves through the nested group-status catalog
+ * in `/person/masterdata` (#157).
  */
 import type { ConfigContext } from "../src/config/context.js";
 import { q, churchQuery, ref } from "../src/config/context.js";

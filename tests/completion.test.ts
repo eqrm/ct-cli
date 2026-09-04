@@ -82,10 +82,21 @@ describe("completion candidates", () => {
   it("reflects the real command tree, nested commands included", async () => {
     const program = buildProgram();
     expect(await complete(program, "ct ")).toEqual(
-      expect.arrayContaining(["auth", "state", "plan", "apply", "destroy", "completion"]),
+      expect.arrayContaining([
+        "auth",
+        "use",
+        "unuse",
+        "unadopt",
+        "ownership",
+        "state",
+        "plan",
+        "apply",
+        "destroy",
+        "completion",
+      ]),
     );
     expect(await complete(program, "ct auth ")).toEqual(expect.arrayContaining(["login", "logout"]));
-    expect(await complete(program, "ct state ")).toEqual(expect.arrayContaining(["list", "rm"]));
+    expect(await complete(program, "ct state ")).toEqual(expect.arrayContaining(["list", "rm", "rekey"]));
     expect(await complete(program, "ct apply -")).toEqual(expect.arrayContaining(["--auto-approve"]));
   });
 });
@@ -183,6 +194,25 @@ describe("dynamic completion", () => {
     expect(await complete(buildProgram(), "ct state rm ")).toEqual(
       expect.arrayContaining(["campus", "group", "group-role"]),
     );
+  });
+
+  it("completes use/rekey types and external state keys from the generic registry/state", async () => {
+    process.env.CT_STATE = join(dir, "ct-state.json");
+    await writeFile(
+      process.env.CT_STATE,
+      JSON.stringify({
+        version: 2,
+        host: "https://x.church.tools",
+        resources: { owned: { type: "group", id: 8, key: "owned", fields: {} } },
+        externals: { shared: { type: "group", id: 7, key: "shared", identity: {}, boundAt: "t" } },
+      }),
+    );
+    expect(await complete(buildProgram(), "ct use ")).toEqual(
+      expect.arrayContaining(["campus", "group", "group-role"]),
+    );
+    expect(await complete(buildProgram(), "ct state rekey group ")).toEqual(["owned", "shared"]);
+    expect(await complete(buildProgram(), "ct unuse group ")).toEqual(["shared"]);
+    expect(await complete(buildProgram(), "ct unadopt group ")).toEqual(["owned"]);
   });
 
   it("completes a path option from the filesystem", async () => {

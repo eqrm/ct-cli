@@ -10,7 +10,7 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { authedSession } from "../../api/session.js";
+import { authedSession, type AuthedSession } from "../../api/session.js";
 import { CtApiError, type CtClient } from "../../api/ctClient.js";
 import { formatError } from "../../api/format.js";
 import { normalizeRuleset } from "../../engine/dynamic.js";
@@ -30,8 +30,8 @@ import { formatPortablizeWarnings, portablizeRuleset, scanUnportablized } from "
 import { chooseAdoptKey, loadState, saveState, upsert, type State } from "../../state/state.js";
 import type { CtWarning, OperationResult, ProjectRequest } from "../contracts.js";
 import { InMemoryMutationLock } from "../prepared-operation-store.js";
-import { resolveProject } from "../project.js";
-import { noopObserver, type OperationObserver } from "../ports.js";
+import { resolveProject, type ProjectResolutionDependencies } from "../project.js";
+import { noopObserver, type MutationLock, type OperationObserver } from "../ports.js";
 import { warningSink, type WarningSink } from "../warnings.js";
 
 export interface AdoptGroupRequest extends ProjectRequest {
@@ -327,6 +327,12 @@ async function captureDynamic(
 
 export interface AdoptGroupDependencies {
   observer?: OperationObserver;
+  project?: ProjectResolutionDependencies;
+  resolveProject?: typeof resolveProject;
+  loadState?: typeof loadState;
+  saveState?: typeof saveState;
+  authedSession?: () => Promise<AuthedSession>;
+  lock?: MutationLock;
 }
 
 export async function runAdoptGroups(
@@ -354,10 +360,10 @@ export async function runAdoptGroups(
     throw new Error("--key is only valid when adopting a single group.");
   }
 
-  const project = await resolveProject(opts);
-  return mutationLock.runExclusive(project.statePath, async () => {
-    const state = await loadState(project.statePath, project.host);
-    const { client } = await authedSession();
+  const project = await (dependencies.resolveProject ?? resolveProject)(opts, dependencies.project);
+  return (dependencies.lock ?? mutationLock).runExclusive(project.statePath, async () => {
+    const state = await (dependencies.loadState ?? loadState)(project.statePath, project.host);
+    const { client } = await (dependencies.authedSession ?? authedSession)();
 
     let resolvedIds: number[];
     if (ids.length > 0) {
@@ -405,6 +411,7 @@ export async function runAdoptGroups(
     if (opts.withDynamic && opts.portableRulesets !== false) {
       portableCatalogMaps.campus = await reverse.idToKeyByKind("campus");
       portableCatalogMaps["group-type"] = await reverse.idToKeyByKind("group-type");
+      portableCatalogMaps["group-status"] = await reverse.idToKeyByKind("group-status");
       groupTypeIdToKey = portableCatalogMaps["group-type"];
       roleCatalog = await reverse.roleGroupTypeCatalog();
     }
@@ -550,7 +557,7 @@ export async function runAdoptGroups(
       };
     }
 
-    await saveState(project.statePath, state);
+    await (dependencies.saveState ?? saveState)(project.statePath, state);
     if (reports.some((report) => report.action === "updated")) {
       addWarning({
         code: "ADOPT_ALREADY_MANAGED",

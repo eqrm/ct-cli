@@ -247,56 +247,45 @@ export async function loginWithPassword(
   opts: { fetchImpl?: typeof fetch; askTotp?: () => Promise<string> } = {},
 ): Promise<string> {
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const secrets: (string | undefined)[] = [password];
-  let cookie = "";
-
-  const loginRes = await postJson(fetchImpl, `${host}/api/login`, cookie, { username, password });
-  cookie = mergeCookies(cookie, loginRes);
-  const loginBody = await readJson(loginRes);
-  if (!loginRes.ok) {
-    fail("Login failed", loginRes, loginBody, secrets);
+  const started = await beginPasswordLogin(host, username, password, { fetchImpl });
+  if (started.kind === "token") return started.token;
+  if (!opts.askTotp) {
+    throw new LoginError(
+      "This account requires a 2FA code, which needs an interactive terminal.",
+      started.status,
+    );
   }
+  const code = (await opts.askTotp()).trim();
+  return continuePasswordLogin(started.continuation, code, { fetchImpl });
+}
 
-  const status = pick(loginBody, "status");
-  let personId = personIdOf(loginBody);
+export interface PasswordLoginContinuation {
+  host: string;
+  cookie: string;
+  personId: number;
+}
 
-  if (status === "totp") {
-    if (personId === undefined) {
-      throw new LoginError("ChurchTools asked for a 2FA code but returned no personId.", loginRes.status);
-    }
-    if (!opts.askTotp) {
-      throw new LoginError(
-        "This account requires a 2FA code, which needs an interactive terminal.",
-        loginRes.status,
-      );
-    }
-    const code = (await opts.askTotp()).trim();
-    secrets.push(code);
-    if (!/^\d{6}$/.test(code)) {
-      throw new LoginError("The 2FA code must be six digits.", 0);
-    }
-    const totpRes = await postJson(fetchImpl, `${host}/api/login/totp`, cookie, { code, personId });
-    cookie = mergeCookies(cookie, totpRes);
-    const totpBody = await readJson(totpRes);
-    if (!totpRes.ok) {
-      fail("2FA verification failed", totpRes, totpBody, secrets);
-    }
-    personId = personIdOf(totpBody) ?? personId;
-  }
+export type PasswordLoginStart =
+  | { kind: "token"; token: string }
+  | { kind: "totp"; continuation: PasswordLoginContinuation; status: number };
 
-  if (personId === undefined) {
-    throw new LoginError("ChurchTools accepted the login but returned no personId.", loginRes.status);
-  }
-
+async function readPersonalToken(
+  continuation: PasswordLoginContinuation,
+  fetchImpl: typeof fetch,
+  secrets: (string | undefined)[] = [],
+): Promise<string> {
   const tokenRes = await fetchWithRetry(
-    `${host}/api/persons/${personId}/logintoken`,
-    { headers: { Accept: "application/json", ...(cookie ? { Cookie: cookie } : {}) } },
+    `${continuation.host}/api/persons/${continuation.personId}/logintoken`,
+    {
+      headers: {
+        Accept: "application/json",
+        ...(continuation.cookie ? { Cookie: continuation.cookie } : {}),
+      },
+    },
     { isIdempotent: true, fetchImpl },
   );
   const tokenBody = await readJson(tokenRes);
-  if (!tokenRes.ok) {
-    fail("Could not read the personal login token", tokenRes, tokenBody, secrets);
-  }
+  if (!tokenRes.ok) fail("Could not read the personal login token", tokenRes, tokenBody, secrets);
   const raw = tokenBody.data ?? tokenBody;
   const token =
     typeof raw === "string"
@@ -308,6 +297,65 @@ export async function loginWithPassword(
     throw new LoginError("ChurchTools returned no login token for this account.", tokenRes.status);
   }
   return token.trim();
+}
+
+/** Start a password login without retaining the password when ChurchTools asks for TOTP. */
+export async function beginPasswordLogin(
+  host: string,
+  username: string,
+  password: string,
+  opts: { fetchImpl?: typeof fetch } = {},
+): Promise<PasswordLoginStart> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const secrets: (string | undefined)[] = [password];
+  let cookie = "";
+
+  const loginRes = await postJson(fetchImpl, `${host}/api/login`, cookie, { username, password });
+  cookie = mergeCookies(cookie, loginRes);
+  const loginBody = await readJson(loginRes);
+  if (!loginRes.ok) {
+    fail("Login failed", loginRes, loginBody, secrets);
+  }
+
+  const status = pick(loginBody, "status");
+  const personId = personIdOf(loginBody);
+
+  if (status === "totp") {
+    if (personId === undefined) {
+      throw new LoginError("ChurchTools asked for a 2FA code but returned no personId.", loginRes.status);
+    }
+    return { kind: "totp", continuation: { host, cookie, personId }, status: loginRes.status };
+  }
+
+  if (personId === undefined) {
+    throw new LoginError("ChurchTools accepted the login but returned no personId.", loginRes.status);
+  }
+
+  return {
+    kind: "token",
+    token: await readPersonalToken({ host, cookie, personId }, fetchImpl, secrets),
+  };
+}
+
+/** Complete one server-held TOTP continuation; the code is never retained or returned. */
+export async function continuePasswordLogin(
+  continuation: PasswordLoginContinuation,
+  code: string,
+  opts: { fetchImpl?: typeof fetch } = {},
+): Promise<string> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const normalized = code.trim();
+  if (!/^\d{6}$/.test(normalized)) throw new LoginError("The 2FA code must be six digits.", 0);
+  const secrets = [normalized];
+  const totpRes = await postJson(fetchImpl, `${continuation.host}/api/login/totp`, continuation.cookie, {
+    code: normalized,
+    personId: continuation.personId,
+  });
+  const cookie = mergeCookies(continuation.cookie, totpRes);
+  const totpBody = await readJson(totpRes);
+  if (!totpRes.ok) fail("2FA verification failed", totpRes, totpBody, secrets);
+  const personId = personIdOf(totpBody) ?? continuation.personId;
+  return readPersonalToken({ host: continuation.host, cookie, personId }, fetchImpl, secrets);
 }
 
 /**

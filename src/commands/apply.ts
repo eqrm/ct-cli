@@ -12,6 +12,7 @@ import { renderPermissionPlan } from "../permissions/render.js";
 import { confirm, confirmEnv } from "../ui/prompt.js";
 import { cliObserver } from "./observer.js";
 import { info, warn, success, error } from "../ui.js";
+import { generateSelectedInput } from "../operations/input-projection.js";
 
 interface ApplyOptions {
   config?: string;
@@ -21,6 +22,8 @@ interface ApplyOptions {
   backupDir?: string;
   autoApprove?: boolean;
   refresh?: boolean;
+  inputSnapshot?: string;
+  generator?: string;
 }
 
 // Retain this command-module export for callers that used it before the application extraction.
@@ -35,6 +38,8 @@ export function applyCommand(): Command {
     .option("--confirm-env <name>", "confirm a protected env non-interactively (must match --env exactly)")
     .option("--backup-dir <path>", "directory for the pre-apply backup (or set CT_BACKUP_DIR)")
     .option("-y, --auto-approve", "skip the confirmation prompt")
+    .option("--input-snapshot <digest>", "generate desired config from this immutable input snapshot")
+    .option("--generator <path>", "trusted local process-input generator module")
     .option(
       "--refresh",
       "after a successful apply, POST /dynamicgroups/{id}/refresh for each changed dynamic group (per-group only)",
@@ -42,6 +47,7 @@ export function applyCommand(): Command {
     .action(async (opts: ApplyOptions) => {
       let prepared;
       try {
+        const selectedInput = await generateSelectedInput(process.cwd(), opts.inputSnapshot, opts.generator);
         prepared = await prepareApply(
           {
             configPath: opts.config,
@@ -53,7 +59,12 @@ export function applyCommand(): Command {
             // operator needs to read the rendered diff (#156 review). Staleness is caught by the
             // state fingerprint at execute time, not by a timer.
           },
-          { preparedTtlMs: null },
+          {
+            preparedTtlMs: null,
+            ...(selectedInput
+              ? { loadConfig: async () => ({ ...selectedInput.generated, configDir: process.cwd() }) }
+              : {}),
+          },
         );
       } catch (caught) {
         if (caught instanceof CtApplicationError && caught.code === "PLAN_INCOMPLETE") {

@@ -44,6 +44,12 @@ export interface PreparedApply {
   confirmation: ConfirmationRequirement;
   /** `null` when the prepared operation has no wall-clock expiry (the CLI's own runs). */
   expiresAt: string | null;
+  bindings: {
+    environment: string | null;
+    configDigest: string;
+    stateDigest: string;
+    planDigest: string;
+  };
 }
 
 export interface ApplyValue {
@@ -60,6 +66,8 @@ export type ApplyResult = OperationResult<ApplyValue>;
 export interface PreparedApplyExecution {
   context: BuiltPlanContext;
   stateFingerprint: string;
+  configFingerprint: string;
+  planDigest: string;
   backupDir?: string;
   refresh: boolean;
   confirmation: ConfirmationRequirement;
@@ -106,6 +114,23 @@ async function stateFingerprint(
     if (isNotFound(error)) return createHash("sha256").update("missing").digest("hex");
     throw error;
   }
+}
+
+function preparedPlanDigest(context: BuiltPlanContext): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        project: {
+          environment: context.result.project.environment,
+          host: context.result.project.host,
+          configPath: context.result.project.configPath,
+          statePath: context.result.project.statePath,
+        },
+        plan: context.result.value.plan,
+        permissions: context.result.value.permissions,
+      }),
+    )
+    .digest("hex");
 }
 
 /** backups/ dir: explicit flag → CT_BACKUP_DIR → `backups/` beside the state file. */
@@ -185,11 +210,18 @@ export async function prepareApply(
     summary.permissions.toDelete;
   const confirmation = confirmationFor(context, changeCount);
   const fingerprint = await stateFingerprint(context.result.project.statePath, dependencies.readStateFile);
+  const configFingerprint = await stateFingerprint(
+    context.result.project.configPath,
+    dependencies.readStateFile,
+  );
+  const planDigest = preparedPlanDigest(context);
   const store = dependencies.store ?? defaultStore;
   const stored = store.put(
     {
       context,
       stateFingerprint: fingerprint,
+      configFingerprint,
+      planDigest,
       backupDir: request.backupDir,
       refresh: request.refresh ?? false,
       confirmation,
@@ -203,6 +235,12 @@ export async function prepareApply(
     changeCount,
     confirmation,
     expiresAt: stored.expiresAt === null ? null : stored.expiresAt.toISOString(),
+    bindings: {
+      environment: context.result.project.environment,
+      configDigest: configFingerprint,
+      stateDigest: fingerprint,
+      planDigest,
+    },
   };
 }
 
@@ -226,6 +264,17 @@ export async function executePreparedApply(
         "PLAN_CONFIRMATION_MISMATCH",
         "The state file changed after this apply was prepared. Prepare and confirm a new plan.",
         { details: { statePath } },
+      );
+    }
+    const currentConfigFingerprint = await stateFingerprint(
+      stored.context.result.project.configPath,
+      dependencies.readStateFile,
+    );
+    if (currentConfigFingerprint !== stored.configFingerprint) {
+      throw new CtApplicationError(
+        "PLAN_CONFIRMATION_MISMATCH",
+        "The config file changed after this apply was prepared. Prepare and confirm a new plan.",
+        { details: { configPath: stored.context.result.project.configPath } },
       );
     }
 

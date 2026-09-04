@@ -116,7 +116,11 @@ describe("ct.personStatus in the config DSL", () => {
 });
 
 describe("resolving a personStatus reference", () => {
-  const client = { get: vi.fn(async () => [{ id: 3, name: "3 - Group Active" }]) };
+  const client = {
+    get: vi.fn(async (path: string) =>
+      path === "/statuses/3" ? { id: 3, name: "3 - Group Active" } : [{ id: 3, name: "3 - Group Active" }],
+    ),
+  };
 
   it("prefers a MANAGED status in state over the live /statuses catalog", async () => {
     const state: State = {
@@ -137,8 +141,16 @@ describe("resolving a personStatus reference", () => {
     expect(await resolver.resolve(ref.personStatus("group_active"), "site")).toBe(8);
   });
 
-  it("still falls back to the /statuses catalog for a status this config does not own", async () => {
-    const resolver = new Resolver({ client: client as never, state: emptyState(HOST), desired: [] });
+  it("resolves an explicitly bound external status", async () => {
+    const state = emptyState(HOST);
+    state.externals!["3_group_active"] = {
+      type: "person-status",
+      id: 3,
+      key: "3_group_active",
+      identity: { name: "3 - Group Active" },
+      boundAt: "t",
+    };
+    const resolver = new Resolver({ client: client as never, state, desired: [] });
     expect(await resolver.resolve(ref.personStatus("3_group_active"), "site")).toBe(3);
   });
 });

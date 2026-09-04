@@ -27,6 +27,27 @@ export interface CtWriteClient {
   get?<T = unknown>(path: string): Promise<T>;
 }
 
+/** Generic read-only binding contract shared by `ct use`, resolution and ownership analysis. */
+export interface ExternalResourceAdapter {
+  /** Simple logical ref kind that resolves this top-level registry type. */
+  refKind:
+    | "campus"
+    | "department"
+    | "security-level"
+    | "comment-viewer"
+    | "group-type"
+    | "age-group"
+    | "target-group"
+    | "relationship-type"
+    | "person-status"
+    | "role-def"
+    | "group";
+  /** Minimal hard identity persisted in external state and validated on every plan. */
+  identity(resource: Record<string, unknown>): Record<string, unknown>;
+  /** Non-validating fields shown while selecting or explaining a binding. */
+  display(resource: Record<string, unknown>): Record<string, unknown>;
+}
+
 export interface AdoptableResource {
   /** Collection path: `POST` here creates, unless {@link createPath} overrides the target. */
   collectionPath: string;
@@ -127,6 +148,8 @@ export interface AdoptableResource {
    * (e.g. `group-role` → `roleDefinition`, because `groupRole` is the permission function).
    */
   dslName?: string;
+  /** Mandatory generic external/read-only behaviour for this top-level ct-cli resource. */
+  external: ExternalResourceAdapter;
 }
 
 /** Build a full spec, deriving `itemPath` from the collection path so each entry names its path once. */
@@ -151,6 +174,11 @@ export function slug(value: string): string {
 function str(resource: Record<string, unknown>, key: string): string {
   const value = resource[key];
   return typeof value === "string" ? value : "";
+}
+
+/** Keep adapter output compact and deterministic; absent API fields are not identity assertions. */
+function present(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 }
 
 /**
@@ -320,6 +348,11 @@ export const RESOURCES: Record<string, AdoptableResource> = {
     // exactly as before — this is only about the key.
     deriveKey: (r) => slug(str(r, "name") || str(r, "shorty")),
     managedFields: (r) => ({ name: r.name, shorty: r.shorty }),
+    external: {
+      refKind: "campus",
+      identity: (r) => present({ name: r.name }),
+      display: (r) => present({ shorty: r.shorty }),
+    },
   }),
   group: define({
     collectionPath: "/groups",
@@ -338,6 +371,15 @@ export const RESOURCES: Record<string, AdoptableResource> = {
       groupStatusId: fromInformation(r, "groupStatusId"),
       campusId: fromInformation(r, "campusId") ?? null,
     }),
+    external: {
+      refKind: "group",
+      identity: (r) => present({ name: r.name, groupTypeId: fromInformation(r, "groupTypeId") }),
+      display: (r) =>
+        present({
+          campusId: fromInformation(r, "campusId"),
+          groupStatusId: fromInformation(r, "groupStatusId"),
+        }),
+    },
   }),
   "group-type": define({
     collectionPath: "/group/grouptypes",
@@ -345,6 +387,11 @@ export const RESOURCES: Record<string, AdoptableResource> = {
     tier: 0,
     deriveKey: (r) => slug(str(r, "name")),
     managedFields: (r) => ({ name: r.name, nameTranslated: r.nameTranslated }),
+    external: {
+      refKind: "group-type",
+      identity: (r) => present({ name: r.name }),
+      display: (r) => present({ nameTranslated: r.nameTranslated }),
+    },
     // POST /group/grouptypes rejects a body carrying only name/nameTranslated: CT requires the fields
     // below (validated live on CT 3.134.1, #73, and against the OpenAPI POST schema). They are unmanaged
     // (create-only) and derived deterministically from the declared `name`. If a user declares one of
@@ -376,6 +423,11 @@ export const RESOURCES: Record<string, AdoptableResource> = {
     tier: 0,
     deriveKey: (r) => slug(str(r, "name")),
     managedFields: (r) => ({ name: r.name, nameTranslated: r.nameTranslated, sortKey: r.sortKey }),
+    external: {
+      refKind: "age-group",
+      identity: (r) => present({ name: r.name }),
+      display: (r) => present({ nameTranslated: r.nameTranslated, sortKey: r.sortKey }),
+    },
   }),
   "target-group": define({
     collectionPath: "/group/targetgroups",
@@ -383,6 +435,11 @@ export const RESOURCES: Record<string, AdoptableResource> = {
     tier: 0,
     deriveKey: (r) => slug(str(r, "name")),
     managedFields: (r) => ({ name: r.name, nameTranslated: r.nameTranslated, sortKey: r.sortKey }),
+    external: {
+      refKind: "target-group",
+      identity: (r) => present({ name: r.name }),
+      display: (r) => present({ nameTranslated: r.nameTranslated, sortKey: r.sortKey }),
+    },
   }),
   "relationship-type": define({
     collectionPath: "/person/relationshiptypes",
@@ -396,6 +453,11 @@ export const RESOURCES: Record<string, AdoptableResource> = {
       degreeNameA: r.degreeNameA,
       degreeNameB: r.degreeNameB,
     }),
+    external: {
+      refKind: "relationship-type",
+      identity: (r) => present({ name: r.name }),
+      display: (r) => present({ degreeNameA: r.degreeNameA, degreeNameB: r.degreeNameB }),
+    },
   }),
   /**
    * PERSON statuses (`/statuses` — "0 - First", "3 - Group Active", …), the domain of a `ct.status`
@@ -443,6 +505,11 @@ export const RESOURCES: Record<string, AdoptableResource> = {
       sortKey: r.sortKey,
       securityLevelId: r.securityLevelId,
     }),
+    external: {
+      refKind: "person-status",
+      identity: (r) => present({ name: r.name }),
+      display: (r) => present({ shorty: r.shorty, isMember: r.isMember }),
+    },
   }),
   /**
    * BEREICHE / DEPARTMENTS (#108) — `cdb_bereich`, the scope dimension of `churchdb:view alldata`
@@ -473,6 +540,11 @@ export const RESOURCES: Record<string, AdoptableResource> = {
       "through the legacy master-data endpoint. Verify it is unused first (`ct get departments`).",
     deriveKey: (r) => slug(str(r, "name")),
     managedFields: (r) => ({ name: r.name, shorty: r.shorty, sortKey: r.sortKey ?? 0 }),
+    external: {
+      refKind: "department",
+      identity: (r) => present({ name: r.name }),
+      display: (r) => present({ shorty: r.shorty }),
+    },
     // There is no `GET /departments/{id}` — filter the collection instead. Without this every plan
     // after a create would read a 404 and propose creating the same Bereich again.
     fetchOne: async (client, id) =>
@@ -513,6 +585,11 @@ export const RESOURCES: Record<string, AdoptableResource> = {
       "scopes). Verify it is unused first (`ct get security-levels`, `ct get data-fields`).",
     deriveKey: (r) => slug(str(r, "name")),
     managedFields: (r) => ({ id: r.id, name: r.name }),
+    external: {
+      refKind: "security-level",
+      identity: (r) => present({ name: r.name }),
+      display: (r) => present({ level: r.sortKey ?? r.id }),
+    },
   }),
   /**
    * COMMENT VIEWERS (#151) — `cdb_comment_viewer`, the scope dimension of `churchdb:view comments`
@@ -559,6 +636,11 @@ export const RESOURCES: Record<string, AdoptableResource> = {
       "it is unused first (`ct get comment-viewers`, `ct report permissions`).",
     deriveKey: (r) => slug(str(r, "name")),
     managedFields: (r) => ({ name: r.name, sortKey: r.sortKey }),
+    external: {
+      refKind: "comment-viewer",
+      identity: (r) => present({ name: r.name }),
+      display: (r) => present({ sortKey: r.sortKey }),
+    },
     // `sortKey` is managed but not mandatory in a hand-authored declaration; CT's create validator
     // for the 3-column master-data tables rejects a missing integer column, so supply a neutral one
     // (a declared value still wins — createDefaults merges UNDER the body).
@@ -586,6 +668,11 @@ export const RESOURCES: Record<string, AdoptableResource> = {
       // only diffs when the config declares it: `diffFields` walks the DESIRED keys.
       type: r.type,
     }),
+    external: {
+      refKind: "role-def",
+      identity: (r) => present({ name: r.name, groupTypeId: r.groupTypeId }),
+      display: (r) => present({ type: r.type }),
+    },
     // Fields CT REQUIRES at create but the tool does not otherwise manage (#73/#121). The old comment
     // here claimed `type`/`isLeader`/`sortKey` were "all optional/nullable — no default needed", which
     // is what made this look supported. VERIFIED LIVE on eqrm-dev, CT 3.135.2 (2026-08-17): POSTing

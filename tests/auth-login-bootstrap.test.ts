@@ -6,6 +6,8 @@ import {
   LoginError,
   loginHint,
   envVarHint,
+  beginPasswordLogin,
+  continuePasswordLogin,
   type LoginPrompts,
 } from "../src/auth/login.js";
 import { isSecureStorageAvailable } from "../src/auth/tokenStore.js";
@@ -91,6 +93,20 @@ const TOTP_CHALLENGE = { status: 200, body: { data: { personId: 42, status: "tot
 const TOKEN_RESPONSE = { status: 200, body: { data: TOKEN } };
 
 describe("loginWithPassword (#138)", () => {
+  it("can split a TOTP login into an opaque server-held continuation", async () => {
+    const { fetchImpl, calls } = stubFetch([
+      { ...TOTP_CHALLENGE, setCookie: ["ChurchTools_ct=sess1; Path=/"] },
+      { status: 200, body: { data: { personId: 42, status: "success" } } },
+      TOKEN_RESPONSE,
+    ]);
+    const started = await beginPasswordLogin(HOST, "ada", PASSWORD, { fetchImpl });
+    expect(started.kind).toBe("totp");
+    if (started.kind !== "totp") throw new Error("expected TOTP continuation");
+    expect(started.continuation).not.toHaveProperty("password");
+    await expect(continuePasswordLogin(started.continuation, TOTP, { fetchImpl })).resolves.toBe(TOKEN);
+    expect(calls[1]?.cookie).toContain("ChurchTools_ct=sess1");
+  });
+
   it("logs in without 2FA and returns the personal login token", async () => {
     const { fetchImpl, calls } = stubFetch([
       { ...OK_LOGIN, setCookie: ["ChurchTools_ct=sess1; Path=/; HttpOnly"] },

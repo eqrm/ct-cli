@@ -7,6 +7,7 @@ import { renderPlan } from "../engine/render.js";
 import { PLAN_MARKDOWN_LOCALES, renderPlanMarkdown, type PlanMarkdownLocale } from "../engine/markdown.js";
 import { renderPermissionPlan } from "../permissions/render.js";
 import { info, warn } from "../ui.js";
+import { generateSelectedInput } from "../operations/input-projection.js";
 
 export type PlanFormat = "text" | "json" | "markdown";
 
@@ -24,6 +25,8 @@ interface PlanOptions {
   outputBase?: string;
   locale?: string;
   detailedExitcode?: boolean;
+  inputSnapshot?: string;
+  generator?: string;
 }
 
 function collectFormat(value: string, previous: string[]): string[] {
@@ -100,6 +103,8 @@ export function planCommand(): Command {
     )
     .option("--output-base <path>", "write selected formats as <path>.txt/.json/.md")
     .option("--locale <locale>", "Markdown language: de-DE or en", "de-DE")
+    .option("--input-snapshot <digest>", "generate desired config from this immutable input snapshot")
+    .option("--generator <path>", "trusted local process-input generator module")
     .option(
       "--detailed-exitcode",
       "Terraform-style exit code: 0 = no changes, 1 = error, 2 = changes pending (resource or permission)",
@@ -108,11 +113,17 @@ export function planCommand(): Command {
       // Resolved before any ChurchTools request, so an invalid combination fails cheaply.
       const outputTargets = planOutputTargets(opts);
       const locale = parsePlanLocale(opts.locale);
-      const result = await runPlan({
-        configPath: opts.config,
-        statePath: opts.state,
-        environment: opts.env,
-      });
+      const selectedInput = await generateSelectedInput(process.cwd(), opts.inputSnapshot, opts.generator);
+      const result = await runPlan(
+        {
+          configPath: opts.config,
+          statePath: opts.state,
+          environment: opts.env,
+        },
+        selectedInput
+          ? { loadConfig: async () => ({ ...selectedInput.generated, configDir: process.cwd() }) }
+          : {},
+      );
       const { project, value } = result;
       const catalogPath = value.permissionCatalogPath
         ? relative(project.cwd, value.permissionCatalogPath)

@@ -2,7 +2,7 @@ import { createInterface } from "node:readline";
 import { Command } from "commander";
 import { bootstrapLoginToken } from "../auth/login.js";
 import { isSecureStorageAvailable } from "../auth/tokenStore.js";
-import { initializeConfigRepository } from "../init.js";
+import { runInitWorkspace } from "../application/operations/init.js";
 import { error, formatError, info, success } from "../ui.js";
 import { verifyAndStoreLoginToken } from "./auth.js";
 
@@ -37,15 +37,21 @@ export function initCommand(): Command {
     .option("--no-git", "do not initialize a Git repository")
     .option("-y, --yes", "accept defaults and do not prompt")
     .action(async (directory: string, opts: InitCommandOptions) => {
-      const result = await initializeConfigRepository(directory, {
-        template: opts.template,
-        host: opts.host,
-        environment: opts.env,
-        protected: opts.protected,
-        git: opts.git,
-        yes: opts.yes,
-        ask,
-      });
+      const { value: result } = await runInitWorkspace(
+        {
+          directory,
+          template: opts.template,
+          host: opts.host,
+          environment: opts.env,
+          protected: opts.protected,
+          git: opts.git,
+          yes: opts.yes,
+        },
+        {
+          isTTY: Boolean(process.stdin.isTTY),
+          ask,
+        },
+      );
 
       success(`Initialized ct config repository in ${result.directory}`);
       info(`Created: ${[...result.files, ...result.directories.map((name) => `${name}/`)].join(", ")}`);

@@ -1,6 +1,6 @@
 import { appendFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { authedSession } from "../../api/session.js";
+import { authedSession, type AuthedSession } from "../../api/session.js";
 import type { CtClient } from "../../api/ctClient.js";
 import { assertNotPeople } from "../../engine/guard.js";
 import { buildAdoptedGrants, type AdoptedGrantsBlock } from "../../permissions/adopt.js";
@@ -11,7 +11,7 @@ import { declarability, decodeGroupsWithRoles, type RoleInstance } from "../../c
 import { slug } from "../../resources/registry.js";
 import { loadState, type State } from "../../state/state.js";
 import type { CtWarning, OperationResult, ProjectRequest } from "../contracts.js";
-import { resolveProject } from "../project.js";
+import { resolveProject, type ProjectResolutionDependencies } from "../project.js";
 import { noopObserver, type OperationObserver } from "../ports.js";
 
 export interface AdoptGrantsRequest extends ProjectRequest {
@@ -65,6 +65,12 @@ function normalizeDomainType(raw: string): DomainType {
  */
 export interface AdoptGrantsDependencies {
   observer?: OperationObserver;
+  project?: ProjectResolutionDependencies;
+  resolveProject?: typeof resolveProject;
+  loadState?: typeof loadState;
+  loadHostCatalog?: typeof loadHostCatalog;
+  authedSession?: () => Promise<AuthedSession>;
+  appendFile?: typeof appendFile;
 }
 
 export async function runAdoptGrants(
@@ -83,15 +89,18 @@ export async function runAdoptGrants(
 
   // Load + validate the state file (host guard) BEFORE any network call, mirroring `ct adopt`,
   // so a state file recorded against another instance never triggers a request to the wrong host.
-  const project = await resolveProject(opts);
-  const state = await loadState(project.statePath, project.host);
+  const project = await (dependencies.resolveProject ?? resolveProject)(opts, dependencies.project);
+  const state = await (dependencies.loadState ?? loadState)(project.statePath, project.host);
   // Bulk selection runs the same declarability verdict as `ct coverage` (over the effective
   // rather than the authored rows — see the call below), so it needs this host's catalog for
   // the same reason (#105): under the bundled one, `--all-declarable`
   // silently SKIPS role instances `ct plan` would manage, filed under an authId the active
   // catalog can name perfectly well.
-  const hostCatalog = await loadHostCatalog(project.host, resolve(project.cwd, CATALOG_DIR));
-  const { client } = await authedSession();
+  const hostCatalog = await (dependencies.loadHostCatalog ?? loadHostCatalog)(
+    project.host,
+    resolve(project.cwd, CATALOG_DIR),
+  );
+  const { client } = await (dependencies.authedSession ?? authedSession)();
 
   const bulkEmission = bulk ? await emitBulk(client, state, opts) : null;
   const emitted = bulkEmission?.blocks ?? [await emitSingle(client, state, opts.domainType, opts.domainId)];
@@ -115,7 +124,7 @@ export async function runAdoptGrants(
   let writtenPath: string | null = null;
   if (opts.write) {
     writtenPath = resolve(project.cwd, opts.write);
-    await appendFile(writtenPath, text, "utf8");
+    await (dependencies.appendFile ?? appendFile)(writtenPath, text, "utf8");
   }
   return {
     operation: "adopt",

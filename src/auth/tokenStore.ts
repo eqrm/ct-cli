@@ -118,8 +118,8 @@ export async function readCredentials(host?: string): Promise<Credentials | null
 }
 
 /** The login token: `CT_LOGINTOKEN` env wins, else the stored credentials for `host`. */
-export async function readToken(host?: string): Promise<string | null> {
-  const fromEnv = process.env.CT_LOGINTOKEN?.trim();
+export async function readToken(host?: string, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  const fromEnv = env.CT_LOGINTOKEN?.trim();
   if (fromEnv) {
     return fromEnv;
   }

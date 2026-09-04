@@ -14,6 +14,9 @@ describe("ct program", () => {
         "plan",
         "apply",
         "destroy",
+        "server",
+        "input",
+        "environment",
         "completion",
       ]),
     );

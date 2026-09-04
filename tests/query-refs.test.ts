@@ -17,7 +17,7 @@ import {
 } from "../src/config/query-refs.js";
 import { q, churchQuery } from "../src/config/query.js";
 import { normalizeRuleset } from "../src/engine/dynamic.js";
-import { deepMapRefs, refKey, type Ref, type RefKind } from "../src/resolve/refs.js";
+import { deepMapRefs, ref, refKey, type Ref, type RefKind } from "../src/resolve/refs.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -31,6 +31,7 @@ describe("VAR_REF_KINDS catalog (#76 Stage 1)", () => {
       "ctgroup.id": "group",
       "ctgroup.campusId": "campus",
       "ctgroup.groupTypeId": "group-type",
+      "ctgroup.groupStatusId": "group-status",
       "person.campusId": "campus",
     });
   });
@@ -40,7 +41,7 @@ describe("VAR_REF_KINDS catalog (#76 Stage 1)", () => {
     // the (group-type, role-name) special case, not a lone name-based kind. groupStatusId has no REST
     // catalog (#67); isArchived/dateOfDeath are boolean/date literals.
     expect(VAR_REF_KINDS["role.id"]).toBeUndefined();
-    expect(VAR_REF_KINDS["ctgroup.groupStatusId"]).toBeUndefined();
+    expect(VAR_REF_KINDS["ctgroup.groupStatusId"]).toBe("group-status");
     expect(VAR_REF_KINDS["person.isArchived"]).toBeUndefined();
     expect(VAR_REF_KINDS["person.dateOfDeath"]).toBeUndefined();
   });
@@ -93,16 +94,20 @@ describe("portablizeRuleset (#76 Stage 2)", () => {
     ]);
   });
 
-  it("never REWRITES a catalog-less var (groupStatusId), but does report it left numeric (#101)", () => {
+  it("rewrites known groupStatusId values and preserves unknown ids with a warning (#157)", () => {
     const ruleset = { query: churchQuery(q.oneof("ctgroup.groupStatusId", [1, 2, 4])) };
     const { ruleset: out, warnings } = portablizeRuleset(ruleset, {
-      idToKeyByKind: { group: new Map([[1, "nope"]]) },
+      idToKeyByKind: {
+        "group-status": new Map([
+          [1, "active"],
+          [2, "pending"],
+        ]),
+      },
     });
     const filter = (out.query as { params: { filter: { oneof: unknown[] } } }).params.filter;
-    expect(filter.oneof[1]).toEqual([1, 2, 4]); // never rewritten — no logical form exists
-    // …but silence here is what #101 was filed about: the ids ARE host-specific, so they are reported.
-    expect(warnings.map((w) => w.id)).toEqual([1, 2, 4]);
-    expect(new Set(warnings.map((w) => w.reason))).toEqual(new Set(["no-ref-kind"]));
+    expect(filter.oneof[1]).toEqual([ref.status("active"), ref.status("pending"), 4]);
+    expect(warnings.map((w) => w.id)).toEqual([4]);
+    expect(new Set(warnings.map((w) => w.reason))).toEqual(new Set(["unmanaged"]));
   });
 
   it("does not mutate its input ruleset", () => {
@@ -277,6 +282,11 @@ describe("portablizeRuleset (#76 Stage 2)", () => {
         [112, "bereich_kids"],
         [8, "team_kidsdienst"],
       ]),
+      "group-status": new Map([
+        [1, "active"],
+        [2, "pending"],
+        [4, "finished"],
+      ]),
     };
     const opts = { idToKeyByKind, roleCatalog, groupTypeIdToKey };
 
@@ -321,11 +331,14 @@ describe("portablizeRuleset (#76 Stage 2)", () => {
           id,
         );
       }
+      for (const [id, key] of idToKeyByKind["group-status"]!) {
+        keyToId.set(refKey(ref.status(key)), id);
+      }
       const back = deepMapRefs(portable, (r: Ref) => keyToId.get(refKey(r)));
       expect(back).toEqual(normalized);
     });
 
-    it("leaves the unmanaged group id (1246) and the groupStatusId lists numeric, and reports BOTH (#101)", () => {
+    it("leaves only the unmanaged group id numeric; known group statuses become refs (#157)", () => {
       const { ruleset: portable, warnings } = portablizeRuleset(normalized, opts);
       const json = JSON.stringify(portable);
       expect(json).toContain("1246"); // unmanaged group id survives numeric
@@ -335,12 +348,8 @@ describe("portablizeRuleset (#76 Stage 2)", () => {
         reason: "unmanaged",
         detail: "not under management — `ct adopt group <id>` for each (then re-adopt) makes them portable",
       });
-      // groupStatusId is never REWRITTEN (no catalog exists) but is still a host-specific id in a
-      // cross-host file, so #101 reports it rather than letting the capture look fully portable.
-      expect(
-        warnings.filter((w) => w.var === "ctgroup.groupStatusId").every((w) => w.reason === "no-ref-kind"),
-      ).toBe(true);
-      expect(warnings.some((w) => w.var === "ctgroup.groupStatusId")).toBe(true);
+      expect(json).toContain('"kind":"group-status"');
+      expect(warnings.some((w) => w.var === "ctgroup.groupStatusId")).toBe(false);
     });
 
     it("scanUnportablized reports the same ids from the ALREADY-PORTABLIZED file (#101 plan-time check)", () => {
@@ -363,9 +372,8 @@ describe("portablizeRuleset (#76 Stage 2)", () => {
       expect(left.filter((w) => w.var === "ctgroup.id").every((w) => w.reason === "left-numeric")).toBe(true);
       expect(left.filter((w) => w.var === "role.id").every((w) => w.reason === "left-numeric")).toBe(true);
       expect(left.some((w) => /is not under management|no \/group\/roles row/.test(w.detail))).toBe(false);
-      // The catalog-less dimension keeps its own reason: that one IS derivable without any lookup.
       expect(
-        left.filter((w) => w.var === "ctgroup.groupStatusId").every((w) => w.reason === "no-ref-kind"),
+        left.filter((w) => w.var === "ctgroup.groupStatusId").every((w) => w.reason === "left-numeric"),
       ).toBe(true);
     });
   });

@@ -119,6 +119,16 @@ export async function buildPlan(
   desired: DesiredResource[],
   opts: BuildOptions = {},
 ): Promise<BuildResult> {
+  const resolver = opts.resolver ?? new Resolver({ client, state, desired });
+  // Hierarchy predates the generic Ref sentinel and stores parent keys as strings. Validate those
+  // keys through the same resolver so external parents receive the identical live identity gate.
+  await Promise.all(
+    desired.flatMap((resource) =>
+      (resource.parents ?? []).map((parent) =>
+        resolver.resolveKey("group", parent, `group "${resource.key}" hierarchy parent`),
+      ),
+    ),
+  );
   // Keyed by logical key (globally unique), not CT id (unique only within a type — the Mainz campus is id 0).
   const {
     actual,
@@ -141,7 +151,6 @@ export async function buildPlan(
   // Resolution pass (#20): rewrite Ref-valued fields (and the dynamic ruleset, walked deeply) to
   // numbers / pending markers AFTER folding, BEFORE computePlan — so the diff stays number↔number.
   // Unknown/ambiguous refs THROW here (a config error, not a degrade-and-continue fetch error).
-  const resolver = opts.resolver ?? new Resolver({ client, state, desired });
   const resolved = await Promise.all(
     folded.desired.map(async (d) => {
       const fields = await resolver.resolveValue(d.fields, `${d.type} "${d.key}"`);

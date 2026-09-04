@@ -25,9 +25,9 @@ export interface AuthedSession {
  * An explicit `CT_LOGINTOKEN` env token carries no stored-host binding, so the
  * caller owns pairing it with the intended `CT_HOST` — no check applies there.
  */
-export async function authedSession(): Promise<AuthedSession> {
-  const config = await resolveConfig();
-  const envToken = process.env.CT_LOGINTOKEN?.trim();
+export async function authedSession(env: NodeJS.ProcessEnv = process.env): Promise<AuthedSession> {
+  const config = await resolveConfig(env);
+  const envToken = env.CT_LOGINTOKEN?.trim();
   // Resolve the stored token for the host we intend to hit (multi-host, #22): with several logins on
   // one machine, the per-host account is picked by host, keeping the token↔host binding below intact.
   const stored = await readCredentials(config.host);

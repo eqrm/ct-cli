@@ -1,19 +1,8 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { authCommand } from "./commands/auth.js";
-import { getCommand } from "./commands/get.js";
-import { adoptCommand } from "./commands/adopt.js";
-import { stateCommand } from "./commands/state.js";
-import { coverageCommand } from "./commands/coverage.js";
-import { permissionsCommand } from "./commands/permissions.js";
-import { reportCommand } from "./commands/report.js";
-import { refreshCommand } from "./commands/refresh.js";
-import { planCommand } from "./commands/plan.js";
-import { applyCommand } from "./commands/apply.js";
-import { destroyCommand } from "./commands/destroy.js";
-import { initCommand } from "./commands/init.js";
-import { completionCommand } from "./commands/completion.js";
 import { plannedCommands } from "./commands/placeholders.js";
+import { operationCatalog } from "./operations/catalog.js";
+import { buildCliProjection } from "./operations/cli-projection.js";
 import { isCompletionRequest, serveCompletionRequest } from "./completion/shell.js";
 import { isMainModule } from "./isMain.js";
 import { versionLine } from "./version.js";
@@ -29,19 +18,7 @@ export function buildProgram(): Command {
     )
     .version(versionLine(import.meta.url));
 
-  program.addCommand(initCommand());
-  program.addCommand(authCommand());
-  program.addCommand(getCommand());
-  program.addCommand(adoptCommand());
-  program.addCommand(stateCommand());
-  program.addCommand(coverageCommand());
-  program.addCommand(permissionsCommand());
-  program.addCommand(reportCommand());
-  program.addCommand(refreshCommand());
-  program.addCommand(planCommand());
-  program.addCommand(applyCommand());
-  program.addCommand(destroyCommand());
-  program.addCommand(completionCommand());
+  for (const command of buildCliProjection(operationCatalog)) program.addCommand(command);
   for (const cmd of plannedCommands()) {
     program.addCommand(cmd);
   }

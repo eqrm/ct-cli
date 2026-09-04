@@ -3,13 +3,13 @@
  * can have several parents. `GET /groups/hierarchies` returns, per group, the
  * ids of its parents and children.
  *
- * We surface hierarchy in the plan as an opt-in `parents` set-field on a group,
- * resolved to logical keys and **restricted to managed groups** — an edge to an
- * unmanaged group is invisible (managed-guard), never diffed or proposed for
- * removal.
+ * We surface hierarchy in the plan as an opt-in `parents` set-field on a managed
+ * group. Parent ids are mapped only when state gives them a logical key, either
+ * as another managed group or as an explicit external group binding. Every other
+ * live edge stays invisible (managed-guard), never diffed or proposed for removal.
  */
 
-import type { State } from "../state/state.js";
+import { externalResources, type State } from "../state/state.js";
 import type { DesiredResource } from "./types.js";
 
 export interface HierarchyEntry {
@@ -30,8 +30,8 @@ export function parentIdsByGroupId(entries: HierarchyEntry[]): Map<number, numbe
 }
 
 /**
- * The managed parent keys for a group: its parent ids that are themselves under
- * management, mapped to their logical keys and sorted (stable for set diffing).
+ * The state-bound parent keys for a group: parent ids that are managed or
+ * explicitly external, mapped to their logical keys and sorted (stable for set diffing).
  */
 export function managedParentKeys(parentIds: number[], groupIdToKey: Map<number, string>): string[] {
   const keys: string[] = [];
@@ -71,6 +71,9 @@ export function applyHierarchy(
     if (managed.type === "group") {
       groupIdToKey.set(managed.id, managed.key);
     }
+  }
+  for (const external of Object.values(externalResources(state))) {
+    if (external.type === "group") groupIdToKey.set(external.id, external.key);
   }
 
   // Single pass over the desired opt-ins (one copy of the predicate, mirroring the desired-side

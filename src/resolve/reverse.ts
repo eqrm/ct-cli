@@ -2,10 +2,8 @@
  * Reverse reference resolution for `ct adopt` (#52 item A): turn the numeric ChurchTools ids a
  * fetched resource carries (`campusId`, `groupTypeId`) into the logical sugar the DSL already
  * accepts (`campus`/`groupType`), so an adopted snippet is portable and reads like something a
- * human would author — not a wall of instance-specific integers. `groupStatusId` is NOT reverse-
- * sugared (#67): group statuses have no REST catalog to look a name up against (`/group/memberstatus`
- * is a different dimension — member statuses, string ids — live-verified 2026-07-10), so adopt
- * always emits it as a plain numeric field, same as any other unmapped id.
+ * human would author — not a wall of instance-specific integers. Group statuses are read from the
+ * nested `groupStatuses` catalog returned by `/person/masterdata` (#157).
  *
  * This is the mirror image of the forward {@link Resolver} (src/resolve/resolver.ts): it reads the
  * SAME master-data catalogs, matched here BY ID instead of by name, and emits `slug(name)` — exactly
@@ -27,6 +25,7 @@ import { slug } from "../resources/registry.js";
 const REVERSE_ID_FIELDS: Record<string, { catalog: string; sugar: string }> = {
   campusId: { catalog: "/campuses", sugar: "campus" },
   groupTypeId: { catalog: "/group/grouptypes", sugar: "groupType" },
+  groupStatusId: { catalog: "/person/masterdata#groupStatuses", sugar: "status" },
 };
 
 /**
@@ -38,6 +37,7 @@ const REVERSE_ID_FIELDS: Record<string, { catalog: string; sugar: string }> = {
 const PORTABLE_CATALOG_PATHS: Partial<Record<RefKind, string>> = {
   campus: "/campuses",
   "group-type": "/group/grouptypes",
+  "group-status": "/person/masterdata#groupStatuses",
   "role-def": "/group/roles",
 };
 
@@ -56,13 +56,13 @@ export interface RoleCatalogEntry {
 }
 
 export class ReverseResolver {
-  private readonly client: Pick<CtClient, "getAll">;
+  private readonly client: Pick<CtClient, "get" | "getAll">;
   /** id → logical key, per catalog path, fetched at most once. A failed fetch caches an empty map. */
   private readonly catalogs = new Map<string, Promise<Map<number, string>>>();
   /** groupTypeRoleId → {groupTypeId, name} from `/group/roles`, fetched at most once (#76). */
   private roleCatalog?: Promise<Map<number, RoleCatalogEntry>>;
 
-  constructor(client: Pick<CtClient, "getAll">) {
+  constructor(client: Pick<CtClient, "get" | "getAll">) {
     this.client = client;
   }
 
@@ -74,9 +74,14 @@ export class ReverseResolver {
       // on eqrm prod `/group/roles` has 46 rows, so 36 roles had no id→key entry and every ruleset
       // `role.id` pointing at one was left as a host-specific number with a vague warning. The
       // forward Resolver was fixed for exactly this; the reverse side had the same bug.
-      p = this.client
-        .getAll<CatalogRecord>(path)
-        .then(({ data: rows }) => {
+      const rows =
+        path === "/person/masterdata#groupStatuses"
+          ? this.client
+              .get<{ groupStatuses?: CatalogRecord[] }>("/person/masterdata")
+              .then((masterdata) => masterdata.groupStatuses ?? [])
+          : this.client.getAll<CatalogRecord>(path).then(({ data }) => data);
+      p = rows
+        .then((rows) => {
           const map = new Map<number, string>();
           if (Array.isArray(rows)) {
             for (const row of rows) {
@@ -145,10 +150,10 @@ export class ReverseResolver {
 
   /**
    * Reverse-sugar a managed-field bag for emission (#52 item A): each numeric id field with a catalog
-   * match becomes its logical `campus`/`groupType` key (dropping the numeric field); an id with NO
-   * match stays numeric and is named in `todos` so the emitter can flag it. Every other field —
-   * including `groupStatusId`, which has no `REVERSE_ID_FIELDS` entry (#67) — passes through
-   * untouched in its original position (and a `null` id — "no campus" — is omitted by the emitter).
+   * match becomes its logical `campus`/`groupType`/`status` key (dropping the numeric field); an id
+   * with NO match stays numeric and is named in `todos` so the emitter can flag it. Every other
+   * field passes through untouched in its original position (and a `null` id — "no campus" — is
+   * omitted by the emitter).
    */
   async sugarFields(
     fields: Record<string, unknown>,

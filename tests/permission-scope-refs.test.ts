@@ -50,10 +50,20 @@ function stateWithKoblenz(id: number): State {
   };
 }
 
+function stateWithExternal(type: string, key: string, id: number, identity: Record<string, unknown>): State {
+  const state = emptyState(HOST);
+  state.externals![key] = { type, key, id, identity, boundAt: "t" };
+  return state;
+}
+
 /** A client whose `/permissions/*` reads are empty and whose `/campuses` catalog is host-specific. */
 function mockClient(campuses: { id: number; name: string }[] = [], newId = 555) {
   const calls: { method: string; path: string; body?: unknown }[] = [];
-  const get = vi.fn(async (path: string) => (path === "/campuses" ? campuses : []));
+  const get = vi.fn(async (path: string) => {
+    if (path === "/campuses") return campuses;
+    const id = /^\/campuses\/(\d+)$/.exec(path)?.[1];
+    return id ? campuses.find((campus) => campus.id === Number(id)) : [];
+  });
   const request = vi.fn(async (method: string, path: string, body?: unknown) => {
     calls.push({ method, path, body });
     if (method === "POST" && path === "/campuses") return { id: newId };
@@ -114,11 +124,10 @@ describe("campus-scoped grants are portable across hosts (#98)", () => {
     }
   });
 
-  it("falls back to the live /campuses catalog for a campus this config does not manage", async () => {
-    // Not in state → resolved by name against the host's catalog. The id is already host-correct, so
-    // there is no managed identity to re-resolve at apply time and the tuple keeps no scopeKey.
+  it("resolves a read-only campus only through its explicit external binding", async () => {
     const { client } = mockClient([{ id: 23, name: "Koblenz" }]);
-    const tuples = await tuplesFor(campusScoped, emptyState(HOST), [], client);
+    const state = stateWithExternal("campus", "koblenz", 23, { name: "Koblenz" });
+    const tuples = await tuplesFor(campusScoped, state, [], client);
     expect(tuples).toEqual([{ authId: 124, dataId: [23], type: "grant" }]);
   });
 
@@ -243,7 +252,9 @@ describe("scope-dimension validation (#98)", () => {
       domainId: 1,
       grants: [{ right: VIEW_STATION, scope: [ref.campus("nowhere")] }],
     };
-    await expect(tuplesFor(perm, emptyState(HOST))).rejects.toThrow(/Cannot resolve campus:nowhere/);
+    await expect(tuplesFor(perm, emptyState(HOST))).rejects.toMatchObject({
+      details: { reason: "EXTERNAL_BINDING_MISSING", type: "campus", key: "nowhere" },
+    });
   });
 
   it("still accepts a numeric dataId on any dimension (the #49 escape hatch is untouched)", async () => {
@@ -296,10 +307,9 @@ describe("department scopes are a read-but-not-managed ref catalog (cdb_bereich,
     grants: [{ right: "churchdb:view alldata", scope: [{ department: key }] }],
   });
 
-  it("resolves a department by name against the live catalog", async () => {
-    // No scopeKey: a catalog-resolved id is already host-correct and has no managed identity to
-    // re-resolve at apply time — it behaves exactly like the numeric escape hatch from there on.
-    expect(await tuplesFor(perm("equippers_koblenz"), emptyState(HOST), [], client)).toEqual([
+  it("resolves a department through an explicit external binding", async () => {
+    const state = stateWithExternal("department", "equippers_koblenz", 7, { name: "Equippers Koblenz" });
+    expect(await tuplesFor(perm("equippers_koblenz"), state, [], client)).toEqual([
       { authId: 102, dataId: [7], type: "grant" },
     ]);
   });
@@ -307,27 +317,21 @@ describe("department scopes are a read-but-not-managed ref catalog (cdb_bereich,
   it("hard-errors on an unknown department, and NOW advises declaring it (#108)", async () => {
     // Before #108 this said departments could not be declared or adopted. They can: `ct.department`
     // creates one through the legacy master-data endpoint, so the generic advice is correct again.
-    await expect(tuplesFor(perm("nope"), emptyState(HOST), [], client)).rejects.toThrow(
-      /no managed resource and no live department at \/departments matches key "nope".*Declare\/adopt it/s,
-    );
+    await expect(tuplesFor(perm("nope"), emptyState(HOST), [], client)).rejects.toMatchObject({
+      details: { reason: "EXTERNAL_BINDING_MISSING", type: "department", key: "nope" },
+    });
   });
 
-  it("is never treated as a managed resource, even if a same-keyed resource is in state", async () => {
-    const state: State = {
-      version: 1,
-      host: HOST,
-      resources: {
-        equippers_koblenz: {
-          type: "group",
-          id: 999,
-          key: "equippers_koblenz",
-          fields: {},
-          adoptedAt: "t",
-          updatedAt: "t",
-        },
-      },
+  it("is not shadowed by an unrelated managed resource under another key", async () => {
+    const state = stateWithExternal("department", "equippers_koblenz", 7, { name: "Equippers Koblenz" });
+    state.resources.some_group = {
+      type: "group",
+      id: 999,
+      key: "some_group",
+      fields: {},
+      adoptedAt: "t",
+      updatedAt: "t",
     };
-    // The group must not shadow the department catalog — that would be the misgrant #98 is about.
     expect(await tuplesFor(perm("equippers_koblenz"), state, [], client)).toEqual([
       { authId: 102, dataId: [7], type: "grant" },
     ]);
@@ -344,7 +348,11 @@ describe("security-level scopes resolve by name (cc_securitylevel, #110)", () =>
     { id: 3, name: "Stufe 3 (Hoch)", sortKey: 3 },
   ];
   const client = {
-    get: vi.fn(async (path: string) => (path === "/securitylevels" ? levels : [])),
+    get: vi.fn(async (path: string) => {
+      if (path === "/securitylevels") return levels;
+      const id = /^\/securitylevels\/(\d+)$/.exec(path)?.[1];
+      return id ? levels.find((level) => level.id === Number(id)) : [];
+    }),
   } as unknown as CtClient;
 
   const perm = (scope: unknown[]): DesiredPermission => ({
@@ -354,9 +362,9 @@ describe("security-level scopes resolve by name (cc_securitylevel, #110)", () =>
     grants: [{ right: "churchdb:security level person", scope: scope as never }],
   });
 
-  it("resolves a level by its slugged name against the live catalog", async () => {
-    // No scopeKey: catalog-resolved ids are host-correct already and have no managed identity.
-    expect(await tuplesFor(perm([{ securityLevel: "stufe_3_hoch" }]), emptyState(HOST), [], client)).toEqual([
+  it("resolves a level through its explicit external binding", async () => {
+    const state = stateWithExternal("security-level", "stufe_3_hoch", 3, { name: "Stufe 3 (Hoch)" });
+    expect(await tuplesFor(perm([{ securityLevel: "stufe_3_hoch" }]), state, [], client)).toEqual([
       { authId: 125, dataId: [3], type: "grant" },
     ]);
   });
@@ -372,7 +380,7 @@ describe("security-level scopes resolve by name (cc_securitylevel, #110)", () =>
   it("hard-errors on a level name this host does not have, instead of granting the wrong one", async () => {
     await expect(
       tuplesFor(perm([{ securityLevel: "stufe_9" }]), emptyState(HOST), [], client),
-    ).rejects.toThrow(/no live security-level at \/securitylevels matches key "stufe_9"/);
+    ).rejects.toMatchObject({ details: { reason: "EXTERNAL_BINDING_MISSING", key: "stufe_9" } });
   });
 });
 
@@ -386,7 +394,11 @@ describe("comment-viewer scopes resolve by name (cdb_comment_viewer, #102)", () 
     { id: 2, name: "Admins", sortKey: 2 },
   ];
   const client = {
-    get: vi.fn(async (path: string) => (path === "/person/commentviewers" ? viewers : [])),
+    get: vi.fn(async (path: string) => {
+      if (path === "/person/commentviewers") return viewers;
+      const id = /^\/person\/commentviewers\/(\d+)$/.exec(path)?.[1];
+      return id ? viewers.find((viewer) => viewer.id === Number(id)) : [];
+    }),
   } as unknown as CtClient;
 
   const perm = (scope: unknown[]): DesiredPermission => ({
@@ -397,23 +409,25 @@ describe("comment-viewer scopes resolve by name (cdb_comment_viewer, #102)", () 
   });
 
   it("resolves a viewer by name", async () => {
-    expect(
-      await tuplesFor(perm([{ commentViewer: "gemeindeleitung" }]), emptyState(HOST), [], client),
-    ).toEqual([{ authId: 113, dataId: [1], type: "grant" }]);
+    const state = stateWithExternal("comment-viewer", "gemeindeleitung", 1, { name: "Gemeindeleitung" });
+    expect(await tuplesFor(perm([{ commentViewer: "gemeindeleitung" }]), state, [], client)).toEqual([
+      { authId: 113, dataId: [1], type: "grant" },
+    ]);
   });
 
   it("resolves the id-0 row — a falsy id must not read as 'not found'", async () => {
     // "Alle" is id 0 on a real instance. Anything treating 0 as missing would silently drop the scope
     // (or worse, fall through to a different row), so this is pinned deliberately.
-    expect(await tuplesFor(perm([{ commentViewer: "alle" }]), emptyState(HOST), [], client)).toEqual([
+    const state = stateWithExternal("comment-viewer", "alle", 0, { name: "Alle" });
+    expect(await tuplesFor(perm([{ commentViewer: "alle" }]), state, [], client)).toEqual([
       { authId: 113, dataId: [0], type: "grant" },
     ]);
   });
 
   it("hard-errors on a viewer name this host does not have", async () => {
-    await expect(tuplesFor(perm([{ commentViewer: "nope" }]), emptyState(HOST), [], client)).rejects.toThrow(
-      /no live comment-viewer at \/person\/commentviewers matches key "nope"/,
-    );
+    await expect(
+      tuplesFor(perm([{ commentViewer: "nope" }]), emptyState(HOST), [], client),
+    ).rejects.toMatchObject({ details: { reason: "EXTERNAL_BINDING_MISSING", key: "nope" } });
   });
 });
 

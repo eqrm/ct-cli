@@ -1,5 +1,17 @@
 # Contributing
 
+## Operation projection rule
+
+User-facing behavior starts in the transport-neutral operation catalog. Define canonical parameter
+and result schemas once, then provide both CLI and HTTP bindings in the same change. The Commander
+tree, router, capabilities and OpenAPI enumerate that catalog; do not maintain an independent route
+or command list.
+
+Adapters may map canonical input to flags/arguments or HTTP path/query/body fields and may render
+results differently. They must not duplicate handlers, reconciliation, defaults, summaries,
+confirmation policy or safety checks. Adapter-only mechanics such as pairing and terminal prompts
+must be marked explicitly. Add or update catalog parity tests for every operation change.
+
 This tool was built for one organisation's ChurchTools instance and then generalised, so
 the most useful contributions are usually the ones that make it less specific to that
 origin: another instance's API quirk, a field the engine does not manage yet, a

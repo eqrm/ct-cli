@@ -7,8 +7,8 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: c3a6740c4d4bc134
-reviewed: 2026-08-28
+sources_hash: 31250c52e97dfbaf
+reviewed: 2026-08-29
 ---
 
 # Permissions (`ct.groupRole` / `ct.groupTypeRole` / `ct.status`)
@@ -80,7 +80,7 @@ person-status rights — as code, and reconcile them idempotently with the same
 export default (ct) => {
   ct.groupTypeRole({
     key: "leiter_tpl", // logical key (unique across the whole config)
-    groupType: "ministry_team", // domain BY NAME — resolved to the domainId per host (#20)
+    groupType: "ministry_team", // logical key — resolved from managed/external state per host
     grants: [
       "churchgroup:view group", // unscoped
       { right: "churchgroup:view group", scope: ["kids_area"] }, // scoped
@@ -97,7 +97,7 @@ export default (ct) => {
 
   ct.status({
     key: "core_external_login",
-    personStatus: "5 - Core", // domain BY PERSON-STATUS NAME — resolved against /statuses (#90)
+    personStatus: "core", // logical person-status key, managed or explicitly external
     // -1 is ChurchTools' "all values of this dimension" sentinel (here: every external system).
     grants: [{ right: "churchcore:login to external system", scope: [-1] }],
   });
@@ -111,24 +111,24 @@ reference or a numeric `id`:
   namespace with every other resource type).
 - **domain** — the permission domain object. Declare it **by reference** (the
   portable form, #20) or **by numeric `id`** (the escape hatch):
-  - `ct.groupTypeRole` — `groupType: "<name>"` resolves against the live
-    group-type catalog per host, or `id: <domainId>` targets one directly.
+  - `ct.groupTypeRole` — `groupType: "<key>"` resolves from managed or external
+    host state, or `id: <domainId>` targets one directly.
   - `ct.groupRole` — `group: "<key>", role: "<name>"` resolves the (group,
     role) pair to its pairing domainId per host (#25), or `id: <domainId>`
-    targets one directly. The group must be **managed** (declared via `ct.group`
-    or adopted into state); it need not exist on the host yet — a group declared
+    targets one directly. The group may be managed (declared via `ct.group` or
+    adopted into state) or explicitly external via `ct use group`; a group declared
     in the same config plans as a pending domain and is granted later in that same
     `ct apply`, once it exists (#106). Declaring both a logical form and a numeric
     `id` is a conflict and throws.
     See "domainId semantics" for how the pairing id is resolved.
-  - `ct.status` — `personStatus: "<name>"` resolves against the live
-    `/statuses` catalog per host, or `id: <statusId>` targets one directly.
+  - `ct.status` — `personStatus: "<key>"` resolves from managed or external
+    host state, or `id: <statusId>` targets one directly.
     **Person** statuses ("0 - First", "3 - Group Active", …), not group statuses
     — see "domainId semantics".
 - **`grants`** — an array of `Grant`s, each either:
   - a bare string, `"module:right"` — an **unscoped** grant, or
   - an object `{ right: "module:right", scope: [...] }` — a **scoped** grant,
-    where each `scope` entry is a logical key of a managed group, a typed
+    where each `scope` entry is a logical key of a managed or external group, a typed
     logical reference such as `{ campus: "koblenz" }` (#98), or a raw numeric
     `dataId` (the escape hatch, #49). See "Scope resolution" below.
 
@@ -220,7 +220,7 @@ The two DSL functions manage two different ChurchTools "domain types," and
 - **`group_type_role`** (`ct.groupTypeRole`) — the domain is the **group type's
   own id** (the same id you'd pass as `groupTypeId` on `ct.group`). It scopes the
   grant to "every role holder of this group type." Declare it portably as
-  `groupType: "<name>"` (resolved per host, #20) or directly as `id: <domainId>`.
+  `groupType: "<key>"` (resolved per host from state, #20/#143) or directly as `id: <domainId>`.
 - **`group_role`** (`ct.groupRole`) — the domain is the **internal
   (group, role) pairing's own id** — a ChurchTools-internal id for one
   specific group's specific role, _not_ the group's id and _not_ the role's
@@ -236,10 +236,12 @@ The two DSL functions manage two different ChurchTools "domain types," and
   check, not a truthiness one.
 
   > **Person status ≠ group status.** `groupStatusId` (`ct.group`) is a
-  > different dimension with **no** REST catalog at all (#67) and must always be
-  > written as a number. Person statuses do have one (`GET /statuses`, flat
-  > array of `{id, name}` — live-verified 2026-08-10 on eqrm prod), so they
-  > resolve by name like campuses and group types.
+  > different dimension. Its read-only catalog is nested under
+  > `GET /person/masterdata` → `groupStatuses`, so `status: "active"` resolves
+  > by technical name (#157); numeric `groupStatusId` remains an escape hatch.
+  > Person statuses instead use `GET /statuses` (flat array of `{id, name}` —
+  > live-verified 2026-08-10 on eqrm prod) and use the same logical-key binding
+  > model as campuses and group types.
 
   Since #96 the status itself is also **declarable**, via `ct.personStatus`:
 
@@ -248,14 +250,11 @@ The two DSL functions manage two different ChurchTools "domain types," and
   ct.status({ key: "3_group_active_login", personStatus: "3_group_active", grants: [...] });
   ```
 
-  **Key it as `slug(name)`.** A `personStatus:` reference resolves against
-  managed state first and the live `/statuses` catalog second, and the catalog
-  matches by `slug(name)` — so a key that does not slug from the name (`"core"`
-  for `"5 - Core"`) can only ever match the declaration. On a host that already
-  has that status but has not adopted it, the plan then **creates a second,
-  identically-named status** and grants on the new one, leaving the real one
-  untouched. `ct adopt person-status <id>` emits `slug(name)` for this reason;
-  match it.
+  The logical key is user-controlled and need not equal `slug(name)`. `ct adopt`
+  derives a readable initial key; `ct use person-status <id> --key <key>` records
+  a read-only host binding when another project owns the status. A declaration
+  still means lifecycle ownership and may create the status if it is absent from
+  this project's managed state.
 
   > **Teardown caveat.** A person status is the one managed type whose deletion
   > reaches person _records_: dropping the declaration and running `ct destroy`
@@ -266,12 +265,10 @@ The two DSL functions manage two different ChurchTools "domain types," and
   > status is load-bearing.
 
   That is what makes a config using the `status` domain self-sufficient across
-  hosts. Before it, `personStatus: "…"` could only resolve against statuses that
-  already existed on the target instance, so a config that planned to a clean
-  no-op on prod died on dev with _"no managed resource and no live person-status
-  at /statuses matches key …"_ — whose own advice ("Declare/adopt it") was not
-  actually possible. A status declared in the same config resolves to a pending
-  domain and converges in one `ct apply`, exactly like a same-run group type.
+  hosts. A status declared in the same config resolves to a pending domain and
+  converges in one `ct apply`, exactly like a same-run group type. A shared status
+  owned elsewhere is never pending: the consumer must bind the already-existing
+  object with `ct use`, and missing/stale bindings block before writes.
 
   > **VERIFIED LIVE (2026-08-13, CT 3.135.2).** The reference form resolves by
   > reading the group's own role list (`GET /groups/{groupId}/roles`) and taking
@@ -291,8 +288,8 @@ The two DSL functions manage two different ChurchTools "domain types," and
   > hardcode it like any other domainId.
 
 Resolution runs in `buildPermissionPlan` (`src/permissions/plan.ts`): a numeric
-`id` passes straight through; a `groupType` reference resolves against the live
-catalog, and a `group` + `role` pair against the group's role list. After
+`id` passes straight through; a `groupType` reference resolves from managed or
+external state, and a `group` + `role` pair against the group's role list. After
 resolution, two declarations that resolve to the **same** `(domainType,
 domainId)` are rejected (they would otherwise diff against each other's grants
 forever) — even if one used a name and the other a raw id.
@@ -313,7 +310,8 @@ handled as a **pending domain** rather than aborting the plan:
   re-resolution machinery as resource pending refs.
 - The hard error (`references a resource created in the same run` → now only a
   genuine unresolvable) is reserved for references that resolve to **nothing**:
-  a key absent from the config, state, and the live catalog (a typo).
+  a key absent from the config and both managed/external state partitions. Live
+  discovery can explain a candidate but never supplies an ephemeral id.
 
 **`group_role` behaves the same way since #106.** A `group_role` domain id is
 the (group, role) **pairing** id, which only exists on
@@ -417,7 +415,8 @@ forms (`src/permissions/scope.ts`):
 | **Typed logical reference** (#98)            | `scope: [{ campus: "koblenz" }]` | campuses, group types — see below |
 | **Raw numeric `dataId`** (escape hatch, #49) | `scope: [1, 2, 3]`               | any dimension                     |
 
-String entries are resolved against **desired ∪ state**:
+String entries are resolved against **desired managed resources ∪ managed state
+∪ external state**:
 
 - A key already in state resolves to that group's `dataId`.
 - A key **declared in this config but not yet created** resolves to a _pending_
@@ -427,9 +426,10 @@ String entries are resolved against **desired ∪ state**:
 - A key that is neither in state nor declared throws:
 
   ```
-  Scope key "kids_area" does not resolve to a managed group. Declare/adopt it,
-  use a group already under management, or pass a raw numeric dataId if this
-  right's scope is not a group (see the catalog's scopeField).
+  External prerequisite is not available: group "kids_area".
+  Bind the verified live group with `ct use group <id> --key kids_area`,
+  declare/adopt it in its owner project, or pass a raw numeric dataId if this
+  right's scope is not a group.
   ```
 
 The requirement that scope targets be tool-visible is deliberate: so `ct plan`
@@ -463,21 +463,21 @@ ct.groupRole({
 `{ campus: "koblenz" }` is sugar for `ref.campus("koblenz")` — the same `Ref`
 the rest of the DSL uses — so both spellings are interchangeable.
 
-| `scopeField`         | Reference form                            | Resolved against                                                  |
-| -------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
-| `cdb_gruppe`         | `{ group: "<key>" }` (or the bare string) | managed groups                                                    |
-| `cdb_station`        | `{ campus: "<key>" }`                     | managed campuses, then `GET /campuses`                            |
-| `cdb_gruppentyp`     | `{ groupType: "<key>" }`                  | managed group types, then `GET /group/grouptypes`                 |
-| `cdb_bereich`        | `{ department: "<name-slug>" }`           | managed Bereiche, then `GET /departments` (#108)                  |
-| `cc_securitylevel`   | `{ securityLevel: "<name-slug>" }`        | managed security levels, then `GET /securitylevels` (#110)        |
-| `cdb_comment_viewer` | `{ commentViewer: "<name-slug>" }`        | managed comment viewers, then `GET /person/commentviewers` (#151) |
+| `scopeField`         | Reference form                            | Resolved against                    |
+| -------------------- | ----------------------------------------- | ----------------------------------- |
+| `cdb_gruppe`         | `{ group: "<key>" }` (or the bare string) | managed or external groups          |
+| `cdb_station`        | `{ campus: "<key>" }`                     | managed or external campuses        |
+| `cdb_gruppentyp`     | `{ groupType: "<key>" }`                  | managed or external group types     |
+| `cdb_bereich`        | `{ department: "<key>" }`                 | managed or external Bereiche        |
+| `cc_securitylevel`   | `{ securityLevel: "<key>" }`              | managed or external security levels |
+| `cdb_comment_viewer` | `{ commentViewer: "<key>" }`              | managed or external comment viewers |
 
 Two `Ref` kinds are deliberately **not** in that table because no permission
 dimension scopes by them: `group-type-role` (a `groupTypeRoleId`, addressed by
 its `(group type, role name)` pair — #76) and `group-member-field` (a
 group-scoped member-field definition, addressed by its portable
 `(group key, local field key)` pair — #135). They share this file's resolver and
-its "managed state first, then live lookup, else a hard error at plan time"
+its "managed state first, then external binding, else a hard error at plan time"
 rules, but they are referenced from **dynamic-group rulesets**, not from grant
 scopes. For `group-member-field`, the logical pair selects a declaration; that
 declaration's exact ChurchTools `referenceName` selects the live row (#158).
@@ -489,14 +489,12 @@ therefore a cross-environment misgrant, and because declaring a domain makes
 `ct` _own_ it, the wrong-scope grant also revokes whatever is really there on
 the other host. The typed reference makes one config plan clean on both.
 
-Resolution mirrors the domain-reference rules: managed state first, the live
-master-data catalog second, and a target **declared in this same config**
-resolves to a _pending_ scope re-resolved at apply time. A reference resolved
-through the catalog (not under management) carries an already-final id and is
-not re-resolved. Catalogs are read **paginated** — ChurchTools returns only a
-first page (10 rows) for a plain list read, so an instance with more campuses,
-group types or departments than that would otherwise report a perfectly real
-name as unresolvable.
+Resolution mirrors the domain-reference rules: managed state first, a target
+**declared in this same config** as pending, then a persisted external binding.
+Every external is read live by id and its registry-defined hard identity is
+validated. An unbound object always blocks plan; paginated live discovery may
+list candidates and complete `ct use` commands, but never lends the plan an id
+that was not persisted.
 
 Three things are hard errors at **plan** time, never a guessed `dataId`:
 
@@ -563,15 +561,23 @@ something guarantees the row is there.
   `nameTranslated` is derived from `name`, not independently writable, so the
   managed set (`name`, `sortKey`) is complete and a `PUT` cannot blank a sibling.
 
-- **Resolution is managed-state first, live catalog second.** An existing
-  reference to a viewer your config does not own keeps resolving exactly as it
-  did in #102, and a name that matches nothing anywhere is still a hard error
-  rather than a create:
+- **Resolution is managed-state first, explicit external binding second.** A
+  viewer owned by another project is consumed without lifecycle authority by
+  binding it once per host:
+
+```bash
+ct use comment-viewer 12 --key dienstbereich --env prod
+```
+
+Plan reads `GET /person/commentviewers/12`, validates the stored hard identity
+(`name`), and uses the id only after it matches. An unbound name is still a
+hard error; catalog discovery can suggest this command but cannot silently
+resolve the reference:
 
 ```
-Cannot resolve comment-viewer:nope referenced at … : no managed resource and
-no live comment-viewer at /person/commentviewers matches key "nope".
-Declare/adopt it, fix the key/name, or use a numeric id.
+External prerequisite is not available
+resource: comment-viewer "nope"
+Consequence: Consumer plan/apply is blocked before writes.
 ```
 
 - **`ct apply` never deletes**, as everywhere else. `ct destroy` can, and warns:
@@ -585,11 +591,9 @@ Declare/adopt it, fix the key/name, or use a numeric id.
   `ct.commentViewer({ key: "alle", name: "Alle" })` finds no state entry on a
   second host, so `ct apply` creates a **second** "Alle" with a fresh id and
   scopes the grant to the duplicate. Worse, that host never complains:
-  resolution is managed-state-first, so `{ commentViewer: "alle" }` quietly
-  resolves to the config's own duplicate. The two identically named rows only
-  hard-error for a config reading the catalog _without_ a state entry — a third
-  host, or the same one after a state reset — so the damage surfaces somewhere
-  other than where it was caused. The adopter therefore
+  the declaration authorises creating the managed object and resolves as pending,
+  so live discovery is not an ownership guard. An external binding would avoid
+  creating it, but is unnecessary for this documented cross-host constant. The adopter therefore
   treats it like the `-1` sentinel — emitted as the bare number with a comment
   saying what it is, never with an adoption hint. It stays a **number** rather
   than a name reference on purpose: an admin can rename the row, and the id is
@@ -646,10 +650,10 @@ adding or reordering a level on one host silently changes what a hard-coded
 
 Two things address that, and you can use either:
 
-**1. Reference a level by name.** `{ securityLevel: "stufe_3_hoch" }` resolves
-against managed levels first, then `GET /securitylevels`. The trade-off: names
-are localised German strings (`"Stufe 3 (Hoch)"` → `stufe_3_hoch`), so a
-**rename** breaks a reference where a number would have survived.
+**1. Reference a level by logical key.** `{ securityLevel: "stufe_3_hoch" }`
+resolves against managed state or an explicit external binding. The external
+binding validates the live name, so a rename intentionally blocks until
+`ct use security-level <id> --key stufe_3_hoch` accepts the changed identity.
 
 **2. Declare the levels themselves**, which makes the numeric form portable too,
 because the config now owns the ids:
