@@ -127,8 +127,7 @@ ruleset, a calendar or a bookable room on an event.
 the thing that references it, at any depth, under any flag.** Adopting a
 resource booking does not adopt the room.
 
-What is emitted instead, in order of preference — all of it already
-implemented:
+What is emitted instead, in order of preference:
 
 - **already managed** → a portable logical reference. `ReverseResolver.sugarFields`
   rewrites `campusId` → `campus: "…"`; `portablizeRuleset` rewrites entity ids
@@ -137,6 +136,10 @@ implemented:
   (`configSnippet`'s `todos`), and a line in the summary marking it
   `unmanaged`. `--strict-rulesets` already turns that from a warning into a
   refusal for rulesets; the same escalation applies to any category-4 reference.
+
+  The consumer can now replace that interim numeric form with an explicit
+  external binding (`ct use <type> <id> --key <key>`) and the normal logical
+  `ref.*` form. See [External ct-cli resources](external-resources.md).
 
 #### Why category 4 has no opt-in
 
@@ -153,12 +156,19 @@ There are two supported remedies, and both make the ownership claim explicit:
 
 1. `ct adopt <type> <id>` on the referenced object — a deliberate, separate,
    visible act of taking ownership;
-2. once #143 lands, declaring it as an **external / read-only prerequisite** —
+2. declare it as an **external / read-only prerequisite** with `ct use` —
    resolvable in `ref` positions, never created, updated, deleted, or written.
 
-Remedy 2 is the one this contract expects to become normal. Until it exists,
-the numeric-id + `TODO` output is the honest interim: it says "this reference
-is not portable yet" rather than pretending it is.
+Remedy 2 is the normal consumer workflow. Numeric-id + `TODO` output remains an
+honest signal from adoption that the reference is not portable until explicitly
+bound; adoption never claims or writes the external object as a side effect.
+
+Lifecycle release is equally explicit and never means deletion. `ct unuse
+<type> <key> --env <env>` removes only a consumer binding; `ct unadopt <type>
+<key> --env <env>` relinquishes only managed ownership. Both leave the live
+ChurchTools object untouched, refuse config references by default, and require
+typed environment confirmation. Actual deletion remains exclusively `ct
+destroy` and is restricted to managed state.
 
 ### 5. Person-related data — permanently excluded
 
@@ -390,11 +400,11 @@ This issue decides only. The work the contract implies, roughly in order:
    one adopted without its member fields.
 5. **The five-verb summary** replacing today's per-command ad-hoc output, and a
    test pinning the rendered summary (the same discipline `plan` output has).
-6. **External/read-only references** — [#143](https://github.com/eqrm/ct-cli/issues/143).
-   Until it lands, category 4 falls back to numeric id + `TODO`; after it lands,
-   the emitted form for an unmanaged reference should become an external
-   declaration, which is what makes category 4's "no opt-in" rule comfortable
-   rather than merely correct.
+6. **External/read-only references** — implemented by
+   [#143](https://github.com/eqrm/ct-cli/issues/143). Category 4 still emits a
+   numeric id + `TODO` until the consumer explicitly runs `ct use`; the persisted
+   external binding then makes its logical `ref.*` form portable without
+   transferring lifecycle ownership.
 
 ### How #135 applies this contract
 

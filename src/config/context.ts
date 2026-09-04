@@ -24,7 +24,7 @@ import { collectRefs } from "../resolve/refs.js";
 import type { DomainType } from "../permissions/grants.js";
 import type { DesiredPermission, Grant, PreserveUnknown } from "../permissions/types.js";
 import { KNOWN_SCOPE_FIELDS } from "../permissions/catalog.js";
-import { GROUP_STATUS_NO_CATALOG, isRef, ref, refKey, type Ref } from "../resolve/refs.js";
+import { isRef, ref, refKey, type Ref } from "../resolve/refs.js";
 import { normalizeScopeEntry } from "../permissions/scope.js";
 import { conventionalRulesetRef, isCallerAssignedId, knownFields } from "../resources/registry.js";
 import { warn } from "../ui.js";
@@ -180,15 +180,11 @@ export interface PermissionInput {
   preserveUnknown?: PreserveUnknown;
 }
 
-/** Logical id-field sugar for declarations: a named string field → a Ref-valued numeric id field.
- *  `status` (→ `groupStatusId`) is deliberately NOT here (#67): ChurchTools exposes no REST catalog
- *  for group statuses — `/group/memberstatus` is a different dimension (member statuses, string
- *  ids), verified live 2026-07-10. A declared `status:` field fails fast in {@link toDesired} instead
- *  of silently resolving against the wrong dimension. `ref.status`/`RefKind: "group-status"` remain
- *  in src/resolve/refs.ts so the sugar can return if CT ever ships a real group-status endpoint. */
+/** Logical id-field sugar for declarations: a named string field → a Ref-valued numeric id field. */
 const ID_SUGAR: Record<string, { idField: string; make: (key: string) => Ref }> = {
   campus: { idField: "campusId", make: ref.campus },
   groupType: { idField: "groupTypeId", make: ref.groupType },
+  status: { idField: "groupStatusId", make: ref.status },
 };
 
 /** The numeric id fields a declaration may carry — each accepts a number, `null`, or a {@link Ref}. */
@@ -366,7 +362,7 @@ export interface ConfigContext {
    * Grants on a PERSON status (`status` domain, #90) — they apply to every person carrying that
    * status, so this is the instance-wide lever. Addressed by `personStatus: "<name/key>"` (resolved
    * against `/statuses`) or the numeric `id:` escape hatch. Note that person statuses are a different
-   * dimension from group statuses (`groupStatusId`), which have no catalog at all (#67).
+   * dimension from group statuses (`groupStatusId`), whose catalog is nested in `/person/masterdata`.
    */
   status(input: PermissionInput): void;
 }
@@ -535,17 +531,8 @@ function toDesired(type: string, input: ResourceInput, location?: string): Desir
   if (parents !== undefined && (!Array.isArray(parents) || parents.some((p) => typeof p !== "string"))) {
     throw new Error(`${type} "${key}": "parents" must be an array of string group keys.`);
   }
-  // `status` (group status) has no REST catalog to resolve a name against — fail fast here rather
-  // than let it fall through to ID_SUGAR (which no longer carries a "status" entry, so it would
-  // otherwise silently be treated as an unrecognised field and just warn) or, worse, silently pick
-  // the wrong dimension (#67: `/group/memberstatus` is member statuses, string ids — a live-verified
-  // mismatch). Checked before the sugar loop so the message is specific, not the generic unknown-id
-  // fallback below.
-  if (fields.status !== undefined) {
-    throw new Error(`${type} "${key}": "status" cannot be resolved by name — ${GROUP_STATUS_NO_CATALOG}`);
-  }
-  // Logical id-field sugar (#20): a named string field (`campus`/`groupType`) sugars into
-  // a Ref-valued numeric id field (`campusId`/`groupTypeId`). The per-host resolver
+  // Logical id-field sugar (#20): a named string field (`campus`/`groupType`/`status`) sugars into
+  // a Ref-valued numeric id field (`campusId`/`groupTypeId`/`groupStatusId`). The per-host resolver
   // turns the Ref into a real id at plan time. Declaring BOTH forms (`campus` + `campusId`) is a
   // conflict — reject it rather than silently pick one. Numeric ids still pass straight through.
   for (const [logical, { idField, make }] of Object.entries(ID_SUGAR)) {
@@ -569,8 +556,6 @@ function toDesired(type: string, input: ResourceInput, location?: string): Desir
   for (const idField of ID_FIELDS) {
     const value = fields[idField];
     if (value === undefined || value === null || typeof value === "number" || isRef(value)) continue;
-    // `groupStatusId` has no logical sugar field (#67 — see ID_SUGAR above), so its hint omits the
-    // "use the X field" clause rather than pointing at a sugar that doesn't exist.
     const sugarName = Object.entries(ID_SUGAR).find(([, s]) => s.idField === idField)?.[0];
     const hint = sugarName ? ` (use the "${sugarName}" field, or ref.*)` : "";
     throw new Error(
@@ -647,10 +632,9 @@ function toDesired(type: string, input: ResourceInput, location?: string): Desir
 }
 
 /**
- * Every managed hierarchy parent must reference a group declared in the same config.
- * A parent that resolves to nothing (typo, unmanaged group) or to a non-group would
- * diff forever against the managed-only actual side, so reject it up front rather than
- * emit a plan that can never converge.
+ * A hierarchy parent may be declared in this config or supplied by an external group binding.
+ * Config evaluation can reject a known non-group immediately; unknown keys are deliberately left
+ * for the plan-time resolver/state validation, because external declarations live in per-host state.
  */
 function validateReferences(resources: DesiredResource[]): void {
   const byKey = new Map(resources.map((r) => [r.key, r]));
@@ -658,10 +642,7 @@ function validateReferences(resources: DesiredResource[]): void {
     for (const parentKey of r.parents ?? []) {
       const target = byKey.get(parentKey);
       if (!target) {
-        throw new Error(
-          `Group "${r.key}" declares hierarchy parent "${parentKey}", which is not declared in this config. ` +
-            `Managed parents must reference a group by its key (omit unmanaged parents entirely).`,
-        );
+        continue;
       }
       if (target.type !== "group") {
         throw new Error(

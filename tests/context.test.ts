@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { createContext, evaluateConfig, type ConfigContext } from "../src/config/context.js";
 import { isKnownType } from "../src/engine/graph.js";
 import { RESOURCES } from "../src/resources/registry.js";
+import { ref } from "../src/resolve/refs.js";
 
 describe("config context", () => {
   it("builds desired resources from DSL calls, separating key/parent from fields", () => {
@@ -107,20 +108,17 @@ describe("config context", () => {
     expect(() => ct.group({ key: "h", name: "H", parents: [1] as never })).toThrow(/array of string/);
   });
 
-  describe("group-status sugar removed (#67)", () => {
-    it("fails fast, with an actionable error, when `status` is declared", () => {
-      const { ct } = createContext();
-      expect(() => ct.group({ key: "g", name: "G", status: "active" })).toThrow(
-        'group "g": "status" cannot be resolved by name — group statuses have no REST catalog ' +
-          "(GET /group/memberstatus is a different dimension: member statuses, string ids — verified " +
-          '2026-07-10). Declare a numeric "groupStatusId" instead (e.g. "groupStatusId: 1").',
-      );
+  describe("group-status sugar (#157)", () => {
+    it("sugars a technical status name into a logical reference", () => {
+      const { ct, resources } = createContext();
+      ct.group({ key: "g", name: "G", status: "active" });
+      expect(resources[0]?.fields.groupStatusId).toEqual(ref.status("active"));
     });
 
-    it("still fails fast even when a numeric groupStatusId is also given", () => {
+    it("rejects declaring logical and numeric forms together", () => {
       const { ct } = createContext();
       expect(() => ct.group({ key: "g", name: "G", status: "active", groupStatusId: 1 })).toThrow(
-        /"status" cannot be resolved by name/,
+        /either "status".*or "groupStatusId"/,
       );
     });
 
@@ -131,7 +129,7 @@ describe("config context", () => {
     });
   });
 
-  it("rejects a hierarchy parent that is not a declared group", async () => {
+  it("rejects a declared non-group parent but permits a plan-time external group key", async () => {
     await expect(
       evaluateConfig((ct) => {
         ct.campus({ key: "mz", name: "Mainz" });
@@ -141,9 +139,9 @@ describe("config context", () => {
 
     await expect(
       evaluateConfig((ct) => {
-        ct.group({ key: "kids", name: "Kids", parents: ["ghost"] }); // never declared
+        ct.group({ key: "kids", name: "Kids", parents: ["shared_parent"] });
       }),
-    ).rejects.toThrow(/not declared in this config/);
+    ).resolves.toMatchObject({ resources: [expect.objectContaining({ parents: ["shared_parent"] })] });
   });
 
   it("rejects a duplicate logical key", () => {

@@ -51,6 +51,7 @@ export const VAR_REF_KINDS: Readonly<Record<string, RefKind>> = {
   "ctgroup.id": "group",
   "ctgroup.campusId": "campus",
   "ctgroup.groupTypeId": "group-type",
+  "ctgroup.groupStatusId": "group-status",
   "person.campusId": "campus",
 };
 
@@ -113,7 +114,6 @@ export interface PortablizeWarning {
  * is a literal, not an id, and reporting it would bury the real findings in noise.
  */
 const UNPORTABLE_ENTITY_VARS: Readonly<Record<string, string>> = {
-  "ctgroup.groupStatusId": "group statuses have no REST catalog (#67) — no logical form exists",
   // #127. A ruleset that includes or excludes specific people by id is common — four of five
   // auto-group rulesets captured in one week did it — and it was the ONE entity var the audit never
   // mentioned, so the only way to find it was to read the captured JSON by hand. The absence of a

@@ -62,6 +62,7 @@ function harness() {
   };
   return {
     dependencies,
+    state,
     request,
     events,
     changeState(value: string) {
@@ -75,6 +76,22 @@ async function expectCode(promise: Promise<unknown>, code: CtApplicationError["c
 }
 
 describe("prepared destroy operation", () => {
+  it("cannot target an external binding and performs no ChurchTools read or write", async () => {
+    const test = harness();
+    test.state.externals!.shared = {
+      type: "group",
+      id: 77,
+      key: "shared",
+      identity: { name: "Shared", groupTypeId: 2 },
+      boundAt: "t",
+    };
+    await expect(prepareDestroy({ targets: ["shared"] }, test.dependencies)).rejects.toThrow(
+      /not managed.*Nothing to destroy/,
+    );
+    expect(test.request).not.toHaveBeenCalled();
+    expect(test.dependencies.authedSession).not.toHaveBeenCalled();
+  });
+
   it("exposes the exact proposal and requires the protected environment before deleting", async () => {
     const test = harness();
     const prepared = await prepareDestroy({ targets: ["area"] }, test.dependencies);

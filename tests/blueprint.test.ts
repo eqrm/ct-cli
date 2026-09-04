@@ -28,10 +28,12 @@ describe("campus blueprint", () => {
     }
   });
 
-  it("rejects a blueprint whose managed parent is undeclared (typo guard)", async () => {
+  it("retains an undeclared hierarchy key for plan-time external binding validation", async () => {
     const broken = (ct: ConfigContext) => {
       ct.group({ key: "g", name: "g", groupTypeId: 2, parents: ["missing"] });
     };
-    await expect(evaluateConfig(broken)).rejects.toThrow(/not declared/i);
+    await expect(evaluateConfig(broken)).resolves.toMatchObject({
+      resources: [expect.objectContaining({ parents: ["missing"] })],
+    });
   });
 });

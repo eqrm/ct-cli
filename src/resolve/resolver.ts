@@ -7,28 +7,23 @@
  *     state resolves to a {@link PendingRef} (its id is only known after the
  *     resource tier applies — re-resolved at apply time, mirroring the permission
  *     scope pattern in src/permissions/scope.ts).
- *  2. Live catalog master data, matched by `slug(name) === key` with an exact-name
- *     secondary: campus → /campuses, group-type → /group/grouptypes, role-def → /group/roles.
- *     Each catalog is fetched at most once per run and cached by a `Map<RefKind, Promise>`,
- *     so the resolver is safe to share across `buildPlan` and `buildPermissionPlan` running
- *     concurrently (both await the same in-flight promise). group-status ("group-status" /
- *     `ref.status`) has NO catalog here — ChurchTools exposes no REST list endpoint for group
- *     statuses at all (live-verified 2026-07-10 on eqrm prod; see the note by `CATALOG_PATH`
- *     below and #67). A declared `status:` field fails fast at eval time (src/config/context.ts)
- *     before it ever reaches this resolver — but a `groupStatusId: ref.status(...)` value skips
- *     that guard (the id-field escape hatch accepts any Ref) and lands on step 3 below, where
- *     `notFound` special-cases "group-status" to give the same actionable message instead of
- *     the generic "declare/adopt it" advice, which would be wrong (no such resource, no catalog).
- *  3. Hard error naming the kind, key, referencing site, and host.
+ *  2. A persisted external binding, read live by id and checked against the registry-defined hard
+ *     identity. It is never pending and never enters desired/write inputs.
+ *  3. Live catalog discovery for diagnostics only. A unique candidate still blocks until `ct use`
+ *     persists the explicit host binding; ambiguous candidates each get a complete command. Catalog
+ *     reads are cached so a resolver shared by resource and permission planning is concurrency-safe.
+ *     Group status is the specialised exception: it resolves directly from
+ *     `/person/masterdata.groupStatuses` because it has no manageable resource or external binding
+ *     type (#157).
  *
  * Unknown / ambiguous references THROW (a config error — distinct from the
  * degrade-and-continue fetchErrors path). Resolved ids are never written back to
  * config; only state carries ids.
  */
-import type { CtClient } from "../api/ctClient.js";
-import type { State } from "../state/state.js";
+import { CtApiError, type CtClient } from "../api/ctClient.js";
+import { externalResources, type ExternalResource, type State } from "../state/state.js";
 import type { DesiredResource } from "../engine/types.js";
-import { slug } from "../resources/registry.js";
+import { RESOURCES, resourceType, slug, type CtWriteClient } from "../resources/registry.js";
 import {
   conflictingReferenceName,
   groupScopedRows,
@@ -41,7 +36,6 @@ import {
 import {
   collectRefs,
   deepMapRefs,
-  GROUP_STATUS_NO_CATALOG,
   isPendingRef,
   isRef,
   pendingRef,
@@ -55,76 +49,31 @@ import {
   type RefKind,
   type SimpleRef,
 } from "./refs.js";
+import {
+  ExternalReferenceError,
+  identityDifferences,
+  planVerification,
+  useBindingCommand,
+  type ExternalCandidate,
+  type ExternalDiagnosticContext,
+} from "./external.js";
 
-/** ref kind → managed resource type (state/desired). group-status has neither: no catalog and never managed (#67). */
-const REF_KIND_TYPE: Partial<Record<RefKind, string>> = {
-  campus: "campus",
-  "group-type": "group-type",
-  // Person statuses became an adoptable resource in #96, so a `personStatus: "…"` domain now
-  // resolves from managed state / this run's declarations FIRST and only falls through to the
-  // `/statuses` catalog for a status this config does not own. That ordering is what makes a
-  // status declared in the same config usable as a permission domain (it resolves to a PendingRef,
-  // which buildPermissionPlan carries as a pending domain, #69).
-  "person-status": "person-status",
-  // Bereiche became a managed resource in #108 (writes go through the legacy master-data endpoint,
-  // reads stay `GET /departments`), so a `{ department: "…" }` ref resolves from managed state first
-  // and only falls back to the catalog for a Bereich this config does not own.
-  department: "department",
-  // Security levels became a managed resource in #110, so — exactly like person statuses above — a
-  // `{ securityLevel: "…" }` ref resolves from managed state / this run's declarations FIRST and only
-  // falls through to the `/securitylevels` catalog for a level this config does not own. That
-  // ordering is what lets a config declare a level and scope a grant to it in the same run (the ref
-  // resolves to a PendingRef, carried as a pending scope).
-  "security-level": "security-level",
-  // Comment viewers became a managed resource in #151 — same ordering as security levels above, and
-  // for the sharper reason: their ids genuinely differ across hosts of the same deployment, so a
-  // config that declares its viewers must resolve `{ commentViewer: "…" }` against what IT owns
-  // before falling back to `/person/commentviewers` for a viewer it does not.
-  "comment-viewer": "comment-viewer",
-  "role-def": "group-role",
-  group: "group",
-};
+/** ref kind → managed resource type (state/desired). Group-status is catalog-only (#157). */
+const REF_KIND_TYPE: Partial<Record<RefKind, string>> = Object.fromEntries(
+  Object.entries(RESOURCES).map(([type, spec]) => [spec.external.refKind, type]),
+) as Partial<Record<RefKind, string>>;
 
 /**
  * ref kind → live catalog path. `group` has no catalog (managed-only); `group-role` is gated.
  *
- * `group-status` is deliberately ABSENT (#67, disproving the prior assumption documented here):
- * `GET /group/memberstatus` is NOT a group-status catalog — live-verified 2026-07-10 on eqrm prod,
- * it returns MEMBER statuses (`{id: "active", name: "Active"}, {id: "requested", ...}`, STRING ids),
- * a completely different dimension from `groupStatusId` (numeric — e.g. 1 = active, 4 = archived on
- * that instance). Further probing found no REST list endpoint for group statuses at all
- * (`/groups/statuses` parses as `/groups/{groupId}`, `/group/statuses` and `/groupstatuses` 404) —
- * neither read nor write. So `status:` sugar fails fast at eval time instead (src/config/context.ts)
- * rather than reaching this resolver and either resolving against the wrong dimension or landing
- * here as an unconditional hard error. If CT ever ships a real group-status endpoint, add it back
- * here and restore the `status` entry to `ID_SUGAR` in context.ts.
+ * Group statuses have no dedicated endpoint, but `GET /person/masterdata` contains them under
+ * `groupStatuses` (#157). That numeric-id/technical-name catalog is distinct from both
+ * `/group/memberstatus` (membership statuses with string ids) and `/statuses` (person statuses).
+ * The reader below special-cases the nested response shape.
  */
 const CATALOG_PATH: Partial<Record<RefKind, string>> = {
-  campus: "/campuses",
-  // Bereiche/departments — the `cdb_bereich` permission scope dimension (#98). Catalog-ONLY, with no
-  // REF_KIND_TYPE entry above: `GET /departments` exists but no POST/PUT/DELETE does (live-probed on
-  // eqrm prod, CT 3.135.2, 2026-08-13), so a department is resolvable by name on every host yet can
-  // never be declared, adopted or created. Rows carry {id, name, nameTranslated, sortKey, shorty}.
-  department: "/departments",
-  // Security levels — the `cc_securitylevel` scope dimension (#110). `GET /securitylevels` returns a
-  // flat `[{id, name, sortKey}]` array ("Stufe 1 (Niedrig)" … "Stufe 4 (Sehr hoch)"), live-verified on
-  // eqrm prod (CT 3.135.2, 2026-08-13) and eqrm-dev (2026-08-14). Unlike `department` this kind ALSO
-  // has a REF_KIND_TYPE entry: levels are a managed resource, so this catalog is the fallback for a
-  // level the config does not own, not the only source. Reading it by name matters because the ids
-  // are not a protocol constant — an editable table with an auto-increment id and a supported
-  // reorder, so a hard-coded `scope: [1, 2, 3]` is portable only by convention.
-  "security-level": "/securitylevels",
-  // Comment viewers — the `cdb_comment_viewer` scope dimension (#102). `[{id, name, sortKey}]`,
-  // live-verified on eqrm-dev CT 3.135.2, 2026-08-14. NB `id: 0` is a real row here ("Alle"), which
-  // is why nothing in the resolve path may treat a falsy id as "missing".
-  "comment-viewer": "/person/commentviewers",
-  "group-type": "/group/grouptypes",
-  // PERSON statuses — the domain of a `status` permission declaration (#90). Unlike GROUP statuses
-  // (see the note above), these DO have a flat REST catalog: `GET /statuses` returns
-  // `[{id, name, shorty, …}]` — live-verified 2026-08-10 on eqrm prod. (`/person/masterdata` carries
-  // the same rows under a `statuses` key, but nested; this catalog reader expects a top-level array.)
-  "person-status": "/statuses",
-  "role-def": "/group/roles",
+  ...Object.fromEntries(Object.values(RESOURCES).map((spec) => [spec.external.refKind, spec.collectionPath])),
+  "group-status": "/person/masterdata",
 };
 
 interface CatalogRecord {
@@ -146,6 +95,8 @@ export interface ResolverDeps {
   desired: DesiredResource[];
   /** Host label for error messages. Defaults to `state.host`. */
   host?: string;
+  /** Public project metadata used to produce copyable, structured external diagnostics. */
+  context?: Omit<ExternalDiagnosticContext, "host">;
 }
 
 /**
@@ -197,7 +148,9 @@ export class Resolver {
   private readonly client: Pick<CtClient, "get"> & Partial<Pick<CtClient, "getAll">>;
   private readonly state: State;
   private readonly host: string;
+  private readonly context: ExternalDiagnosticContext;
   private readonly catalogs = new Map<RefKind, Promise<CatalogRecord[]>>();
+  private readonly externalReads = new Map<string, Promise<number>>();
   /** Per-group role list cache (group_role domain resolution), keyed by group id, fetched at most once. */
   private readonly groupRoleLists = new Map<number, Promise<CatalogRecord[]>>();
   /** Declared logical keys indexed by resource type — a same-run target that resolves to pending. */
@@ -229,6 +182,7 @@ export class Resolver {
     this.client = deps.client;
     this.state = deps.state;
     this.host = deps.host ?? deps.state.host;
+    this.context = { ...deps.context, host: this.host };
     for (const d of deps.desired) {
       let set = this.declaredByType.get(d.type);
       if (!set) {
@@ -266,10 +220,15 @@ export class Resolver {
       const managed = this.state.resources[r.key];
       if (managed && managed.type === type) return managed.id;
       if (this.declaredByType.get(type)?.has(r.key)) return pendingRef(r);
+      // (2) a persisted external binding, always read live and hard-identity validated.
+      const external = externalResources(this.state)[r.key];
+      if (external && external.type === type) return this.resolveBoundExternal(external, site);
+      // (3) discovery is diagnostic only. It never supplies an ephemeral id.
+      return this.requireExternalBinding(type, r, site);
     }
-    // (2) live catalog
-    if (CATALOG_PATH[r.kind] !== undefined) return this.resolveFromCatalog(r, site);
-    // (3) hard error
+    // Group statuses cannot be managed or bound, so their read-only master-data catalog resolves
+    // directly. Compound/owned structures keep their specialised errors.
+    if (r.kind === "group-status") return this.resolveFromCatalog(r, site);
     throw this.notFound(r, site);
   }
 
@@ -289,6 +248,12 @@ export class Resolver {
     return deepMapRefs(value, (r) => byKey.get(refKey(r)));
   }
 
+  /** Resolve a registry type/key pair used by string-only legacy positions such as hierarchy parents. */
+  async resolveKey(type: string, key: string, site: string): Promise<number | PendingRef> {
+    const kind = resourceType(type).external.refKind;
+    return this.resolve({ __ctRef: true, kind, key } as SimpleRef, site);
+  }
+
   /**
    * Fetch one master-data catalog, ONCE per run, paginated.
    *
@@ -302,9 +267,14 @@ export class Resolver {
     let p = this.catalogs.get(kind);
     if (!p) {
       const path = CATALOG_PATH[kind]!;
-      const rows = this.client.getAll
-        ? this.client.getAll<CatalogRecord>(path).then((page) => page.data)
-        : this.client.get<CatalogRecord[]>(path);
+      const rows =
+        kind === "group-status"
+          ? this.client
+              .get<{ groupStatuses?: CatalogRecord[] }>(path)
+              .then((masterdata) => masterdata.groupStatuses ?? [])
+          : this.client.getAll
+            ? this.client.getAll<CatalogRecord>(path).then((page) => page.data)
+            : this.client.get<CatalogRecord[]>(path);
       p = rows.then((r) => (Array.isArray(r) ? r : []));
       this.catalogs.set(kind, p);
     }
@@ -317,13 +287,171 @@ export class Resolver {
       if (candidates.length > 1) throw this.ambiguous(r, site, candidates);
       return candidates[0]!.id;
     };
-    // Primary: slugified name. Secondary: exact (case-sensitive) name — covers a name that does not
-    // survive slugging cleanly. Ambiguity in either bucket is a hard error listing the candidates.
     const bySlug = rows.filter((row) => typeof row.name === "string" && slug(row.name) === r.key);
     if (bySlug.length >= 1) return pick(bySlug);
     const byExact = rows.filter((row) => row.name === r.key);
     if (byExact.length >= 1) return pick(byExact);
     throw this.notFound(r, site);
+  }
+
+  private async resolveBoundExternal(external: ExternalResource, site: string): Promise<number> {
+    let read = this.externalReads.get(external.key);
+    if (!read) {
+      read = this.validateBoundExternal(external, site);
+      this.externalReads.set(external.key, read);
+    }
+    return read;
+  }
+
+  private async validateBoundExternal(external: ExternalResource, site: string): Promise<number> {
+    const spec = resourceType(external.type);
+    let live: Record<string, unknown> | null;
+    try {
+      live = spec.fetchOne
+        ? await spec.fetchOne(this.client as CtWriteClient, external.id)
+        : await this.client.get<Record<string, unknown>>(spec.itemPath(external.id));
+    } catch (error) {
+      if (error instanceof CtApiError && error.status === 404) live = null;
+      else {
+        throw new ExternalReferenceError({
+          reason: "EXTERNAL_READ_FAILED",
+          type: external.type,
+          key: external.key,
+          site,
+          context: this.context,
+          binding: external,
+          evidence: [
+            `Inspected external state binding ${external.type}.${external.key} -> #${external.id}.`,
+            `The live item read failed: ${error instanceof Error ? error.message : String(error)}.`,
+          ],
+          consequence:
+            "Consumer plan/apply is blocked before writes; the consumer will not create or repair the owner's object.",
+          remediation: [{ description: "Restore live read access or retry after the transient failure." }],
+          verification: planVerification(this.context.environment),
+        });
+      }
+    }
+    if (live === null) {
+      throw new ExternalReferenceError({
+        reason: "EXTERNAL_BINDING_STALE",
+        type: external.type,
+        key: external.key,
+        site,
+        context: this.context,
+        binding: external,
+        evidence: [
+          `Inspected external state binding ${external.type}.${external.key} -> #${external.id}.`,
+          `The registry item read ${spec.itemPath(external.id)} returned 404 / no row.`,
+        ],
+        consequence:
+          "Consumer plan/apply is blocked before writes; the consumer will not recreate the missing owner's object.",
+        remediation: external.owner
+          ? [
+              {
+                description: `Run plan in owner project ${JSON.stringify(external.owner)} and repair its stale state/object first.`,
+              },
+            ]
+          : [
+              {
+                description:
+                  "Locate the owner project and run its plan before changing this consumer binding.",
+              },
+            ],
+        verification: planVerification(this.context.environment),
+      });
+    }
+    const identity = spec.external.identity(live);
+    const diff = identityDifferences(external.identity, identity);
+    if (diff.length > 0) {
+      const command = useBindingCommand(external.type, external.id, external.key, this.context.environment);
+      throw new ExternalReferenceError({
+        reason: "EXTERNAL_IDENTITY_MISMATCH",
+        type: external.type,
+        key: external.key,
+        site,
+        context: this.context,
+        binding: external,
+        identityDiff: diff,
+        evidence: [
+          `Inspected external state binding ${external.type}.${external.key} -> #${external.id}.`,
+          "The live object exists, but its registry-defined hard identity differs from the stored snapshot.",
+        ],
+        consequence:
+          "Consumer plan/apply is blocked before writes; display-only changes would not block, but hard identity changes require explicit acceptance.",
+        remediation: [
+          { command, description: "Review the field diff and confirm accepting the live identity." },
+        ],
+        verification: planVerification(this.context.environment),
+      });
+    }
+    return external.id;
+  }
+
+  private candidate(type: string, row: CatalogRecord): ExternalCandidate {
+    const spec = resourceType(type);
+    return {
+      id: row.id,
+      name: typeof row.name === "string" ? row.name : `#${row.id}`,
+      identity: spec.external.identity(row),
+      display: spec.external.display(row),
+    };
+  }
+
+  private async requireExternalBinding(type: string, r: SimpleRef, site: string): Promise<never> {
+    let rows: CatalogRecord[];
+    try {
+      rows = await this.catalog(r.kind);
+    } catch (error) {
+      throw new ExternalReferenceError({
+        reason: "EXTERNAL_READ_FAILED",
+        type,
+        key: r.key,
+        site,
+        context: this.context,
+        evidence: [
+          `Inspected managed state and external state; neither contains a ${type} binding for key ${JSON.stringify(r.key)}.`,
+          `Live discovery at ${resourceType(type).collectionPath} failed: ${error instanceof Error ? error.message : String(error)}.`,
+        ],
+        consequence:
+          "Consumer plan/apply is blocked before writes; the consumer will not create or repair the owner's object.",
+        remediation: [{ description: "Restore collection read access, then create the explicit binding." }],
+        verification: planVerification(this.context.environment),
+      });
+    }
+    const bySlug = rows.filter((row) => typeof row.name === "string" && slug(row.name) === r.key);
+    const matches = bySlug.length > 0 ? bySlug : rows.filter((row) => row.name === r.key);
+    const candidates = matches.map((row) => this.candidate(type, row));
+    const reason = candidates.length > 1 ? "EXTERNAL_BINDING_AMBIGUOUS" : "EXTERNAL_BINDING_MISSING";
+    const remediation =
+      candidates.length > 0
+        ? candidates.map((candidate) => ({
+            command: useBindingCommand(type, candidate.id, r.key, this.context.environment),
+            description: `Bind ${JSON.stringify(candidate.name)} read-only in this consumer.`,
+          }))
+        : [
+            {
+              description:
+                "Apply the owner project first, correct the logical key, or use `ct use` with the intended live id.",
+            },
+          ];
+    throw new ExternalReferenceError({
+      reason,
+      type,
+      key: r.key,
+      site,
+      context: this.context,
+      candidates,
+      evidence: [
+        `Inspected managed state and external state; neither contains a ${type} binding for key ${JSON.stringify(r.key)}.`,
+        candidates.length === 0
+          ? `Live discovery at ${resourceType(type).collectionPath} found no matching candidate.`
+          : `Live discovery found ${candidates.length} matching candidate(s), but plan is read-only and cannot persist or consume an ephemeral binding.`,
+      ],
+      consequence:
+        "Consumer plan/apply is blocked before writes; the consumer will not create, adopt, or repair the owner's object.",
+      remediation,
+      verification: planVerification(this.context.environment),
+    });
   }
 
   /**
@@ -343,7 +471,7 @@ export class Resolver {
     site: string,
     opts: ResolveOptions = {},
   ): Promise<number | PendingRef> {
-    const groupId = this.groupIdForRole(r, site, opts);
+    const groupId = await this.groupIdForRole(r, site, opts);
     if (typeof groupId !== "number") return groupId;
     const rows = await this.groupRoleList(groupId);
     // #106 made a same-run GROUP resolve as pending. #120: the ROLE half needs the same treatment.
@@ -388,7 +516,9 @@ export class Resolver {
     if (!this.declaresRoleNamed(r.role)) return false;
     const declaredTypes = this.declaredRoleDefTypes.get(slug(r.role));
     if (declaredTypes === undefined) return true; // declared, but on no stated group type
-    const groupTypeId = this.state.resources[r.group]?.fields.groupTypeId;
+    const groupTypeId =
+      this.state.resources[r.group]?.fields.groupTypeId ??
+      externalResources(this.state)[r.group]?.identity.groupTypeId;
     if (typeof groupTypeId !== "number") return true; // this host's state cannot say — stay lenient
     for (const t of declaredTypes) {
       // A group-type Ref that is itself pending cannot be this existing group's type, so a non-number
@@ -469,7 +599,11 @@ export class Resolver {
    * declared in this run resolves to a {@link PendingRef} when the call site can finish it later
    * (#106) and stays a hard error otherwise.
    */
-  private groupIdForRole(r: GroupRoleRef, site: string, opts: ResolveOptions): number | PendingRef {
+  private async groupIdForRole(
+    r: GroupRoleRef,
+    site: string,
+    opts: ResolveOptions,
+  ): Promise<number | PendingRef> {
     const managed = this.state.resources[r.group];
     if (managed && managed.type === "group") return managed.id;
     if (this.declaredByType.get("group")?.has(r.group)) {
@@ -480,10 +614,10 @@ export class Resolver {
           `the group does. Apply the group first, then re-run, or pass a numeric id.`,
       );
     }
-    throw new Error(
-      `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: no managed group named ` +
-        `"${r.group}" is declared or adopted. Declare/adopt it, fix the key, or pass a numeric id.`,
-    );
+    const external = externalResources(this.state)[r.group];
+    if (external?.type === "group") return this.resolveBoundExternal(external, site);
+    const simple: SimpleRef = { __ctRef: true, kind: "group", key: r.group };
+    return this.requireExternalBinding("group", simple, site);
   }
 
   /**
@@ -608,17 +742,6 @@ export class Resolver {
   }
 
   private notFound(r: SimpleRef, site: string): Error {
-    // group-status (#67, reviewer follow-up): a `groupStatusId: ref.status(...)` value bypasses the
-    // eval-time guard in src/config/context.ts (the id-field escape hatch accepts any Ref) and lands
-    // here. The generic "declare/adopt it, fix the key" advice below is actively wrong for
-    // group-status — there is no such managed resource type and no catalog to adopt against — so
-    // give the same actionable message the eval-time guard uses instead (shared constant so the two
-    // sites can't drift).
-    if (r.kind === "group-status") {
-      return new Error(
-        `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: ${GROUP_STATUS_NO_CATALOG}`,
-      );
-    }
     const catalog = CATALOG_PATH[r.kind];
     // A catalog-only kind has no managed resource type, so "Declare/adopt it" is advice the tool
     // cannot honour (#96's exact complaint about the old person-status message). The message says

@@ -7,8 +7,9 @@ code, and reconcile it against the ChurchTools API with Terraform-style
 **`plan` / `apply`**.
 
 > **People are never managed.** This tool touches only the scaffold, and only
-> resources that are _explicitly_ declared or adopted. Everything else is
-> invisible: never shown, never changed, never proposed for deletion.
+> ct-cli resources that are _explicitly_ declared or adopted. External
+> bindings are read-only prerequisites: they may be resolved and validated,
+> but are never changed or proposed for deletion.
 
 ## Why
 
@@ -213,9 +214,14 @@ ct auth status                # who am I? (`--env <name>` asks on another instan
 
 ct get groups                 # JSON to stdout — pipe into jq (every page, not just the first)
 ct adopt campus 0             # bring ONE existing resource under management
+ct unadopt campus mainz --env prod # stop managing it; keep the live object
+ct use group 4711 --key shared_group # bind an existing object read-only
+ct unuse group shared_group --env prod # remove the binding; keep the live object
 ct coverage                   # what the instance has that the config does not manage
-ct state list                 # what is managed
-ct state rm campus mainz      # un-adopt: drop it from state. Never touches ChurchTools.
+ct state list                 # managed and external entries, explicitly labelled
+ct state rm campus mainz      # low-level repair escape hatch; typed confirmation required
+ct state rekey group old new  # rename a logical key; update every ref.* use too
+ct ownership check .. --env prod # validate visible owner/consumer projects
 ct plan                       # diff the config against ChurchTools (read-only)
 ct plan --format markdown     # plain-language review report (German by default)
 ct apply                      # create + update in dependency order (confirm + backup first)
@@ -231,14 +237,19 @@ printed — only the login token and its host reach the Keychain. There is delib
 Windows there is no Keychain to store anything in, so the prompt is not offered at all:
 export `CT_HOST` and `CT_LOGINTOKEN` there.
 
-`state rm` is the inverse of `adopt`, and only of `adopt`: it removes the entry
-from the state file, makes no HTTP call, and leaves the resource in place in
-ChurchTools, now unmanaged. It refuses a key the config still declares — that
-would make the next plan propose creating a resource that already exists — so
-delete the declaration first, or pass `--force` to do both in one change.
-"Declares" covers permission declarations too, not only resources: a key named
-by a `ct.groupRole` domain or a group scope is just as broken to remove, and the
-refusal is what keeps that from surfacing one command later as a plan error.
+Use `unuse` for external bindings and `unadopt` for managed ownership. Both
+commands make no HTTP call, leave the ChurchTools object in place, fail closed
+when the config cannot be inspected, and refuse a key that remains declared or
+referenced. They show a preview and require the environment name to be typed;
+automation must pass an exactly matching `--confirm-env <name>`. `--force`
+overrides only the config-reference guard, never the typed confirmation.
+
+`state rm` remains a low-level repair escape hatch for either state partition.
+It performs the same typed confirmation and a best-effort config-reference
+check, warning when a broken config cannot be inspected, and points at `unuse`
+or `unadopt` as the normal lifecycle command. A project without a named
+environment types the logical key instead (or supplies `--confirm-key <key>` in
+automation). `--dry-run` never needs confirmation and writes nothing.
 
 `apply` reconciles **creates and updates** only, saving state after each action
 (crash-safe / resumable). It **never deletes**: a resource dropped from the
@@ -290,6 +301,9 @@ ct apply --env prod    # protected env: type the env name to confirm
 - [**CI usage**](docs/ci.md) — the auth model and token-from-secret setup,
   `--detailed-exitcode`, Markdown/JSON plan projections, deterministic sidecar
   names, drift-vs-config attribution, and copy-pasteable PR artifacts.
+- [**External ct-cli resources**](docs/external-resources.md) — the terminology
+  boundary, read-only `ct use` workflow, identity checks, state operations, and
+  cross-project ownership analysis.
 
 ## Guardrails (by design)
 

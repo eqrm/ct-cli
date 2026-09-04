@@ -6,11 +6,14 @@ import { summarize, type Plan, type PlanAction } from "../../engine/types.js";
 import { CATALOG_DIR, loadHostCatalog } from "../../permissions/catalog-store.js";
 import { buildPermissionPlan, type PermissionPlanItem } from "../../permissions/plan.js";
 import { Resolver } from "../../resolve/resolver.js";
+import { ExternalReferenceError } from "../../resolve/external.js";
 import { loadState, type State } from "../../state/state.js";
 import type { CtClient } from "../../api/ctClient.js";
 import type { CtWarning, OperationResult, ProjectRequest } from "../contracts.js";
 import { noopObserver, type OperationObserver } from "../ports.js";
 import { resolveProject, type ProjectResolutionDependencies } from "../project.js";
+import { CtApplicationError } from "../errors.js";
+import type { JsonValue } from "../contracts.js";
 
 export type PlanRequest = ProjectRequest;
 
@@ -120,20 +123,39 @@ export async function buildPlanContext(
     state,
     desired,
     host: project.host,
+    context: {
+      consumer: project.cwd.split(/[\\/]/).filter(Boolean).at(-1),
+      cwd: project.cwd,
+      configPath: project.configPath,
+      statePath: project.statePath,
+      environment: project.environment,
+    },
   });
 
   observer.emit({ type: "phase-started", phase: "build-plan" });
-  const [resourceResult, permissionResult] = await Promise.all([
-    (dependencies.buildPlan ?? buildPlan)(client, state, desired, { configDir, resolver }),
-    (dependencies.buildPermissionPlan ?? buildPermissionPlan)(
-      client,
-      state,
-      permissions,
-      desired,
-      resolver,
-      client.version ?? undefined,
-    ),
-  ]);
+  let resourceResult: Awaited<ReturnType<typeof buildPlan>>;
+  let permissionResult: Awaited<ReturnType<typeof buildPermissionPlan>>;
+  try {
+    [resourceResult, permissionResult] = await Promise.all([
+      (dependencies.buildPlan ?? buildPlan)(client, state, desired, { configDir, resolver }),
+      (dependencies.buildPermissionPlan ?? buildPermissionPlan)(
+        client,
+        state,
+        permissions,
+        desired,
+        resolver,
+        client.version ?? undefined,
+      ),
+    ]);
+  } catch (error) {
+    if (error instanceof ExternalReferenceError) {
+      throw new CtApplicationError("EXTERNAL_REFERENCE_BLOCKED", error.message, {
+        details: error.details as unknown as Record<string, JsonValue>,
+        cause: error,
+      });
+    }
+    throw error;
+  }
   const fetchErrors = [...resourceResult.fetchErrors, ...permissionResult.fetchErrors];
   const warnings: CtWarning[] = permissionResult.warnings.map((message) => ({
     code: "PERMISSION_CATALOG",

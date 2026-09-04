@@ -31,7 +31,11 @@ const originalHost = process.env.CT_HOST;
 const originalConfig = process.env.CT_CONFIG;
 
 async function run(args: string[]): Promise<void> {
-  await stateCommand().parseAsync(["rm", ...args], { from: "user" });
+  const key = args[1];
+  await stateCommand().parseAsync(
+    ["rm", ...args, ...(key && !args.includes("--dry-run") ? ["--confirm-key", key] : [])],
+    { from: "user" },
+  );
 }
 
 /** A state file holding two adopted role definitions and one campus. */
@@ -92,6 +96,15 @@ afterEach(async () => {
 });
 
 describe("ct state rm (#122)", () => {
+  it("requires typed confirmation before the low-level state mutation", async () => {
+    await stateCommand().parseAsync(["rm", "group", "youth", "--state", statePath], {
+      from: "user",
+    });
+    expect(process.exitCode).toBe(1);
+    expect((await loadState(statePath, HOST)).resources.youth).toBeDefined();
+    process.exitCode = 0;
+  });
+
   it("removes the entry and contacts nothing", async () => {
     await run(["group-role", "appmodule_write", "--state", statePath]);
     const state = await loadState(statePath, HOST);
@@ -115,7 +128,7 @@ describe("ct state rm (#122)", () => {
       `export default (ct) => { ct.groupRole({ key: "youth_leiter", group: "youth", role: "Leiter", grants: ["churchcore:administer settings"] }); };`,
     );
     await expect(run(["group", "youth", "--state", statePath])).rejects.toThrow(
-      /still declared in the config/,
+      /still declared or referenced in the config/,
     );
     const state = await loadState(statePath, HOST);
     expect(state.resources.youth).toBeDefined();
@@ -127,7 +140,7 @@ describe("ct state rm (#122)", () => {
       `export default (ct) => { ct.groupRole({ key: "p", id: 77, grants: [{ right: "churchgroup:view group", scope: ["youth"] }] }); };`,
     );
     await expect(run(["group", "youth", "--state", statePath])).rejects.toThrow(
-      /still declared in the config/,
+      /still declared or referenced in the config/,
     );
     const state = await loadState(statePath, HOST);
     expect(state.resources.youth).toBeDefined();
@@ -149,7 +162,7 @@ describe("ct state rm (#122)", () => {
       `export default (ct) => { ct.roleDefinition({ key: "appmodule_write", name: "Write", groupTypeId: 2 }); };`,
     );
     await expect(run(["group-role", "appmodule_write", "--state", statePath])).rejects.toThrow(
-      /still declared in the config/,
+      /still declared or referenced in the config/,
     );
     const state = await loadState(statePath, HOST);
     expect(state.resources.appmodule_write).toBeDefined();

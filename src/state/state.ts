@@ -1,9 +1,9 @@
 /**
- * The state file: the set of **explicitly managed** resources.
+ * The state file: explicitly managed ct-cli resources plus read-only external bindings.
  *
- * Everything not in here is invisible to the tool — never shown, never changed,
- * never proposed for deletion. It maps a logical key → CT id + the last-known
- * snapshot of the fields we manage (the desired-state baseline for diffing).
+ * `resources` maps owned logical keys to ids and managed-field snapshots;
+ * `externals` maps consumer keys to ids and minimal hard-identity snapshots. Only
+ * the first partition participates in apply/destroy.
  *
  * The file belongs to the config repo (eqrm/ct-structure) and is meant to be
  * committed. Default path is `ct-state.json` in the cwd; override with
@@ -43,11 +43,27 @@ export interface ManagedResource {
   memberFields?: Record<string, number>;
 }
 
+/** A read-only host binding. It is never part of desired/apply/destroy inputs. */
+export interface ExternalResource {
+  type: string;
+  id: number;
+  key: string;
+  /** Optional coordination hint; ownership checks derive the real owner from visible managed states. */
+  owner?: string;
+  /** Minimal registry-defined hard identity. Display-only fields are deliberately not persisted. */
+  identity: Record<string, unknown>;
+  /** Creation time of this binding. Verification and identity acceptance never change it. */
+  boundAt: string;
+}
+
 export interface State {
-  version: 1;
+  /** Version 1 is accepted on in-memory test/adapter inputs; files always load/save as version 2. */
+  version: 1 | 2;
   host: string;
   /** Keyed by logical key (e.g. "mainz", "mainz_kids_lead"). */
   resources: Record<string, ManagedResource>;
+  /** Keyed by the same globally unique logical-key namespace as {@link resources}. */
+  externals?: Record<string, ExternalResource>;
 }
 
 export const DEFAULT_STATE_PATH = "ct-state.json";
@@ -66,7 +82,7 @@ export function resolveStatePath(
 }
 
 export function emptyState(host: string): State {
-  return { version: 1, host, resources: {} };
+  return { version: 2, host, resources: {}, externals: {} };
 }
 
 /**
@@ -109,7 +125,7 @@ function validateState(parsed: unknown, path: string): State {
     throw new Error(`Malformed state file ${path}: expected a JSON object at the top level.`);
   }
   const obj = parsed as Record<string, unknown>;
-  if (obj.version !== 1) {
+  if (obj.version !== 1 && obj.version !== 2) {
     throw new Error(`Unsupported state file version ${String(obj.version)} in ${path}`);
   }
   if (typeof obj.host !== "string" || obj.host === "") {
@@ -118,7 +134,61 @@ function validateState(parsed: unknown, path: string): State {
   if (typeof obj.resources !== "object" || obj.resources === null || Array.isArray(obj.resources)) {
     throw new Error(`Malformed state file ${path}: "resources" must be an object.`);
   }
+  if (
+    obj.version === 2 &&
+    (typeof obj.externals !== "object" || obj.externals === null || Array.isArray(obj.externals))
+  ) {
+    throw new Error(`Malformed state file ${path}: "externals" must be an object in version 2.`);
+  }
+  validateManagedEntries(obj.resources as Record<string, unknown>, path);
+  if (obj.version === 2) validateExternalEntries(obj.externals as Record<string, unknown>, path);
   return obj as unknown as State;
+}
+
+function entryObject(value: unknown, label: string, path: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Malformed state file ${path}: ${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function validateCommonEntry(
+  key: string,
+  value: unknown,
+  label: string,
+  path: string,
+): Record<string, unknown> {
+  const entry = entryObject(value, label, path);
+  if (entry.key !== key) {
+    throw new Error(`Malformed state file ${path}: ${label}.key must equal its map key "${key}".`);
+  }
+  if (typeof entry.type !== "string" || entry.type === "") {
+    throw new Error(`Malformed state file ${path}: ${label}.type must be a non-empty string.`);
+  }
+  if (typeof entry.id !== "number" || !Number.isSafeInteger(entry.id) || entry.id < 0) {
+    throw new Error(`Malformed state file ${path}: ${label}.id must be a non-negative safe integer.`);
+  }
+  return entry;
+}
+
+function validateManagedEntries(resources: Record<string, unknown>, path: string): void {
+  for (const [key, value] of Object.entries(resources)) {
+    const entry = validateCommonEntry(key, value, `resources.${key}`, path);
+    entryObject(entry.fields, `resources.${key}.fields`, path);
+  }
+}
+
+function validateExternalEntries(externals: Record<string, unknown>, path: string): void {
+  for (const [key, value] of Object.entries(externals)) {
+    const entry = validateCommonEntry(key, value, `externals.${key}`, path);
+    entryObject(entry.identity, `externals.${key}.identity`, path);
+    if (typeof entry.boundAt !== "string" || entry.boundAt === "") {
+      throw new Error(`Malformed state file ${path}: externals.${key}.boundAt must be a non-empty string.`);
+    }
+    if (entry.owner !== undefined && (typeof entry.owner !== "string" || entry.owner === "")) {
+      throw new Error(`Malformed state file ${path}: externals.${key}.owner must be a non-empty string.`);
+    }
+  }
 }
 
 /**
@@ -149,11 +219,58 @@ function migrateState(state: State): State {
       delete fields.shortName;
     }
   }
+  if (state.version === 1) {
+    state.version = 2;
+    state.externals = {};
+  } else if (!state.externals) {
+    state.externals = {};
+  }
+  assertStateKeyUniqueness(state);
   return state;
 }
 
 export async function saveState(path: string, state: State): Promise<void> {
-  await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  assertStateKeyUniqueness(state);
+  const persisted: State = { ...state, version: 2, externals: state.externals ?? {} };
+  await writeFile(path, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+}
+
+/** External entries, normalized for legacy in-memory callers. */
+export function externalResources(state: State): Record<string, ExternalResource> {
+  return state.externals ?? (state.externals = {});
+}
+
+/** Managed then external, matching the resolver's precedence. */
+export function findByKey(state: State, key: string): ManagedResource | ExternalResource | undefined {
+  return state.resources[key] ?? externalResources(state)[key];
+}
+
+export function findExternalByTypeId(state: State, type: string, id: number): ExternalResource | undefined {
+  return Object.values(externalResources(state)).find((r) => r.type === type && r.id === id);
+}
+
+export function assertStateKeyUniqueness(state: State): void {
+  for (const key of Object.keys(externalResources(state))) {
+    if (state.resources[key]) {
+      throw new Error(`Logical key "${key}" is used by both a managed and an external entry.`);
+    }
+  }
+  const seen = new Map<string, string>();
+  for (const [kind, entries] of [
+    ["managed", Object.values(state.resources)],
+    ["external", Object.values(externalResources(state))],
+  ] as const) {
+    for (const entry of entries) {
+      const identity = `${entry.type}\0${entry.id}`;
+      const prior = seen.get(identity);
+      if (prior) {
+        throw new Error(
+          `${entry.type} #${entry.id} appears more than once in state (${prior} and ${kind} "${entry.key}").`,
+        );
+      }
+      seen.set(identity, `${kind} "${entry.key}"`);
+    }
+  }
 }
 
 /** Find a managed entry by CT type + id (id may legitimately be 0). */
@@ -219,6 +336,19 @@ export type UpsertAction = "created" | "updated";
  * A key already taken by a *different* resource is a conflict, not an overwrite.
  */
 export function upsert(state: State, input: UpsertInput, now: string): UpsertAction {
+  const externalCollision = externalResources(state)[input.key];
+  if (externalCollision) {
+    throw new Error(
+      `Logical key "${input.key}" is already used by external ${externalCollision.type} #${externalCollision.id}. ` +
+        `Remove or rekey that binding first.`,
+    );
+  }
+  const externalAlias = findExternalByTypeId(state, input.type, input.id);
+  if (externalAlias) {
+    throw new Error(
+      `${input.type} #${input.id} is already external as "${externalAlias.key}". Remove that binding before adopting it.`,
+    );
+  }
   const existing = findByTypeId(state, input.type, input.id);
   const collision = state.resources[input.key];
   if (collision && !(collision.type === input.type && collision.id === input.id)) {

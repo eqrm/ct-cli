@@ -6,8 +6,8 @@ sources:
   - src/engine/dynamic.ts
   - src/engine/synthetic.ts
   - src/application/operations/adopt-group.ts
-sources_hash: e38b8c0f6032d5cc
-reviewed: 2026-08-28
+sources_hash: d916ad2a6a75aed1
+reviewed: 2026-08-29
 ---
 
 # Auto-groups (dynamic groups)
@@ -157,19 +157,23 @@ no-op — it does not re-`PUT` on every apply). Two equivalent ways to author it
   { "==": [{ "var": "ctgroup.campusId" }, { "__ctRef": true, "kind": "campus", "key": "mainz" }] }
   ```
 
-  Simple marker `kind`s carry a single `key` (the logical key / slug):
-  `campus`, `group`, `group-type`. A **role** (`role.id`) uses the compound
+  Simple marker `kind`s carry a single logical `key`, including `campus`,
+  `group`, `group-type`, and `group-status`. Registry-backed keys resolve from
+  managed state or a persisted external binding; an unbound live catalog match
+  is diagnostic only and blocks plan until `ct use` records the binding. A group
+  status is the read-only exception and resolves directly from
+  `/person/masterdata.groupStatuses` (#157). A **role** (`role.id`) uses the compound
   `group-type-role` marker instead — `{ "__ctRef": true, "kind":
 "group-type-role", "groupType": "<group-type-key>", "role": "<role-name>" }` —
   because a ruleset's `role.id` is a **groupTypeRoleId** (a role scoped to a
   group type), and role names are not globally unique (see the table note
   below). See `ref` in `src/resolve/refs.ts`.
 
-**Escape hatch — raw numeric ids pass through untouched.** A query that
-references an _operational_ group outside the managed scaffold (no logical key to
-resolve against) can keep the plain number; you then own its per-environment
-correctness. This mirrors the permission scope escape hatch (#49): prefer a
-reference, fall back to a number where no managed key exists.
+**Escape hatch — raw numeric ids pass through untouched.** A query can keep a
+plain number, but you then own its per-environment correctness. For a shared
+top-level object, prefer `ct use <type> <id> --key <key>` plus a logical
+reference: the consumer can resolve it without gaining create/update/delete
+authority. This mirrors the permission scope escape hatch (#49).
 
 #### Auto-rewrite on capture (default since #101; was `--portable-rulesets`, #76)
 
@@ -210,14 +214,15 @@ position that maps to a **managed** logical key is rewritten to its `{ __ctRef }
 marker; every other id is left numeric. The `var → RefKind` catalog it keys off
 (`VAR_REF_KINDS`) is:
 
-| ChurchQuery `var`     | marker `kind`     | source catalog / state                             |
-| --------------------- | ----------------- | -------------------------------------------------- |
-| `ctgroup.id`          | `group`           | managed state (no REST catalog)                    |
-| `ctgroup.campusId`    | `campus`          | `/campuses`                                        |
-| `person.campusId`     | `campus`          | `/campuses`                                        |
-| `ctgroup.groupTypeId` | `group-type`      | `/group/grouptypes`                                |
-| `role.id`             | `group-type-role` | `/group/roles` (by `groupTypeId` + name)           |
-| `role.id`             | `role-def`        | managed state — only when the pair collides (#125) |
+| ChurchQuery `var`       | marker `kind`     | source catalog / state                             |
+| ----------------------- | ----------------- | -------------------------------------------------- |
+| `ctgroup.id`            | `group`           | managed state (no REST catalog)                    |
+| `ctgroup.campusId`      | `campus`          | `/campuses`                                        |
+| `person.campusId`       | `campus`          | `/campuses`                                        |
+| `ctgroup.groupTypeId`   | `group-type`      | `/group/grouptypes`                                |
+| `ctgroup.groupStatusId` | `group-status`    | `/person/masterdata` → `groupStatuses`             |
+| `role.id`               | `group-type-role` | `/group/roles` (by `groupTypeId` + name)           |
+| `role.id`               | `role-def`        | managed state — only when the pair collides (#125) |
 
 The same `group-type-role` rewrite also covers the **out-of-query** integer
 field `process.*.handleMembership.groupTypeRoleId` (the target role a
@@ -305,7 +310,7 @@ At **capture** time (`ct adopt … --with-dynamic`) the state file and the
 ```text
 ! rulesets/jugend.json keeps 5 host-specific id(s) — NOT portable to another host:
     ctgroup.id: 1246 left numeric — not under management — `ct adopt group <id>` for each (then re-adopt) makes them portable
-    ctgroup.groupStatusId: 1, 2 left numeric — group statuses have no REST catalog (#67) — no logical form exists
+    ctgroup.groupStatusId: 99 left numeric — no group-status catalog row on this host carries these ids
     person.id: 5703, 4389 left numeric — person ids are NEVER portable — ct does not manage people, so this ruleset names DIFFERENT people on another host. Remove the clause or accept the divergence
 ```
 
@@ -345,9 +350,9 @@ reason it never checked:
 
 The capture-time reasons are distinct because the fixes are: an **unmanaged**
 target (adopt it), a **role unknown to `/group/roles`**, a role whose **group
-type is unmanaged**, or a dimension with **no logical form at all**
-(`ctgroup.groupStatusId` — group statuses have no REST catalog, #67; this one
-needs no lookup, so the plan-time scan reports it too).
+type is unmanaged**, or an **unknown group-status id**. Group statuses normally
+resolve through `/person/masterdata.groupStatuses`; an id absent from that live
+catalog stays numeric and is reported.
 
 **`--strict-rulesets`** turns the warning into a refusal: adopt writes nothing
 if the ruleset would still contain a host-specific id. Use it in a repo that has

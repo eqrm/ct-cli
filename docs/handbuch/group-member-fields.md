@@ -1,5 +1,5 @@
 ---
-sources_hash: c18b710bff24503d
+sources_hash: 40c5ba58b340b1ce
 title: Group member fields
 sources:
   - src/engine/member-fields.ts
@@ -7,7 +7,7 @@ sources:
   - src/config/context.ts
   - src/application/operations/adopt-group.ts
   - src/application/operations/destroy.ts
-reviewed: 2026-08-28
+reviewed: 2026-08-29
 ---
 
 # Group member fields (#135, #158)

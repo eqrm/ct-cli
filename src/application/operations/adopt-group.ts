@@ -405,6 +405,7 @@ export async function runAdoptGroups(
     if (opts.withDynamic && opts.portableRulesets !== false) {
       portableCatalogMaps.campus = await reverse.idToKeyByKind("campus");
       portableCatalogMaps["group-type"] = await reverse.idToKeyByKind("group-type");
+      portableCatalogMaps["group-status"] = await reverse.idToKeyByKind("group-status");
       groupTypeIdToKey = portableCatalogMaps["group-type"];
       roleCatalog = await reverse.roleGroupTypeCatalog();
     }

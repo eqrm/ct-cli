@@ -50,11 +50,11 @@ where it was used. Raw numeric ids remain a valid escape hatch everywhere; see
 [`examples/portable.config.ts`](https://github.com/eqrm/ct-cli/blob/main/examples/portable.config.ts)
 for a zero-numeric-id config.
 
-**Exception: `groupStatusId` (a group's lifecycle status) is numeric-only,
-always.** ChurchTools exposes no REST catalog to resolve a status by name
-(`/group/memberstatus` is a different dimension, member statuses; #67), so a
-`status:` declaration fails fast at eval time rather than resolving against the
-wrong dimension.
+For a group's lifecycle status, prefer the stable technical name, for example
+`status: "active"`. ct resolves it through
+`/person/masterdata.groupStatuses`. Numeric `groupStatusId` remains supported as
+a backward-compatible escape hatch. This catalog is distinct from
+`/group/memberstatus` (membership statuses) and `/statuses` (person statuses).
 
 ## Campus assignment
 

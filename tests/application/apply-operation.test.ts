@@ -10,6 +10,7 @@ import { PreparedOperationStore } from "../../src/application/prepared-operation
 import type { Clock } from "../../src/application/ports.js";
 import type { Plan } from "../../src/engine/types.js";
 import { emptyState } from "../../src/state/state.js";
+import { ExternalReferenceError } from "../../src/resolve/external.js";
 
 const host = "https://example.church.tools";
 const statePath = "/project/ct-state.prod.json";
@@ -93,6 +94,34 @@ async function expectCode(promise: Promise<unknown>, code: CtApplicationError["c
 }
 
 describe("prepared apply operation", () => {
+  it("blocks before backup and writes when an external prerequisite diagnostic is raised", async () => {
+    const test = harness();
+    const diagnostic = new ExternalReferenceError({
+      reason: "EXTERNAL_BINDING_MISSING",
+      type: "group",
+      key: "shared",
+      site: 'group "consumer".parents',
+      context: { host, consumer: "consumer", environment: "prod" },
+      evidence: ["No persisted external binding exists."],
+      consequence: "Apply is blocked before writes.",
+      remediation: [{ command: "ct use group 77 --key shared", description: "Bind the live group." }],
+      verification: "ct plan --env prod",
+    });
+    test.dependencies.buildPlan = vi.fn(async () => {
+      throw diagnostic;
+    });
+
+    await expect(prepareApply({}, test.dependencies)).rejects.toMatchObject({
+      code: "EXTERNAL_REFERENCE_BLOCKED",
+      details: {
+        reason: "EXTERNAL_BINDING_MISSING",
+        remediation: [{ command: "ct use group 77 --key shared" }],
+      },
+    });
+    expect(test.backup).not.toHaveBeenCalled();
+    expect(test.execute).not.toHaveBeenCalled();
+  });
+
   it("requires the exact protected environment and writes the backup before resources", async () => {
     const test = harness();
     const prepared = await prepareApply({}, test.dependencies);

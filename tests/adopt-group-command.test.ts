@@ -49,6 +49,10 @@ function makeClient(childrenResponse: ChildrenResponse = "array") {
   // dispatcher with other tests exercising member statuses, and to prove it's never fetched for a
   // plain group adopt (see the assertion in the --with-dynamic capture test below).
   const campuses = [{ id: 0, name: "Mainz" }];
+  const groupStatuses = [
+    { id: 1, name: "active", nameTranslated: "Aktiv" },
+    { id: 2, name: "pending", nameTranslated: "Entwurf" },
+  ];
   const memberStatuses = [{ id: 1, name: "Aktiv" }];
   // Global role catalog (/group/roles), each row carrying its `groupTypeId` — used to portablize a
   // `role.id` groupTypeRoleId into a (group-type, role-name) marker (#76). Role 7 is a "Leiter" on
@@ -137,7 +141,10 @@ function makeClient(childrenResponse: ChildrenResponse = "array") {
     m = /^\/groups\/(\d+)\/memberfields$/.exec(path);
     if (m) return memberFields[Number(m[1])] ?? [];
     if (path === "/group/grouptypes") return groupTypes;
+    if (path === "/group/grouptypes/5") return groupTypes[0];
     if (path === "/campuses") return campuses;
+    if (path === "/campuses/0") return campuses[0];
+    if (path === "/person/masterdata") return { groupStatuses };
     if (path === "/group/roles") return roles;
     if (path === "/group/memberstatus") return memberStatuses;
     m = /^\/dynamicgroups\/(\d+)\/ruleset$/.exec(path);
@@ -381,10 +388,8 @@ describe("ct adopt group --with-dynamic", () => {
     expect(block).toContain("dynamic: true,");
     // groupType is reverse-sugared to its logical key against the mocked catalog...
     expect(block).toContain('groupType: "team",');
-    // ...but groupStatusId is NOT (#67: no group-status catalog exists) — it stays numeric, with no
-    // TODO comment (a TODO only fires when a catalog exists but the id doesn't match anything in it).
-    expect(block).toContain("groupStatusId: 1,");
-    expect(block).not.toContain("status:");
+    expect(block).toContain('status: "active",');
+    expect(block).not.toContain("groupStatusId: 1,");
     expect(block).not.toContain("TODO");
     // And the group-status "catalog" is never fetched at all — there is no such catalog to fetch.
     expect(client.get).not.toHaveBeenCalledWith("/group/memberstatus");
@@ -463,8 +468,10 @@ describe("ct adopt group --with-dynamic --portable-rulesets (#76 Stage 3)", () =
     expect(and[2]!.oneof![1]).toEqual([
       { __ctRef: true, kind: "group-type-role", groupType: "team", role: "Leiter" },
     ]);
-    // groupStatusId has no catalog (#67) → left numeric, untouched.
-    expect(and[3]!.oneof![1]).toEqual([1, 2]);
+    expect(and[3]!.oneof![1]).toEqual([
+      { __ctRef: true, kind: "group-status", key: "active" },
+      { __ctRef: true, kind: "group-status", key: "pending" },
+    ]);
   });
 
   it("names every dimension it left numeric, with the reason (#101)", async () => {
@@ -485,7 +492,7 @@ describe("ct adopt group --with-dynamic --portable-rulesets (#76 Stage 3)", () =
     // Detail is id-free: formatPortablizeWarnings prints the ids once, ahead of it, so a detail
     // naming one id would be stamped across every id merged into the line.
     expect(warned).toMatch(/ctgroup\.id: 999 left numeric — not under management/);
-    expect(warned).toMatch(/ctgroup\.groupStatusId: 1, 2 left numeric — group statuses have no REST catalog/);
+    expect(warned).not.toMatch(/ctgroup\.groupStatusId/);
   });
 
   it("is ON by default since #101: a plain --with-dynamic capture emits ref markers", async () => {
@@ -548,15 +555,14 @@ describe("ct adopt group — idiomatic snippet round-trips to a no-op (#52 item 
     }
 
     // The printed block is a `// group` header + one idiomatic multi-line `group({ ... });` snippet
-    // with campusId/groupTypeId reverse-sugared to campus/groupType keys; groupStatusId has no
-    // catalog to reverse-sugar against (#67), so it stays numeric — not a TODO, just plain data.
+    // with every catalog-backed id reverse-sugared to its logical key.
     const block = writes.join("");
     const snippet = block.replace(/^\/\/ group\n/, "").trim();
     expect(snippet.startsWith("group({")).toBe(true);
     expect(snippet).toContain('campus: "mainz"'); // id 0 reverse-resolved
     expect(snippet).toContain('groupType: "team"');
-    expect(snippet).toContain("groupStatusId: 1");
-    expect(snippet).not.toContain("status:"); // never the group-status sugar (#67)
+    expect(snippet).toContain('status: "active"');
+    expect(snippet).not.toContain("groupStatusId: 1");
     expect(snippet).not.toContain("TODO"); // everything resolved — a clean, hand-edit-free paste
 
     // Paste it VERBATIM into a config (only wrapping boilerplate + the `ct.` receiver added).
@@ -566,6 +572,20 @@ describe("ct adopt group — idiomatic snippet round-trips to a no-op (#52 item 
     // Load it through the real loader and plan against the state the adopt just wrote.
     const { resources } = await loadConfig(configPath);
     const state = await loadState(statePath, HOST);
+    state.externals!.mainz = {
+      type: "campus",
+      id: 0,
+      key: "mainz",
+      identity: { name: "Mainz" },
+      boundAt: "t",
+    };
+    state.externals!.team = {
+      type: "group-type",
+      id: 5,
+      key: "team",
+      identity: { name: "Team" },
+      boundAt: "t",
+    };
     const { plan } = await buildPlan(client as unknown as Pick<CtClient, "get">, state, resources, {
       configDir: workDir,
     });
