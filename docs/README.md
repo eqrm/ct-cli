@@ -51,6 +51,7 @@ A page with no code behaviour to track declares `sources: []` plus a
 | Page                                                     | About                                                                                              |
 | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | [`adoption-contract.md`](adoption-contract.md)           | What else comes along when `ct adopt` adopts one resource — the five categories and their defaults |
+| [`external-resources.md`](external-resources.md)         | Read-only cross-project bindings, `ct use`, identity validation, state, and ownership checks       |
 | [`api-coverage.md`](api-coverage.md)                     | Which ChurchTools endpoints support which CRUD verbs                                               |
 | [`group-field-decisions.md`](group-field-decisions.md)   | Which group fields are managed vs. left to the CT UI, and why                                      |
 | [`runbook-manual-surface.md`](runbook-manual-surface.md) | What `ct` cannot automate today — where the write path is missing, and the manual steps around it  |

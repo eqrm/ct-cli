@@ -24,6 +24,9 @@ export type RefKind =
   | "security-level"
   | "comment-viewer"
   | "group-type"
+  | "age-group"
+  | "target-group"
+  | "relationship-type"
   | "group-status"
   | "person-status"
   | "role-def"
@@ -56,6 +59,9 @@ export interface SimpleRef {
     | "security-level"
     | "comment-viewer"
     | "group-type"
+    | "age-group"
+    | "target-group"
+    | "relationship-type"
     | "group-status"
     | "person-status"
     | "role-def"
@@ -203,6 +209,21 @@ export const ref = {
     __ctRef: true,
     kind: "group-type",
     key: requireKey("group-type", key),
+  }),
+  ageGroup: (key: string): SimpleRef => ({
+    __ctRef: true,
+    kind: "age-group",
+    key: requireKey("age-group", key),
+  }),
+  targetGroup: (key: string): SimpleRef => ({
+    __ctRef: true,
+    kind: "target-group",
+    key: requireKey("target-group", key),
+  }),
+  relationshipType: (key: string): SimpleRef => ({
+    __ctRef: true,
+    kind: "relationship-type",
+    key: requireKey("relationship-type", key),
   }),
   status: (key: string): SimpleRef => ({
     __ctRef: true,

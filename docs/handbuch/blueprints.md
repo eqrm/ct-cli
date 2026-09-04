@@ -4,8 +4,8 @@ sources:
   - src/config/context.ts
   - src/engine/graph.ts
   - src/engine/hierarchy.ts
-sources_hash: 6f4be8d3a93113ce
-reviewed: 2026-08-28
+sources_hash: 3effed6bfffdc517
+reviewed: 2026-08-29
 ---
 
 # Blueprints (parametrized, reusable config)
@@ -54,7 +54,10 @@ freshly-created id at apply time (tier ordering creates the campus first). `ct
 plan` renders it as `campusId = <campus:mainz (created this apply)>`.
 
 The same portability applies to the group type: `groupType: "ministry_team"`
-resolves against the live catalog per host, no hardcoded `groupTypeId`.
+resolves through that host's managed or explicitly external state, with no
+hardcoded `groupTypeId`. If another ct project owns it, bind it once per host
+with `ct use group-type <id> --key ministry_team`; plan never guesses from the
+live catalog.
 
 ```ts
 function kidsArea(ct: ConfigContext, campus: string): void {
@@ -225,20 +228,22 @@ per-group declaration order) → permission grants, for as many campuses as
 the loop instantiates, with no manual `parent:`/`dependsOn` bookkeeping
 beyond the `parents: [lead]` you'd write anyway.
 
-## The managed-parent typo guard
+## Parent-reference validation
 
-`parents` references are validated **at config-evaluation time**, before
-any plan or diff is computed (`validateReferences` in
-[`src/config/context.ts`](https://github.com/eqrm/ct-cli/blob/main/src/config/context.ts), run by
-`evaluateConfig`). Every key listed in a `parents` array must resolve to a
-`group` declared _somewhere in the same config_ — including inside a
-blueprint function called from the top-level export. A typo, a forgotten
-`kidsArea(ct, campus)` call, or a `parents` key pointing at a non-group
-resource throws immediately:
+`parents` references are checked in two stages. Config evaluation
+(`validateReferences` in
+[`src/config/context.ts`](https://github.com/eqrm/ct-cli/blob/main/src/config/context.ts)) immediately rejects a key
+that is declared as a non-group resource. A key not declared in this config is
+allowed to continue because it may name an external parent recorded in this
+host's state. Plan then resolves it as a group and validates a bound external's
+live hard identity before any write. A key in neither managed nor external state
+blocks plan with a copyable `ct use group <id> --key <key>` remedy when discovery
+finds a candidate.
 
 ```
-Group "berlin_kids_0_3" declares hierarchy parent "berlin_kids_laed", which is not declared in this config.
-Managed parents must reference a group by its key (omit unmanaged parents entirely).
+External prerequisite is not available
+resource: group "berlin_kids_laed"
+Consequence: Consumer plan/apply is blocked before writes.
 ```
 
 The same pass validates **group member field references** (#135): a
@@ -255,12 +260,13 @@ example `key: "stand_bewerbung"` plus `referenceName: "stand-bewerbung"`.
 Ruleset resolution follows that mapping; it never treats `-` and `_` as the
 same API identity.
 
-This matters more in a blueprint than in a hand-written flat config,
+This staged check matters more in a blueprint than in a hand-written flat config,
 because the `${campus}_`-prefixed key is itself computed
 (`` `${campus}_kids_lead` ``, not a literal string) — a copy-paste slip in
 one branch of a blueprint (e.g. reusing `mainz`'s lead key inside the
 `berlin` iteration) is exactly the kind of mistake this guard exists to
-catch before it ever reaches `ct plan` against a live instance.
+catch before any apply write. Locally declared wrong types fail offline; unknown
+keys are checked against host-bound state and ChurchTools during plan.
 
 ## Full example
 

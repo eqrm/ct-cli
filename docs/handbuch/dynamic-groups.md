@@ -6,8 +6,8 @@ sources:
   - src/engine/dynamic.ts
   - src/engine/synthetic.ts
   - src/application/operations/adopt-group.ts
-sources_hash: e38b8c0f6032d5cc
-reviewed: 2026-08-28
+sources_hash: efd69354990646f0
+reviewed: 2026-08-29
 ---
 
 # Auto-groups (dynamic groups)
@@ -157,19 +157,21 @@ no-op — it does not re-`PUT` on every apply). Two equivalent ways to author it
   { "==": [{ "var": "ctgroup.campusId" }, { "__ctRef": true, "kind": "campus", "key": "mainz" }] }
   ```
 
-  Simple marker `kind`s carry a single `key` (the logical key / slug):
-  `campus`, `group`, `group-type`. A **role** (`role.id`) uses the compound
+  Simple marker `kind`s carry a single logical `key`, including `campus`,
+  `group`, and `group-type`. The key resolves from managed state or a persisted
+  external binding; an unbound live catalog match is diagnostic only and blocks
+  plan until `ct use` records the binding. A **role** (`role.id`) uses the compound
   `group-type-role` marker instead — `{ "__ctRef": true, "kind":
 "group-type-role", "groupType": "<group-type-key>", "role": "<role-name>" }` —
   because a ruleset's `role.id` is a **groupTypeRoleId** (a role scoped to a
   group type), and role names are not globally unique (see the table note
   below). See `ref` in `src/resolve/refs.ts`.
 
-**Escape hatch — raw numeric ids pass through untouched.** A query that
-references an _operational_ group outside the managed scaffold (no logical key to
-resolve against) can keep the plain number; you then own its per-environment
-correctness. This mirrors the permission scope escape hatch (#49): prefer a
-reference, fall back to a number where no managed key exists.
+**Escape hatch — raw numeric ids pass through untouched.** A query can keep a
+plain number, but you then own its per-environment correctness. For a shared
+top-level object, prefer `ct use <type> <id> --key <key>` plus a logical
+reference: the consumer can resolve it without gaining create/update/delete
+authority. This mirrors the permission scope escape hatch (#49).
 
 #### Auto-rewrite on capture (default since #101; was `--portable-rulesets`, #76)
 

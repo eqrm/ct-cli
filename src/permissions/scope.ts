@@ -230,7 +230,10 @@ export async function resolveScopeRefs(
         continue; // unknown right — desiredTuples reports it with the catalog's own hint
       }
       for (const raw of g.scope) {
-        const entry = normalizeScopeEntry(raw, where);
+        let entry = normalizeScopeEntry(raw, where);
+        // Bare strings are the historical group-scope sugar. Pre-resolve them through the shared
+        // resolver too, so an external group binding works in exactly the same permission position.
+        if (typeof entry === "string" && scopeField === GROUP_SCOPE_FIELD) entry = ref.group(entry);
         if (!isRef(entry)) continue;
         const dimension = expectedDimension(entry, scopeField, where);
         const k = refKey(entry);
@@ -385,8 +388,14 @@ export function resolveScope(
     } else if (declaredGroupKeys.has(key)) {
       pending.push({ key, id: null, type: "group" });
     } else {
+      const external = refs?.get(refKey(ref.group(key)));
+      if (external?.id !== null && external?.id !== undefined) {
+        resolved.push({ key: String(external.id), id: external.id, numeric: true });
+        continue;
+      }
       throw new Error(
-        `Scope key "${key}" does not resolve to a managed group. Declare/adopt it, use a group already under management, or pass a raw numeric dataId if this right's scope is not a group (see the catalog's scopeField).`,
+        `Scope key "${key}" does not resolve to a managed or external group. Declare/adopt it, bind it with ` +
+          `\`ct use group <id> --key ${key}\`, or pass a raw numeric dataId if this right's scope is not a group.`,
       );
     }
   }

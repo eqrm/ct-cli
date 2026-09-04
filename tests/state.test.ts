@@ -155,8 +155,52 @@ describe("state.loadState", () => {
   });
 
   it("rejects an unsupported version", async () => {
-    await writeFile(statePath, JSON.stringify({ version: 2, host: HOST, resources: {} }), "utf8");
+    await writeFile(statePath, JSON.stringify({ version: 3, host: HOST, resources: {} }), "utf8");
     await expect(loadState(statePath, HOST)).rejects.toThrow(/Unsupported state file version/);
+  });
+
+  it("migrates version 1 in memory to version 2 with an empty externals map", async () => {
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        host: HOST,
+        resources: {
+          mainz: {
+            type: "campus",
+            id: 0,
+            key: "mainz",
+            fields: { name: "Mainz" },
+            adoptedAt: "t",
+            updatedAt: "t",
+          },
+        },
+      }),
+      "utf8",
+    );
+    const state = await loadState(statePath, HOST);
+    expect(state.version).toBe(2);
+    expect(state.externals).toEqual({});
+    expect(state.resources.mainz?.id).toBe(0);
+  });
+
+  it("rejects managed/external key collisions in version 2", async () => {
+    const common = { type: "campus", id: 0, key: "mainz" };
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        version: 2,
+        host: HOST,
+        resources: {
+          mainz: { ...common, fields: {}, adoptedAt: "t", updatedAt: "t" },
+        },
+        externals: {
+          mainz: { ...common, identity: { name: "Mainz" }, boundAt: "t" },
+        },
+      }),
+      "utf8",
+    );
+    await expect(loadState(statePath, HOST)).rejects.toThrow(/both a managed and an external/);
   });
 
   it("migrates a pre-rename campus snapshot: shortName → shorty (#17 item 4)", async () => {

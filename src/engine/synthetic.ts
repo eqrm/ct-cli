@@ -7,7 +7,7 @@
  */
 import type { CtClient } from "../api/ctClient.js";
 import { CtApiError } from "../api/ctClient.js";
-import type { State } from "../state/state.js";
+import { findByKey, type State } from "../state/state.js";
 import type { DesiredResource, FieldChange, Plan, PlanItem } from "./types.js";
 import { applyHierarchy, parentIdsByGroupId, type HierarchyEntry } from "./hierarchy.js";
 import { assertNotPeople } from "./guard.js";
@@ -124,9 +124,9 @@ export interface SyntheticField {
 }
 
 function resolveId(state: State, key: string): number {
-  const managed = state.resources[key];
-  if (!managed) throw new Error(`Cannot resolve parent "${key}" — not under management yet.`);
-  return managed.id;
+  const binding = findByKey(state, key);
+  if (!binding) throw new Error(`Cannot resolve parent "${key}" — no managed or external binding exists.`);
+  return binding.id;
 }
 
 /** `parents`: many-to-many group hierarchy, reconciled per-edge. Wraps the existing hierarchy helpers. */

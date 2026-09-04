@@ -39,10 +39,20 @@ type DynamicSource = (position: Position, partial: string) => Promise<string[]> 
  */
 const DYNAMIC_ARGUMENTS: Record<string, DynamicSource> = {
   "ct adopt type": () => resourceTypes(),
+  "ct unadopt type": () => resourceTypes(),
+  "ct use type": () => resourceTypes(),
+  "ct unuse type": () => resourceTypes(),
   "ct state rm type": () => resourceTypes(),
+  "ct state rekey type": () => resourceTypes(),
   // `ct state rm <type> <key>` refuses a key belonging to another type, so the type
   // already typed narrows the keys — completing into a guaranteed error helps nobody.
   "ct state rm key": async (position) => stateKeys(await statePathFor(position), position.positionals[0]),
+  "ct state rekey old-key": async (position) =>
+    stateKeys(await statePathFor(position), position.positionals[0]),
+  "ct unadopt key": async (position) =>
+    stateKeys(await statePathFor(position), position.positionals[0], "managed"),
+  "ct unuse key": async (position) =>
+    stateKeys(await statePathFor(position), position.positionals[0], "external"),
 };
 
 /**

@@ -137,7 +137,9 @@ function makeClient(childrenResponse: ChildrenResponse = "array") {
     m = /^\/groups\/(\d+)\/memberfields$/.exec(path);
     if (m) return memberFields[Number(m[1])] ?? [];
     if (path === "/group/grouptypes") return groupTypes;
+    if (path === "/group/grouptypes/5") return groupTypes[0];
     if (path === "/campuses") return campuses;
+    if (path === "/campuses/0") return campuses[0];
     if (path === "/group/roles") return roles;
     if (path === "/group/memberstatus") return memberStatuses;
     m = /^\/dynamicgroups\/(\d+)\/ruleset$/.exec(path);
@@ -566,6 +568,20 @@ describe("ct adopt group — idiomatic snippet round-trips to a no-op (#52 item 
     // Load it through the real loader and plan against the state the adopt just wrote.
     const { resources } = await loadConfig(configPath);
     const state = await loadState(statePath, HOST);
+    state.externals!.mainz = {
+      type: "campus",
+      id: 0,
+      key: "mainz",
+      identity: { name: "Mainz" },
+      boundAt: "t",
+    };
+    state.externals!.team = {
+      type: "group-type",
+      id: 5,
+      key: "team",
+      identity: { name: "Team" },
+      boundAt: "t",
+    };
     const { plan } = await buildPlan(client as unknown as Pick<CtClient, "get">, state, resources, {
       configDir: workDir,
     });

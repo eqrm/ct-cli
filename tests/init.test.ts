@@ -95,9 +95,10 @@ describe("initializeConfigRepository", () => {
       protected: true,
     });
     await expect(loadState(join(directory, statePath), "https://example.church.tools")).resolves.toEqual({
-      version: 1,
+      version: 2,
       host: "https://example.church.tools",
       resources: {},
+      externals: {},
     });
     await expect(access(join(directory, "ct-state.json"))).rejects.toMatchObject({ code: "ENOENT" });
   });

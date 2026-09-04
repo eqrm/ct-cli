@@ -334,13 +334,12 @@ describe("group_role symmetry: a same-run group DOES go pending and completes in
   });
 });
 
-describe("pending domain: a TRUE typo (key absent from config AND state AND catalog) still hard-errors (#69)", () => {
-  it("throws the resolver's unchanged notFound message — not a pending block", async () => {
-    // "strucktur" is neither declared, nor in state, nor a live catalog match → genuinely unresolvable.
+describe("pending domain: a TRUE typo (key absent from config and both state partitions) still hard-errors (#69)", () => {
+  it("reports the missing explicit external binding — not a pending block", async () => {
     const typoPerm: DesiredPermission = { ...strukturPerm, domainId: ref.groupType("strucktur") };
     const { client } = mockClient({ "/group/grouptypes": [{ id: STRUKTUR_TYPE_ID, name: "Struktur" }] });
     await expect(buildPermissionPlan(client, emptyState(HOST), [typoPerm], strukturType)).rejects.toThrow(
-      /Cannot resolve group-type:strucktur referenced at group_type_role "struktur_roles".domainId/,
+      /resource:\s+group-type "strucktur"[\s\S]*neither contains[\s\S]*ct use/,
     );
   });
 });

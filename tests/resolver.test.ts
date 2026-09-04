@@ -22,6 +22,17 @@ function stateWith(resources: State["resources"]): State {
   return { ...emptyState("https://x.church.tools"), resources };
 }
 
+function stateWithExternals(
+  externals: NonNullable<State["externals"]>,
+  host = "https://x.church.tools",
+): State {
+  return { ...emptyState(host), externals };
+}
+
+function external(type: string, key: string, id: number, identity: Record<string, unknown>) {
+  return { type, key, id, identity, boundAt: "t" };
+}
+
 const NO_DESIRED: DesiredResource[] = [];
 
 describe("Resolver.resolve", () => {
@@ -35,39 +46,85 @@ describe("Resolver.resolve", () => {
     expect(client.calls).toEqual({}); // state hit, no /campuses fetch
   });
 
-  it("resolves a campus from the live catalog by slug(name)", async () => {
-    const client = fakeClient({
-      "/campuses": [
-        { id: 3, name: "Berlin", shorty: "BE" },
-        { id: 5, name: "Mainz" },
-      ],
-    });
-    const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });
+  it("resolves an external campus only after validating its bound id live", async () => {
+    const client = fakeClient({ "/campuses/5": { id: 5, name: "Mainz", shorty: "MZ" } });
+    const state = stateWithExternals({ mainz: external("campus", "mainz", 5, { name: "Mainz" }) });
+    const r = new Resolver({ client, state, desired: NO_DESIRED });
     expect(await r.resolve(ref.campus("mainz"), "site")).toBe(5);
+    expect(client.calls).toEqual({ "/campuses/5": 1 });
   });
 
-  it("resolves a group type from the live catalog", async () => {
-    const client = fakeClient({ "/group/grouptypes": [{ id: 2, name: "Ministry Team" }] });
-    const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });
+  it("resolves an external group type", async () => {
+    const client = fakeClient({ "/group/grouptypes/2": { id: 2, name: "Ministry Team" } });
+    const state = stateWithExternals({
+      ministry_team: external("group-type", "ministry_team", 2, { name: "Ministry Team" }),
+    });
+    const r = new Resolver({ client, state, desired: NO_DESIRED });
     expect(await r.resolve(ref.groupType("ministry_team"), "site")).toBe(2);
   });
 
-  // PERSON statuses DO have a flat catalog (`GET /statuses`), unlike GROUP statuses in the test below (#90).
-  it("resolves a person status from the /statuses catalog by slug(name)", async () => {
+  it("blocks a changed hard identity with a field diff and acceptance command", async () => {
     const client = fakeClient({
-      "/statuses": [
-        { id: 0, name: "Unbekannt" },
-        { id: 4, name: "3 - Group Active" },
-        { id: 6, name: "5 - Core" },
-      ],
+      "/groups/9": { id: 9, name: "Renamed", information: { groupTypeId: 3, campusId: 99 } },
     });
-    const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });
+    const state = stateWithExternals({
+      team: external("group", "team", 9, { name: "Team", groupTypeId: 2 }),
+    });
+    const r = new Resolver({ client, state, desired: NO_DESIRED, host: "hostA" });
+    await expect(r.resolve(ref.group("team"), "ruleset")).rejects.toMatchObject({
+      details: {
+        reason: "EXTERNAL_IDENTITY_MISMATCH",
+        identityDiff: expect.arrayContaining([
+          expect.objectContaining({ field: "name", expected: "Team", actual: "Renamed" }),
+          expect.objectContaining({ field: "groupTypeId", expected: 2, actual: 3 }),
+        ]),
+      },
+      message: expect.stringContaining("ct use group 9 --key team"),
+    });
+  });
+
+  it("ignores display-only changes while validating a bound external", async () => {
+    const client = fakeClient({
+      "/groups/9": { id: 9, name: "Team", information: { groupTypeId: 2, campusId: 99, groupStatusId: 4 } },
+    });
+    const state = stateWithExternals({
+      team: external("group", "team", 9, { name: "Team", groupTypeId: 2 }),
+    });
+    const r = new Resolver({ client, state, desired: NO_DESIRED });
+    await expect(r.resolve(ref.group("team"), "ruleset")).resolves.toBe(9);
+  });
+
+  it("blocks a stale external id and directs repair to the owner, not ct use", async () => {
+    const client = fakeClient({});
+    const state = stateWithExternals({
+      team: { ...external("group", "team", 9, { name: "Team", groupTypeId: 2 }), owner: "master" },
+    });
+    const r = new Resolver({ client, state, desired: NO_DESIRED });
+    await expect(r.resolve(ref.group("team"), "ruleset")).rejects.toMatchObject({
+      details: { reason: "EXTERNAL_BINDING_STALE" },
+      message: expect.not.stringContaining("ct use group 9"),
+    });
+  });
+
+  // PERSON statuses DO have a flat catalog (`GET /statuses`), unlike GROUP statuses in the test below (#90).
+  it("resolves externally bound person statuses, including id 0", async () => {
+    const client = fakeClient({
+      "/statuses/0": { id: 0, name: "Unbekannt" },
+      "/statuses/4": { id: 4, name: "3 - Group Active" },
+      "/statuses/6": { id: 6, name: "5 - Core" },
+    });
+    const state = stateWithExternals({
+      unbekannt: external("person-status", "unbekannt", 0, { name: "Unbekannt" }),
+      "3_group_active": external("person-status", "3_group_active", 4, { name: "3 - Group Active" }),
+      "5 - Core": external("person-status", "5 - Core", 6, { name: "5 - Core" }),
+    });
+    const r = new Resolver({ client, state, desired: NO_DESIRED });
     expect(await r.resolve(ref.personStatus("3_group_active"), "site")).toBe(4);
     // Exact-name fallback, for a name that does not survive slugging cleanly.
     expect(await r.resolve(ref.personStatus("5 - Core"), "site")).toBe(6);
     // Status id 0 must come back as 0, not be mistaken for "unresolved".
     expect(await r.resolve(ref.personStatus("unbekannt"), "site")).toBe(0);
-    expect(client.calls["/statuses"]).toBe(1); // one fetch, memoized across all three
+    expect(client.calls["/statuses/0"]).toBe(1);
   });
 
   it("errors on a person-status ref with no catalog match", async () => {
@@ -125,17 +182,19 @@ describe("Resolver.resolve", () => {
       ],
     });
     const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED, host: "hostA" });
-    await expect(r.resolve(ref.campus("mainz"), 'group "g"')).rejects.toThrow(
-      /Ambiguous campus:mainz referenced at group "g" on hostA: 2 live campuss match/,
-    );
+    await expect(r.resolve(ref.campus("mainz"), 'group "g"')).rejects.toMatchObject({
+      details: { reason: "EXTERNAL_BINDING_AMBIGUOUS" },
+      message: expect.stringContaining("ct use campus 2 --key mainz"),
+    });
   });
 
   it("throws a clear error on an unknown reference (kind + key + site + host)", async () => {
     const client = fakeClient({ "/campuses": [{ id: 1, name: "Berlin" }] });
     const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED, host: "hostB" });
-    await expect(r.resolve(ref.campus("mainz"), 'group "g".campusId')).rejects.toThrow(
-      /Cannot resolve campus:mainz referenced at group "g".campusId on hostB/,
-    );
+    await expect(r.resolve(ref.campus("mainz"), 'group "g".campusId')).rejects.toMatchObject({
+      details: { reason: "EXTERNAL_BINDING_MISSING" },
+      message: expect.stringContaining('resource:    campus "mainz"'),
+    });
   });
 
   it("resolves a group_role (group, role) pair to the pairing domainId via the group's role list (#25)", async () => {
@@ -166,12 +225,12 @@ describe("Resolver.resolve", () => {
     );
   });
 
-  it("errors when a group_role names a group that isn't managed", async () => {
-    const client = fakeClient({});
+  it("errors when a group_role names a group without an external binding", async () => {
+    const client = fakeClient({ "/groups": [] });
     const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });
-    await expect(r.resolve(ref.groupRole("ghost", "Leiter"), 'perm "p"')).rejects.toThrow(
-      /no managed group named "ghost".*pass a numeric id/is,
-    );
+    await expect(r.resolve(ref.groupRole("ghost", "Leiter"), 'perm "p"')).rejects.toMatchObject({
+      details: { reason: "EXTERNAL_BINDING_MISSING", type: "group", key: "ghost" },
+    });
   });
 
   it("errors when a group_role names a same-run-declared (not-yet-created) group", async () => {
@@ -183,17 +242,21 @@ describe("Resolver.resolve", () => {
     );
   });
 
-  it("errors on a group ref with no managed match (groups have no catalog)", async () => {
-    const client = fakeClient({});
+  it("errors on an unbound group ref without consuming discovery", async () => {
+    const client = fakeClient({ "/groups": [] });
     const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });
-    await expect(r.resolve(ref.group("ghost"), "site")).rejects.toThrow(/no managed group named "ghost"/);
+    await expect(r.resolve(ref.group("ghost"), "site")).rejects.toMatchObject({
+      details: { reason: "EXTERNAL_BINDING_MISSING" },
+    });
   });
 
-  it("falls back to an exact-name secondary match when the slug misses", async () => {
+  it("reports an exact-name discovery match but still requires ct use", async () => {
     const client = fakeClient({ "/group/grouptypes": [{ id: 8, name: "K-9" }] });
     const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });
-    // slug("K-9") === "k_9", so ref.groupType("k_9") hits the slug path; "K-9" hits the exact path.
-    expect(await r.resolve(ref.groupType("K-9"), "site")).toBe(8);
+    await expect(r.resolve(ref.groupType("K-9"), "site")).rejects.toMatchObject({
+      details: { reason: "EXTERNAL_BINDING_MISSING" },
+      message: expect.stringContaining("ct use group-type 8 --key K-9"),
+    });
   });
 });
 
@@ -213,8 +276,16 @@ describe("Resolver.resolve — group-type-role (groupTypeRoleId, #76)", () => {
   ];
 
   it("resolves a (group-type, role) pair to its groupTypeRoleId, disambiguating same-named roles", async () => {
-    const client = fakeClient({ "/group/grouptypes": groupTypesCatalog, "/group/roles": rolesCatalog });
-    const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });
+    const client = fakeClient({
+      "/group/grouptypes/12": groupTypesCatalog[0],
+      "/group/grouptypes/2": groupTypesCatalog[1],
+      "/group/roles": rolesCatalog,
+    });
+    const state = stateWithExternals({
+      local_lead: external("group-type", "local_lead", 12, { name: "Local Lead" }),
+      team: external("group-type", "team", 2, { name: "Team" }),
+    });
+    const r = new Resolver({ client, state, desired: NO_DESIRED });
     // Same role NAME ("Leiter"), different group type → different id: the pair disambiguates.
     expect(await r.resolve(ref.groupTypeRole("local_lead", "Leiter"), "site")).toBe(84);
     expect(await r.resolve(ref.groupTypeRole("team", "Leiter"), "site")).toBe(16);
@@ -241,8 +312,9 @@ describe("Resolver.resolve — group-type-role (groupTypeRoleId, #76)", () => {
   });
 
   it("errors clearly when no role of that name exists on the group type (lists candidates)", async () => {
-    const client = fakeClient({ "/group/grouptypes": groupTypesCatalog, "/group/roles": rolesCatalog });
-    const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED, host: "hostA" });
+    const client = fakeClient({ "/group/grouptypes/2": groupTypesCatalog[1], "/group/roles": rolesCatalog });
+    const state = stateWithExternals({ team: external("group-type", "team", 2, { name: "Team" }) });
+    const r = new Resolver({ client, state, desired: NO_DESIRED, host: "hostA" });
     await expect(r.resolve(ref.groupTypeRole("team", "Ghost"), 'ruleset "r"')).rejects.toThrow(
       /group-type-role\(groupType=team, role=Ghost\) referenced at ruleset "r" on hostA: group type #2 has no role named "Ghost".*available: "Leiter", "Organisator".*pass a numeric id/is,
     );
@@ -250,13 +322,16 @@ describe("Resolver.resolve — group-type-role (groupTypeRoleId, #76)", () => {
 
   it("errors listing candidates when two roles on the same group type share the name (ambiguous)", async () => {
     const client = fakeClient({
-      "/group/grouptypes": groupTypesCatalog,
+      "/group/grouptypes/12": groupTypesCatalog[0],
       "/group/roles": [
         { id: 84, name: "Leiter", groupTypeId: 12 },
         { id: 800, name: "Leiter", groupTypeId: 12 }, // duplicate on the SAME group type
       ],
     });
-    const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED, host: "hostA" });
+    const state = stateWithExternals({
+      local_lead: external("group-type", "local_lead", 12, { name: "Local Lead" }),
+    });
+    const r = new Resolver({ client, state, desired: NO_DESIRED, host: "hostA" });
     await expect(r.resolve(ref.groupTypeRole("local_lead", "Leiter"), "site")).rejects.toThrow(
       /Ambiguous group-type-role\(groupType=local_lead, role=Leiter\).*2 roles on group type #12 match — "Leiter" \(#84\), "Leiter" \(#800\)/,
     );
@@ -265,9 +340,9 @@ describe("Resolver.resolve — group-type-role (groupTypeRoleId, #76)", () => {
   it("errors when the group-type key itself cannot be resolved", async () => {
     const client = fakeClient({ "/group/grouptypes": groupTypesCatalog, "/group/roles": rolesCatalog });
     const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED, host: "hostB" });
-    await expect(r.resolve(ref.groupTypeRole("ghost_type", "Leiter"), "site")).rejects.toThrow(
-      /Cannot resolve group-type:ghost_type referenced at site on hostB/,
-    );
+    await expect(r.resolve(ref.groupTypeRole("ghost_type", "Leiter"), "site")).rejects.toMatchObject({
+      details: { reason: "EXTERNAL_BINDING_MISSING", type: "group-type", key: "ghost_type" },
+    });
   });
 
   it("rejects a same-run-declared (not-yet-created) group type — id only exists once it does", async () => {
@@ -283,12 +358,14 @@ describe("Resolver.resolve — group-type-role (groupTypeRoleId, #76)", () => {
 describe("Resolver.resolveValue", () => {
   it("deep-rewrites refs to ids and fetches each catalog at most once", async () => {
     const client = fakeClient({
-      "/campuses": [
-        { id: 5, name: "Mainz" },
-        { id: 6, name: "Berlin" },
-      ],
+      "/campuses/5": { id: 5, name: "Mainz" },
+      "/campuses/6": { id: 6, name: "Berlin" },
     });
-    const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });
+    const state = stateWithExternals({
+      mainz: external("campus", "mainz", 5, { name: "Mainz" }),
+      berlin: external("campus", "berlin", 6, { name: "Berlin" }),
+    });
+    const r = new Resolver({ client, state, desired: NO_DESIRED });
     const value = {
       campusId: ref.campus("mainz"),
       query: {
@@ -305,7 +382,8 @@ describe("Resolver.resolveValue", () => {
       query: { or: [{ "==": [{ var: "ctgroup.campusId" }, 5] }, { "==": [{ var: "ctgroup.campusId" }, 6] }] },
       untouched: 42,
     });
-    expect(client.calls["/campuses"]).toBe(1); // cached across the two mainz refs + the berlin ref
+    expect(client.calls["/campuses/5"]).toBe(1); // cached across the two mainz refs
+    expect(client.calls["/campuses/6"]).toBe(1);
   });
 
   it("returns the original reference untouched when there are no refs", async () => {
@@ -343,10 +421,13 @@ describe("catalogs are read PAGINATED (#99 review)", () => {
     [{ id: 42, name: "Koblenz" }], // page 2 — invisible to a single `get`
   ];
 
-  it("resolves a campus that lives past CT's default first page", async () => {
+  it("discovers a campus past the default first page but still refuses an ephemeral binding", async () => {
     const client = pagingClient({ "/campuses": campusPages });
     const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });
-    expect(await r.resolve(ref.campus("koblenz"), "site")).toBe(42);
+    await expect(r.resolve(ref.campus("koblenz"), "site")).rejects.toMatchObject({
+      details: { reason: "EXTERNAL_BINDING_MISSING" },
+      message: expect.stringContaining("ct use campus 42 --key koblenz"),
+    });
     expect(client.calls["/campuses"]).toBe(1); // still fetched once per run
   });
 

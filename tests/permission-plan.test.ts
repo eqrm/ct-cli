@@ -8,11 +8,27 @@ import type { State } from "../src/state/state.js";
 const bundledForTest = { ...CATALOG };
 
 const state: State = {
-  version: 1,
+  version: 2,
   host: "h",
   resources: {
     kids_area: { type: "group", id: 42, key: "kids_area", fields: {}, adoptedAt: "t", updatedAt: "t" },
     other: { type: "group", id: 7, key: "other", fields: {}, adoptedAt: "t", updatedAt: "t" },
+  },
+  externals: {
+    core: {
+      type: "person-status",
+      id: 6,
+      key: "core",
+      identity: { name: "5 - Core" },
+      boundAt: "t",
+    },
+    group_active: {
+      type: "person-status",
+      id: 4,
+      key: "group_active",
+      identity: { name: "3 - Group Active" },
+      boundAt: "t",
+    },
   },
 };
 
@@ -471,11 +487,7 @@ describe("buildPermissionPlan", () => {
   it("resolves a status domain by person-status name and reconciles the -1 ALL sentinel idempotently", async () => {
     const client = {
       get: vi.fn(async (path: string) => {
-        if (path === "/statuses")
-          return [
-            { id: 4, name: "3 - Group Active" },
-            { id: 6, name: "5 - Core" },
-          ];
+        if (path === "/statuses/6") return { id: 6, name: "5 - Core" };
         if (path === "/permissions/status")
           return [
             {
@@ -494,13 +506,13 @@ describe("buildPermissionPlan", () => {
       {
         key: "core_login",
         domainType: "status",
-        domainId: ref.personStatus("5 - Core"),
+        domainId: ref.personStatus("core"),
         grants: [{ right: "churchcore:login to external system", scope: [-1] }],
       },
     ]);
     expect(fetchErrors).toEqual([]);
     expect(warnings).toEqual([]);
-    expect(items[0]?.domainId).toBe(6); // resolved from the /statuses catalog
+    expect(items[0]?.domainId).toBe(6);
     expect(items[0]?.diff.toPut).toEqual([]); // live -1 row matches the declaration
     expect(items[0]?.diff.toDelete).toEqual([]);
   });
@@ -508,7 +520,7 @@ describe("buildPermissionPlan", () => {
   it("proposes the status grant on a status that does not carry it yet", async () => {
     const client = {
       get: vi.fn(async (path: string) => {
-        if (path === "/statuses") return [{ id: 4, name: "3 - Group Active" }];
+        if (path === "/statuses/4") return { id: 4, name: "3 - Group Active" };
         if (path === "/permissions/status") return [];
         throw new Error(`unexpected path ${path}`);
       }),
@@ -517,7 +529,7 @@ describe("buildPermissionPlan", () => {
       {
         key: "group_active_login",
         domainType: "status",
-        domainId: ref.personStatus("3 - Group Active"),
+        domainId: ref.personStatus("group_active"),
         grants: [{ right: "churchcore:login to external system", scope: [-1] }],
       },
     ]);

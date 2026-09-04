@@ -131,7 +131,7 @@ describe("config context", () => {
     });
   });
 
-  it("rejects a hierarchy parent that is not a declared group", async () => {
+  it("rejects a declared non-group parent but permits a plan-time external group key", async () => {
     await expect(
       evaluateConfig((ct) => {
         ct.campus({ key: "mz", name: "Mainz" });
@@ -141,9 +141,9 @@ describe("config context", () => {
 
     await expect(
       evaluateConfig((ct) => {
-        ct.group({ key: "kids", name: "Kids", parents: ["ghost"] }); // never declared
+        ct.group({ key: "kids", name: "Kids", parents: ["shared_parent"] });
       }),
-    ).rejects.toThrow(/not declared in this config/);
+    ).resolves.toMatchObject({ resources: [expect.objectContaining({ parents: ["shared_parent"] })] });
   });
 
   it("rejects a duplicate logical key", () => {

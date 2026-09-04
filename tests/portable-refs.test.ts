@@ -36,12 +36,20 @@ function fakeHost(catalogs: Record<string, unknown>, postIds: Record<string, num
 const noSave = async (): Promise<void> => {};
 
 describe("buildPlan reference resolution", () => {
-  it("resolves a catalog groupType ref to a number so the diff stays number↔number", async () => {
+  it("resolves a bound external groupType ref to a number so the diff stays number↔number", async () => {
     const { resources } = await evaluateConfig((ct) => {
       ct.group({ key: "kids", name: "Kids", groupType: "ministry_team" });
     });
-    const client = fakeHost({ "/group/grouptypes": [{ id: 2, name: "Ministry Team" }] });
-    const { plan } = await buildPlan(client, emptyState("h"), resources);
+    const state = emptyState("h");
+    state.externals!.ministry_team = {
+      type: "group-type",
+      key: "ministry_team",
+      id: 2,
+      identity: { name: "Ministry Team" },
+      boundAt: "t",
+    };
+    const client = fakeHost({ "/group/grouptypes/2": { id: 2, name: "Ministry Team" } });
+    const { plan } = await buildPlan(client, state, resources);
     const item = plan.items.find((i) => i.key === "kids")!;
     expect(item.action).toBe("create");
     expect(item.changes).toContainEqual({ field: "groupTypeId", from: undefined, to: 2, source: "config" });
@@ -63,9 +71,9 @@ describe("buildPlan reference resolution", () => {
       ct.group({ key: "kids", name: "Kids", groupType: "ghost_type" });
     });
     const client = fakeHost({ "/group/grouptypes": [{ id: 2, name: "Ministry Team" }] });
-    await expect(buildPlan(client, emptyState("h"), resources)).rejects.toThrow(
-      /Cannot resolve group-type:ghost_type referenced at group "kids"/,
-    );
+    await expect(buildPlan(client, emptyState("h"), resources)).rejects.toMatchObject({
+      details: { reason: "EXTERNAL_BINDING_MISSING", type: "group-type", key: "ghost_type" },
+    });
   });
 });
 
@@ -175,12 +183,20 @@ describe("permission domainId resolution", () => {
     });
     const client = {
       get: async <T>(path: string): Promise<T> => {
-        if (path === "/group/grouptypes") return [{ id: 9, name: "Ministry Team" }] as T;
+        if (path === "/group/grouptypes/9") return { id: 9, name: "Ministry Team" } as T;
         if (path === "/permissions/group_type_role") return [] as T;
         throw new CtApiError(`not found: ${path}`, 404, null);
       },
     };
-    const { items } = await buildPermissionPlan(client, emptyState("h"), permissions);
+    const state = emptyState("h");
+    state.externals!.ministry_team = {
+      type: "group-type",
+      key: "ministry_team",
+      id: 9,
+      identity: { name: "Ministry Team" },
+      boundAt: "t",
+    };
+    const { items } = await buildPermissionPlan(client, state, permissions);
     expect(items).toHaveLength(1);
     expect(items[0]?.domainId).toBe(9); // resolved from the catalog, not a raw number
   });
@@ -192,12 +208,20 @@ describe("permission domainId resolution", () => {
     });
     const client = {
       get: async <T>(path: string): Promise<T> => {
-        if (path === "/group/grouptypes") return [{ id: 9, name: "Ministry Team" }] as T;
+        if (path === "/group/grouptypes/9") return { id: 9, name: "Ministry Team" } as T;
         if (path === "/permissions/group_type_role") return [] as T;
         throw new CtApiError(`not found: ${path}`, 404, null);
       },
     };
-    await expect(buildPermissionPlan(client, emptyState("h"), permissions)).rejects.toThrow(
+    const state = emptyState("h");
+    state.externals!.ministry_team = {
+      type: "group-type",
+      key: "ministry_team",
+      id: 9,
+      identity: { name: "Ministry Team" },
+      boundAt: "t",
+    };
+    await expect(buildPermissionPlan(client, state, permissions)).rejects.toThrow(
       /Duplicate permission target after resolution: group_type_role #9/,
     );
   });
@@ -258,8 +282,15 @@ describe("acceptance: one config, two hosts", () => {
   async function planFor(groupTypeId: number, state: State) {
     const { resources, permissions } = await evaluateConfig(config);
     const catalogs = {
-      "/group/grouptypes": [{ id: groupTypeId, name: "Ministry Team" }],
+      [`/group/grouptypes/${groupTypeId}`]: { id: groupTypeId, name: "Ministry Team" },
       "/permissions/group_type_role": [],
+    };
+    state.externals!.ministry_team = {
+      type: "group-type",
+      key: "ministry_team",
+      id: groupTypeId,
+      identity: { name: "Ministry Team" },
+      boundAt: "t",
     };
     const client = fakeHost(catalogs);
     const resolver = new Resolver({ client, state, desired: resources, host: state.host });
@@ -323,7 +354,7 @@ describe("portable ruleset snapshot files (#76)", () => {
   };
   writeFileSync(join(dir, rulesetFile), JSON.stringify(authoredRuleset));
 
-  /** State with only the (already-managed) dynamic group — the campus resolves from the live `/campuses` catalog. */
+  /** State with the managed dynamic group plus this host's explicit external campus binding. */
   function stateWithGroup(host: string): State {
     const s = emptyState(host);
     s.resources.all_mainz = {
@@ -333,6 +364,13 @@ describe("portable ruleset snapshot files (#76)", () => {
       fields: { name: "All", groupTypeId: 1 },
       adoptedAt: "t",
       updatedAt: "t",
+    };
+    s.externals!.mainz = {
+      type: "campus",
+      id: host.includes("dev") ? 42 : 7,
+      key: "mainz",
+      identity: { name: "Mainz" },
+      boundAt: "t",
     };
     return s;
   }
@@ -362,7 +400,7 @@ describe("portable ruleset snapshot files (#76)", () => {
       // group) so the manual ruleset is a create → a PUT on apply, whose body we can inspect.
       const client = fakeHost({
         "/groups/100": { name: "All", groupTypeId: 1 },
-        "/campuses": [{ id: campusId, name: "Mainz" }],
+        [`/campuses/${campusId}`]: { id: campusId, name: "Mainz" },
       });
       const { plan } = await buildPlan(client, state, resources, { configDir: dir });
       await executePlan(plan, { client, state, statePath: "s.json", save: noSave, now: () => "t" });
@@ -393,7 +431,7 @@ describe("portable ruleset snapshot files (#76)", () => {
     };
     const client = fakeHost({
       "/groups/100": { name: "All", groupTypeId: 1 },
-      "/campuses": [{ id: campusId, name: "Mainz" }],
+      [`/campuses/${campusId}`]: { id: campusId, name: "Mainz" },
       "/dynamicgroups/100/ruleset": [liveRuleset],
       "/dynamicgroups/100/status": { dynamicGroupStatus: "manual" },
     });

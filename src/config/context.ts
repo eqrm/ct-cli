@@ -647,10 +647,9 @@ function toDesired(type: string, input: ResourceInput, location?: string): Desir
 }
 
 /**
- * Every managed hierarchy parent must reference a group declared in the same config.
- * A parent that resolves to nothing (typo, unmanaged group) or to a non-group would
- * diff forever against the managed-only actual side, so reject it up front rather than
- * emit a plan that can never converge.
+ * A hierarchy parent may be declared in this config or supplied by an external group binding.
+ * Config evaluation can reject a known non-group immediately; unknown keys are deliberately left
+ * for the plan-time resolver/state validation, because external declarations live in per-host state.
  */
 function validateReferences(resources: DesiredResource[]): void {
   const byKey = new Map(resources.map((r) => [r.key, r]));
@@ -658,10 +657,7 @@ function validateReferences(resources: DesiredResource[]): void {
     for (const parentKey of r.parents ?? []) {
       const target = byKey.get(parentKey);
       if (!target) {
-        throw new Error(
-          `Group "${r.key}" declares hierarchy parent "${parentKey}", which is not declared in this config. ` +
-            `Managed parents must reference a group by its key (omit unmanaged parents entirely).`,
-        );
+        continue;
       }
       if (target.type !== "group") {
         throw new Error(

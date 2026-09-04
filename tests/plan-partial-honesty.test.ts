@@ -95,12 +95,20 @@ describe("plan degradation under 429 (#126)", () => {
       adoptedAt: "t",
       updatedAt: "t",
     };
+    state.externals!.parent = {
+      type: "group",
+      id: 20,
+      key: "parent",
+      identity: { name: "Parent" },
+      boundAt: "t",
+    };
     const desired: DesiredResource[] = [
       { type: "group", key: "child", fields: { name: "Child" }, dependsOn: [], parents: ["parent"] },
     ];
     const client = {
       get: async <T>(path: string): Promise<T> => {
         if (path === "/groups/10") return { name: "Child" } as T;
+        if (path === "/groups/20") return { name: "Parent" } as T;
         throw new CtApiError("GET /groups/hierarchies failed (HTTP 429)", 429, null);
       },
     };
