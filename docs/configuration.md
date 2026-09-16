@@ -1,5 +1,15 @@
 # Writing the config
 
+> **Frozen.** The TypeScript config DSL receives bugfixes only and is removed
+> in ct-cli 5.0. Its successor is
+> [terraform-provider-churchtools](https://github.com/eqrm/terraform-provider-churchtools),
+> an OpenTofu/Terraform provider that replaces the state file with tfstate and
+> the logical-key resolver with native resource references.
+>
+> Migrating needs no re-adoption: `ct export tf` generates HCL plus `import`
+> blocks from your existing state, so your keys and comments carry across and
+> the first `tofu plan` is a no-op.
+
 The desired state lives in a config file (default `ct.config.ts`) that
 default-exports a function receiving the DSL:
 
