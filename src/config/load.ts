@@ -9,6 +9,7 @@
 import { access } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createJiti } from "jiti";
+import { warnConfigDeprecated } from "./deprecation.js";
 import { evaluateConfig, type ConfigModule } from "./context.js";
 import type { DesiredResource } from "../engine/types.js";
 import type { DesiredPermission } from "../permissions/types.js";
@@ -36,6 +37,7 @@ export async function loadConfig(
         `Create it — it must default-export a function (ct) => { ... }.`,
     );
   }
+  warnConfigDeprecated();
   const jiti = createJiti(import.meta.url, { moduleCache: false });
   const mod = await jiti.import<ConfigModule>(resolved, { default: true });
   if (typeof mod !== "function") {
