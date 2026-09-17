@@ -6,7 +6,10 @@
       "type": "campus",
       "id": 0,
       "key": "hauptstandort",
-      "fields": { "name": "Hauptstandort", "shorty": "HS" },
+      "fields": {
+        "name": "Hauptstandort",
+        "shorty": "HS"
+      },
       "adoptedAt": "2026-01-01T00:00:00.000Z",
       "updatedAt": "2026-01-01T00:00:00.000Z"
     },
@@ -14,7 +17,10 @@
       "type": "campus",
       "id": 7,
       "key": "zweigstelle",
-      "fields": { "name": "Zweigstelle", "shorty": "ZW" },
+      "fields": {
+        "name": "Zweigstelle",
+        "shorty": "ZW"
+      },
       "adoptedAt": "2026-01-01T00:00:00.000Z",
       "updatedAt": "2026-01-01T00:00:00.000Z"
     },
@@ -22,7 +28,10 @@
       "type": "group-type",
       "id": 11,
       "key": "team",
-      "fields": { "name": "Team", "nameTranslated": "Team" },
+      "fields": {
+        "name": "Team",
+        "nameTranslated": "Team"
+      },
       "adoptedAt": "2026-01-01T00:00:00.000Z",
       "updatedAt": "2026-01-01T00:00:00.000Z"
     },
@@ -30,7 +39,10 @@
       "type": "group-type",
       "id": 12,
       "key": "3_aktiv",
-      "fields": { "name": "!3 Aktiv", "nameTranslated": "!3 Aktiv" },
+      "fields": {
+        "name": "!3 Aktiv",
+        "nameTranslated": "!3 Aktiv"
+      },
       "adoptedAt": "2026-01-01T00:00:00.000Z",
       "updatedAt": "2026-01-01T00:00:00.000Z"
     },
@@ -38,7 +50,11 @@
       "type": "department",
       "id": 3,
       "key": "bereich_musik",
-      "fields": { "name": "Bereich Musik", "shorty": "MU", "sortKey": 0 },
+      "fields": {
+        "name": "Bereich Musik",
+        "shorty": "MU",
+        "sortKey": 0
+      },
       "adoptedAt": "2026-01-01T00:00:00.000Z",
       "updatedAt": "2026-01-01T00:00:00.000Z"
     },
@@ -61,7 +77,35 @@
       "type": "comment-viewer",
       "id": 4,
       "key": "leitung",
-      "fields": { "name": "Leitung", "sortKey": 1 },
+      "fields": {
+        "name": "Leitung",
+        "sortKey": 1
+      },
+      "adoptedAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "aussenstelle": {
+      "type": "campus",
+      "id": 13,
+      "key": "aussenstelle",
+      "fields": {
+        "name": "Aussenstelle ${nord}",
+        "shorty": "AS"
+      },
+      "preventDestroy": true,
+      "adoptedAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "jugend": {
+      "type": "group",
+      "id": 42,
+      "key": "jugend",
+      "fields": {
+        "name": "Jugend",
+        "groupTypeId": 11,
+        "groupStatusId": 1,
+        "campusId": 0
+      },
       "adoptedAt": "2026-01-01T00:00:00.000Z",
       "updatedAt": "2026-01-01T00:00:00.000Z"
     }

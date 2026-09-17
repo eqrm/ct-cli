@@ -1,7 +1,64 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`golden export > renders a byte-stable set of import blocks 1`] = `
+exports[`golden export > renders byte-stable campuses.tf 1`] = `
+"resource "churchtools_campus" "aussenstelle" {
+  name   = "Aussenstelle $\${nord}"
+  shorty = "AS"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "churchtools_campus" "hauptstandort" {
+  name   = "Hauptstandort"
+  shorty = "HS"
+}
+
+resource "churchtools_campus" "zweigstelle" {
+  name   = "Zweigstelle"
+  shorty = "ZW"
+}
+"
+`;
+
+exports[`golden export > renders byte-stable comment-viewers.tf 1`] = `
+"resource "churchtools_comment_viewer" "leitung" {
+  name     = "Leitung"
+  sort_key = 1
+}
+"
+`;
+
+exports[`golden export > renders byte-stable departments.tf 1`] = `
+"resource "churchtools_department" "bereich_musik" {
+  name     = "Bereich Musik"
+  shorty   = "MU"
+  sort_key = 0
+}
+"
+`;
+
+exports[`golden export > renders byte-stable group-types.tf 1`] = `
+"resource "churchtools_group_type" "g_3_aktiv" {
+  name            = "!3 Aktiv"
+  name_translated = "!3 Aktiv"
+}
+
+resource "churchtools_group_type" "team" {
+  name            = "Team"
+  name_translated = "Team"
+}
+"
+`;
+
+exports[`golden export > renders byte-stable imports.tf 1`] = `
 "import {
+  to = churchtools_campus.aussenstelle
+  id = "13"
+}
+
+import {
   to = churchtools_campus.hauptstandort
   id = "0"
 }
@@ -38,45 +95,25 @@ import {
 "
 `;
 
-exports[`golden export > renders a byte-stable set of resource blocks 1`] = `
-"resource "churchtools_campus" "hauptstandort" {
-  name   = "Hauptstandort"
-  shorty = "HS"
-}
-
-resource "churchtools_campus" "zweigstelle" {
-  name   = "Zweigstelle"
-  shorty = "ZW"
-}
-
-resource "churchtools_comment_viewer" "leitung" {
-  name     = "Leitung"
-  sort_key = 1
-}
-
-resource "churchtools_department" "bereich_musik" {
-  name     = "Bereich Musik"
-  shorty   = "MU"
-  sort_key = 0
-}
-
-resource "churchtools_group_type" "g_3_aktiv" {
-  name            = "!3 Aktiv"
-  name_translated = "!3 Aktiv"
-}
-
-resource "churchtools_group_type" "team" {
-  name            = "Team"
-  name_translated = "Team"
-}
-
-resource "churchtools_person_status" "mitglied" {
+exports[`golden export > renders byte-stable person-statuses.tf 1`] = `
+"resource "churchtools_person_status" "mitglied" {
   name              = "Mitglied"
   shorty            = "M"
   is_member         = true
   is_searchable     = true
   sort_key          = 10
   security_level_id = 1
+}
+"
+`;
+
+exports[`golden export > renders byte-stable versions.tf 1`] = `
+"terraform {
+  required_providers {
+    churchtools = {
+      source = "eqrm/churchtools"
+    }
+  }
 }
 "
 `;
