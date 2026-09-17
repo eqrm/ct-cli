@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { runExportTf } from "../application/operations/export-tf.js";
-import { info } from "../ui.js";
+import { info, warn } from "../ui.js";
 
 interface ExportTfOptions {
   state?: string;
@@ -17,7 +17,7 @@ export function exportCommand(): Command {
     .option("--only <types...>", "restrict to these resource types (e.g. campus group-type)")
     .option("-o, --out <dir>", "output directory", "tofu")
     .action(async (opts: ExportTfOptions) => {
-      const { value } = await runExportTf({
+      const { value, warnings } = await runExportTf({
         statePath: opts.state,
         environment: opts.env,
         only: opts.only,
@@ -28,6 +28,9 @@ export function exportCommand(): Command {
         info(`relabelled "${r.key}" -> "${r.label}" (HCL references must be identifiers)`);
       }
       info(`${value.imported} resources exported`);
+      // Printed last, after the success line, so the gap is the final thing on
+      // screen rather than scrolled off above a list of written files.
+      for (const w of warnings) warn(w.message);
     });
 
   return new Command("export").description("Export managed state to other formats").addCommand(tf);

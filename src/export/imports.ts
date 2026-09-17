@@ -9,8 +9,8 @@ export interface ImportTarget {
 
 /**
  * `id` is stringified explicitly rather than passed through any truthiness
- * path: the Mainz campus is id 0, and dropping it would silently fail to
- * import exactly one resource.
+ * path: a campus can legitimately carry id 0, and a truthiness test would
+ * silently fail to import exactly that one resource.
  */
 export function renderImports(targets: readonly ImportTarget[]): string {
   return targets

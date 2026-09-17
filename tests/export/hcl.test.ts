@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { hclLabel, renderResource } from "../../src/export/hcl.js";
+import { assertLabelsUnique, hclLabel, hclString, renderResource } from "../../src/export/hcl.js";
 import { renderImports } from "../../src/export/imports.js";
 
 describe("hclLabel", () => {
   it("passes through identifier-safe keys", () => {
-    expect(hclLabel("team_kidsdienst")).toBe("team_kidsdienst");
+    expect(hclLabel("team_musik")).toBe("team_musik");
   });
 
   it("prefixes keys starting with a digit", () => {
@@ -12,16 +12,20 @@ describe("hclLabel", () => {
   });
 
   it("replaces characters HCL cannot reference", () => {
-    expect(hclLabel("mainz.kids")).toBe("mainz_kids");
+    expect(hclLabel("standort.kids")).toBe("standort_kids");
   });
 });
 
 describe("renderResource", () => {
   it("renders a campus block with quoted strings", () => {
-    expect(renderResource("campus", "mainz", { name: "Mainz", shorty: "MZ" })).toBe(
-      ['resource "churchtools_campus" "mainz" {', '  name   = "Mainz"', '  shorty = "MZ"', "}", ""].join(
-        "\n",
-      ),
+    expect(renderResource("campus", "hauptstandort", { name: "Hauptstandort", shorty: "HS" })).toBe(
+      [
+        'resource "churchtools_campus" "hauptstandort" {',
+        '  name   = "Hauptstandort"',
+        '  shorty = "HS"',
+        "}",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -56,9 +60,9 @@ describe("renderResource", () => {
 });
 
 describe("renderImports", () => {
-  it("keeps id 0 — the Mainz campus", () => {
-    expect(renderImports([{ type: "campus", key: "mainz", id: 0 }])).toBe(
-      ["import {", "  to = churchtools_campus.mainz", '  id = "0"', "}", ""].join("\n"),
+  it("keeps id 0 — a real, importable campus id", () => {
+    expect(renderImports([{ type: "campus", key: "hauptstandort", id: 0 }])).toBe(
+      ["import {", "  to = churchtools_campus.hauptstandort", '  id = "0"', "}", ""].join("\n"),
     );
   });
 
@@ -66,5 +70,55 @@ describe("renderImports", () => {
     expect(renderImports([{ type: "group-type", key: "3_groupactive", id: 12 }])).toContain(
       "to = churchtools_group_type.g_3_groupactive",
     );
+  });
+});
+
+describe("hclString", () => {
+  it("doubles the HCL interpolation sigils a JSON escape leaves alone", () => {
+    // `${` would otherwise be parsed as a template interpolation, not a name.
+    expect(hclString("Campus ${var.x}")).toBe('"Campus $${var.x}"');
+    expect(hclString("100%{if}")).toBe('"100%%{if}"');
+    expect(hclString('a "quoted" name')).toBe('"a \\"quoted\\" name"');
+  });
+});
+
+describe("assertLabelsUnique", () => {
+  it("names both keys when two collapse onto one address", () => {
+    expect(() =>
+      assertLabelsUnique([
+        { type: "campus", key: "standort.kids" },
+        { type: "campus", key: "standort_kids" },
+      ]),
+    ).toThrow(/"standort.kids" and "standort_kids" both render as churchtools_campus.standort_kids/);
+  });
+
+  it("allows the same label under different resource types", () => {
+    expect(() =>
+      assertLabelsUnique([
+        { type: "campus", key: "team" },
+        { type: "group-type", key: "team" },
+      ]),
+    ).not.toThrow();
+  });
+});
+
+describe("renderResource lifecycle", () => {
+  it("mirrors destroy protection into the generated block", () => {
+    expect(renderResource("campus", "a", { name: "A" }, { preventDestroy: true })).toBe(
+      [
+        'resource "churchtools_campus" "a" {',
+        '  name = "A"',
+        "",
+        "  lifecycle {",
+        "    prevent_destroy = true",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("emits no lifecycle block for an unprotected resource", () => {
+    expect(renderResource("campus", "a", { name: "A" })).not.toContain("lifecycle");
   });
 });
