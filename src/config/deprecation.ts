@@ -26,7 +26,10 @@ export function __resetDeprecationWarning(): void {
  * stderr, never stdout — stdout carries `--json` payloads that CI gates parse.
  */
 export function warnConfigDeprecated(env: NodeJS.ProcessEnv = process.env): void {
-  if (warned || env.CT_NO_DEPRECATION_WARNING === "1") return;
+  // Any non-empty value suppresses, the NO_COLOR convention: a CI author who
+  // writes CT_NO_DEPRECATION_WARNING=true means it, and silently ignoring that
+  // spelling is the kind of thing nobody debugs — they just live with the noise.
+  if (warned || (env.CT_NO_DEPRECATION_WARNING ?? "").trim() !== "") return;
   warned = true;
   process.stderr.write(
     "warning: the TypeScript config DSL is frozen and will be removed in ct-cli 5.0. " +

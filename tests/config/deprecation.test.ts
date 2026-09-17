@@ -1,4 +1,7 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../../src/config/load.js";
 import { __resetDeprecationWarning, warnConfigDeprecated } from "../../src/config/deprecation.js";
 
 afterEach(() => {
@@ -25,11 +28,18 @@ describe("TypeScript config DSL deprecation", () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it("can be suppressed so CI logs stay readable", () => {
-    vi.stubEnv("CT_NO_DEPRECATION_WARNING", "1");
+  it.each(["1", "true", "yes"])("can be suppressed with %s so CI logs stay readable", (value) => {
+    vi.stubEnv("CT_NO_DEPRECATION_WARNING", value);
     const spy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     warnConfigDeprecated();
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("still warns when the variable is set to an empty value", () => {
+    vi.stubEnv("CT_NO_DEPRECATION_WARNING", "");
+    const spy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    warnConfigDeprecated();
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it("writes to stderr, never stdout — stdout carries --json payloads", () => {
@@ -38,5 +48,15 @@ describe("TypeScript config DSL deprecation", () => {
     warnConfigDeprecated();
     expect(err).toHaveBeenCalledTimes(1);
     expect(outSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("the call site that makes the warning visible", () => {
+  it("fires when a config is loaded — the only DSL entry point", async () => {
+    __resetDeprecationWarning();
+    const spy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await loadConfig(join(dirname(fileURLToPath(import.meta.url)), "../fixtures/sample.config.ts"));
+    const message = spy.mock.calls.map((c) => String(c[0])).join("");
+    expect(message).toContain("frozen");
   });
 });
