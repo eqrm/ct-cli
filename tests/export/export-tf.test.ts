@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,6 +42,11 @@ afterEach(() => {
 async function exportInto(rows: Record<string, Row>, only?: string[]) {
   await stateWith(rows);
   return runExportTf({ cwd: dir, statePath: "ct-state.json", outDir: "tofu", only });
+}
+
+async function exportKeepingVersions(rows: Record<string, Row>) {
+  await stateWith(rows);
+  return runExportTf({ cwd: dir, statePath: "ct-state.json", outDir: "tofu", writeVersions: false });
 }
 
 describe("runExportTf", () => {
@@ -155,5 +160,54 @@ describe("runExportTf", () => {
   it("escapes HCL interpolation markers in exported names", async () => {
     await exportInto({ a: row("campus", "a", 1, { name: "Campus ${var.x}" }) });
     expect(await readFile(join(dir, "tofu", "campuses.tf"), "utf8")).toContain('"Campus $${var.x}"');
+  });
+});
+
+/**
+ * `versions.tf` is generated so the output is a runnable root module, which is
+ * right by default. But it is also the only file a consumer has a legitimate
+ * reason to own: a provider VERSION CONSTRAINT lives inside
+ * `required_providers`, and there is nowhere else to put one. Owning the file
+ * unconditionally therefore made pinning impossible — while the generated
+ * file's own comment says pinning belongs in the consumer's repo.
+ */
+describe("writeVersions: false", () => {
+  it("does not write versions.tf", async () => {
+    await exportKeepingVersions({ mainz: row("campus", "mainz", 0, { shorty: "MZ" }) });
+    const files = await readdir(join(dir, "tofu"));
+    expect(files).not.toContain("versions.tf");
+  });
+
+  it("leaves an existing versions.tf untouched rather than pruning it", async () => {
+    const pinned = [
+      "terraform {",
+      "  required_providers {",
+      '    churchtools = { source = "eqrm/churchtools", version = "~> 0.1" }',
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    await stateWith({ mainz: row("campus", "mainz", 0, { shorty: "MZ" }) });
+    const outDir = join(dir, "tofu");
+    await mkdir(outDir, { recursive: true });
+    await writeFile(join(outDir, "versions.tf"), pinned, "utf8");
+
+    await runExportTf({ cwd: dir, statePath: "ct-state.json", outDir: "tofu", writeVersions: false });
+
+    // Pruning deletes every OWNED file this run did not write. If versions.tf
+    // stayed owned while unwritten, the consumer's pin would be deleted — a
+    // worse outcome than overwriting it, because nothing would hint at why.
+    expect(await readFile(join(outDir, "versions.tf"), "utf8")).toBe(pinned);
+  });
+
+  it("does not report versions.tf among the written files", async () => {
+    const result = await exportKeepingVersions({ mainz: row("campus", "mainz", 0, { shorty: "MZ" }) });
+    expect(result.value.files).not.toContain("versions.tf");
+  });
+
+  it("still writes it by default", async () => {
+    await exportInto({ mainz: row("campus", "mainz", 0, { shorty: "MZ" }) });
+    const files = await readdir(join(dir, "tofu"));
+    expect(files).toContain("versions.tf");
   });
 });

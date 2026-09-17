@@ -7,6 +7,7 @@ interface ExportTfOptions {
   env?: string;
   only?: string[];
   out: string;
+  versions: boolean;
 }
 
 export function exportCommand(): Command {
@@ -16,12 +17,17 @@ export function exportCommand(): Command {
     .option("-e, --env <name>", "environment profile from ct.envs.json (host + state + token)")
     .option("--only <types...>", "restrict to these resource types (e.g. campus group-type)")
     .option("-o, --out <dir>", "output directory", "tofu")
+    .option(
+      "--no-versions",
+      "do not write or prune versions.tf — use when your repo owns it (e.g. to pin a provider version)",
+    )
     .action(async (opts: ExportTfOptions) => {
       const { value, warnings } = await runExportTf({
         statePath: opts.state,
         environment: opts.env,
         only: opts.only,
         outDir: opts.out,
+        writeVersions: opts.versions,
       });
       for (const file of value.files) info(`wrote ${opts.out}/${file}`);
       for (const r of value.relabelled) {
