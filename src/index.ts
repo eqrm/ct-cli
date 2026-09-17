@@ -4,6 +4,7 @@ import { authCommand } from "./commands/auth.js";
 import { getCommand } from "./commands/get.js";
 import { adoptCommand } from "./commands/adopt.js";
 import { stateCommand } from "./commands/state.js";
+import { exportCommand } from "./commands/export-tf.js";
 import { coverageCommand } from "./commands/coverage.js";
 import { permissionsCommand } from "./commands/permissions.js";
 import { reportCommand } from "./commands/report.js";
@@ -34,6 +35,7 @@ export function buildProgram(): Command {
   program.addCommand(getCommand());
   program.addCommand(adoptCommand());
   program.addCommand(stateCommand());
+  program.addCommand(exportCommand());
   program.addCommand(coverageCommand());
   program.addCommand(permissionsCommand());
   program.addCommand(reportCommand());
