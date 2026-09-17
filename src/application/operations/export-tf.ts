@@ -12,6 +12,20 @@ import { resolveProject } from "../project.js";
 export interface ExportTfRequest extends ProjectRequest {
   only?: string[];
   outDir: string;
+  /**
+   * Write (and own) `versions.tf`. Default true: the output is then a runnable
+   * root module, which is what a first-time migration needs.
+   *
+   * Set false when the consumer owns that file. A provider VERSION CONSTRAINT
+   * lives inside `required_providers` and has nowhere else to go, so owning
+   * the file unconditionally makes pinning impossible — and a consumer who
+   * puts a backend there loses it silently on the next export.
+   *
+   * When false, `versions.tf` also leaves the owned set: pruning deletes owned
+   * files this run did not write, which would otherwise delete the consumer's
+   * file outright — worse than overwriting it, because nothing hints at why.
+   */
+  writeVersions?: boolean;
 }
 
 export interface ExportTfValue {
@@ -105,11 +119,17 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
   }
   await writeFile(join(outDir, "imports.tf"), renderImports(imports), "utf8");
   written.push("imports.tf");
-  await writeFile(join(outDir, "versions.tf"), renderVersions(), "utf8");
-  written.push("versions.tf");
+  const writeVersions = request.writeVersions ?? true;
+  if (writeVersions) {
+    await writeFile(join(outDir, "versions.tf"), renderVersions(), "utf8");
+    written.push("versions.tf");
+  }
 
   // Prune only what this command owns, and only what it did not just write.
-  for (const file of OWNED_FILES) {
+  // `versions.tf` drops out of the owned set entirely when the consumer owns
+  // it — pruning it would delete their file rather than leave it alone.
+  const owned = writeVersions ? OWNED_FILES : OWNED_FILES.filter((f) => f !== "versions.tf");
+  for (const file of owned) {
     if (written.includes(file)) continue;
     await rm(join(outDir, file), { force: true });
   }

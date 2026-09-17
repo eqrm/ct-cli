@@ -8,7 +8,13 @@
  */
 export const PROVIDER_SOURCE = "eqrm/churchtools";
 
-/** No version constraint: the provider is pre-1.0 and pinning belongs in the user's repo. */
+/**
+ * No version constraint: the provider is pre-1.0.
+ *
+ * To pin one, own the file: `ct export tf --no-versions` leaves `versions.tf`
+ * alone (it is neither written nor pruned), so the constraint can live in your
+ * repo alongside a backend block.
+ */
 export function renderVersions(): string {
   return [
     "terraform {",
