@@ -39,10 +39,15 @@ import { hostSlug } from "../permissions/catalog-store.js";
 /**
  * Minimum spacing between two handshakes against one host. Waited out, never an error.
  *
- * This is the real brake, and the only one that scales with how fast a caller goes: 3s means at most
- * 20 handshakes a minute no matter how hard anything loops. That is the conservative end of what an
- * instance takes — a login handshake is heavier than a plain read, so sitting at the bottom of the
- * band is the right default rather than the top of it.
+ * This is the real brake for a SEQUENCE of invocations, and the only one that scales with how fast a
+ * caller goes: 3s means at most 20 handshakes a minute however hard one caller loops. That is the
+ * conservative end of what an instance takes — a login handshake is heavier than a plain read, so
+ * sitting at the bottom of the band is the right default rather than the top of it.
+ *
+ * It bounds a sequence, NOT a simultaneous burst — see "What it does not do" above. N processes that
+ * read the file at the same moment compute the same wait, sleep it together and fire in lockstep, so
+ * the ceiling the spacing enforces is 20*N a minute, and the recorded count grows by roughly one per
+ * round no matter how many fired. That is the case {@link MAX_PER_HOUR} is the only bound on.
  *
  * It is also close to free for CI, which is the case that pays it: a `ct plan` takes longer than 3s
  * on its own, so the wait is usually already elapsed by the time the next invocation asks.
@@ -51,12 +56,12 @@ export const MIN_INTERVAL_MS = 3_000;
 /**
  * Handshakes per rolling hour per host before `ct` refuses to add to the pile.
  *
- * Deliberately far above anything legitimate, because this is NOT the rate limiter — the spacing
- * above is. {@link MIN_INTERVAL_MS} already caps sustained traffic at 20 handshakes a minute, which
- * sits at the conservative end of what a ChurchTools instance tolerates (operator estimate: 20-30
- * requests a minute, possibly 40). Anything the spacing permits is by definition a rate the instance
- * is fine with, so an hourly cap that binds FIRST is not protecting the instance — it is just
- * failing commands that were never the problem.
+ * Deliberately far above anything legitimate, because for a serial caller this is NOT the rate
+ * limiter — the spacing above is. {@link MIN_INTERVAL_MS} already caps one looping caller at 20
+ * handshakes a minute, which sits at the conservative end of what a ChurchTools instance tolerates
+ * (operator estimate: 20-30 requests a minute, possibly 40). Anything the spacing permits serially
+ * is by definition a rate the instance is fine with, so an hourly cap that binds FIRST on that path
+ * is not protecting the instance — it is just failing commands that were never the problem.
  *
  * It bound first for a long time. The gate sits in `CtClient.performLogin`, so it covers EVERY ct
  * command, and on Linux and Windows there is no session cache at all (`sessionStore` is
@@ -64,9 +69,18 @@ export const MIN_INTERVAL_MS = 3_000;
  * failed a pipeline's 21st `ct plan`; even 120/hour is an average of 2 a minute, a tenth of what the
  * spacing already allows.
  *
- * So this is only the backstop for a process that has been hammering for an actual hour. 1000 is
- * just under the ~1200 the spacing physically permits, so it never binds on a pipeline of any
- * plausible size, while a genuine runaway still stops rather than running all day.
+ * So on the serial path this is only the backstop for a process that has been hammering for an
+ * actual hour: 1000 is just under the ~1200 the spacing physically permits, so it never binds on a
+ * pipeline of any plausible size, while a genuine runaway still stops rather than running all day.
+ *
+ * The concurrent path is the one this number is a real trade on, and it is a trade made with open
+ * eyes. Because the count under-reports by the parallelism factor, N parallel runaways reach the cap
+ * after ~MAX_PER_HOUR rounds of 3s regardless of N — so raising 120 -> 1000 stretches how long they
+ * hammer before ct refuses from ~6 minutes to ~50. That is accepted because the alternative, 120,
+ * demonstrably failed ordinary serial CI pipelines, which is a certain cost paid by every user
+ * against an uncertain one paid by a misconfigured few; the spacing still holds each individual
+ * process to 20/min throughout, and an operator who runs ct fanned out wide should be setting
+ * CT_NO_LOGIN_THROTTLE=1 and rate-limiting at the orchestrator instead.
  */
 export const MAX_PER_HOUR = 1000;
 const HOUR_MS = 60 * 60 * 1000;

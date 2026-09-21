@@ -156,6 +156,10 @@ The contract:
 
 - the credential goes to **stdout and nothing else does** — every message,
   warning and Keychain prompt is on stderr, so `$(ct auth token --raw)` is safe;
+- **every value in the object is a string**, so `data "external"` can consume it
+  as-is. `environment` is `""` — not `null` — when no `--env` was passed, which
+  is the default invocation; a `null` there fails inside the external provider
+  with a message about JSON types that names neither the command nor the field;
 - a failure writes **nothing** to stdout and exits non-zero, with the remedy
   named (`ct auth login --env <name>`);
 - printing to a **terminal is refused** unless `--allow-tty` — a credential in
