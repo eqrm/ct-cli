@@ -36,22 +36,39 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { hostSlug } from "../permissions/catalog-store.js";
 
-/** Minimum spacing between two handshakes against one host. Waited out, never an error. */
+/**
+ * Minimum spacing between two handshakes against one host. Waited out, never an error.
+ *
+ * This is the real brake, and the only one that scales with how fast a caller goes: 3s means at most
+ * 20 handshakes a minute no matter how hard anything loops. That is the conservative end of what an
+ * instance takes — a login handshake is heavier than a plain read, so sitting at the bottom of the
+ * band is the right default rather than the top of it.
+ *
+ * It is also close to free for CI, which is the case that pays it: a `ct plan` takes longer than 3s
+ * on its own, so the wait is usually already elapsed by the time the next invocation asks.
+ */
 export const MIN_INTERVAL_MS = 3_000;
 /**
  * Handshakes per rolling hour per host before `ct` refuses to add to the pile.
  *
- * Sized for a CI pipeline, not for `ct auth token` alone, because the gate sits in
- * `CtClient.performLogin` and therefore covers EVERY ct command. On Linux and Windows there is no
- * session cache at all (`sessionStore` is Keychain-only by design), so on CI each invocation costs
- * one handshake: at 20/hour a pipeline whose 21st `ct plan`/`ct get`/`ct apply` ran inside the hour
- * would start failing on ct's own error, somewhere it had always worked.
+ * Deliberately far above anything legitimate, because this is NOT the rate limiter — the spacing
+ * above is. {@link MIN_INTERVAL_MS} already caps sustained traffic at 20 handshakes a minute, which
+ * sits at the conservative end of what a ChurchTools instance tolerates (operator estimate: 20-30
+ * requests a minute, possibly 40). Anything the spacing permits is by definition a rate the instance
+ * is fine with, so an hourly cap that binds FIRST is not protecting the instance — it is just
+ * failing commands that were never the problem.
  *
- * The number that matters for the instance is the SPACING above — it already caps a runaway loop at
- * 20 handshakes a minute — so this is the backstop for a loop that keeps going, not the primary
- * brake. A loop reaches 120 in about six minutes; a real pipeline does not reach it at all.
+ * It bound first for a long time. The gate sits in `CtClient.performLogin`, so it covers EVERY ct
+ * command, and on Linux and Windows there is no session cache at all (`sessionStore` is
+ * Keychain-only by design) — so on CI each invocation costs one handshake. The original 20/hour
+ * failed a pipeline's 21st `ct plan`; even 120/hour is an average of 2 a minute, a tenth of what the
+ * spacing already allows.
+ *
+ * So this is only the backstop for a process that has been hammering for an actual hour. 1000 is
+ * just under the ~1200 the spacing physically permits, so it never binds on a pipeline of any
+ * plausible size, while a genuine runaway still stops rather than running all day.
  */
-export const MAX_PER_HOUR = 120;
+export const MAX_PER_HOUR = 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
 /** What a throttle needs from its caller. Injected so a client in a test never touches the disk. */

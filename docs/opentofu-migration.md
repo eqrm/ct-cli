@@ -170,7 +170,7 @@ _is_ needed, a cross-process brake keeps it from becoming a burst:
 
 - handshakes against one host are spaced at least 3s apart (waited out, not an
   error);
-- more than 120 in a rolling hour is refused, naming when the window frees up —
+- more than 1000 in a rolling hour is refused, naming when the window frees up —
   that is a runaway loop, and hammering a throttled instance only lengthens the
   outage for everyone on it;
 - `CT_NO_LOGIN_THROTTLE=1` disables it, for a CI job that knows it runs alone.
@@ -183,11 +183,13 @@ same instant are spaced no better than not at all.
 
 **The brake sits in the login handshake, so it covers every `ct` command**, not
 just `ct auth token` — and on Linux and Windows there is no session cache, so
-there each invocation is one handshake. That is why the hourly cap is 120 rather
-than a number sized for a credential helper alone: a pipeline should never reach
-it, while a runaway loop passes it in about six minutes. A CI job that runs more
-`ct` invocations than that against one host in an hour should set
-`CT_NO_LOGIN_THROTTLE=1`.
+there each invocation is one handshake.
+
+The 3s spacing is the part that protects the instance: it caps sustained traffic
+at 20 handshakes a minute however hard anything loops, which is the conservative
+end of what ChurchTools takes. The hourly cap is only a backstop for a process
+that has been hammering for an actual hour, so it is set well above anything the
+spacing permits — a pipeline of any plausible size never reaches it.
 
 A CI job otherwise needs none of this: it passes the token explicitly from a
 GitHub secret, which is already storage-free. This path exists for local
