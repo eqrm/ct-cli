@@ -24,6 +24,7 @@ interface PlanOptions {
   outputBase?: string;
   locale?: string;
   detailedExitcode?: boolean;
+  strictCatalog?: boolean;
 }
 
 function collectFormat(value: string, previous: string[]): string[] {
@@ -101,6 +102,10 @@ export function planCommand(): Command {
     .option("--output-base <path>", "write selected formats as <path>.txt/.json/.md")
     .option("--locale <locale>", "Markdown language: de-DE or en", "de-DE")
     .option(
+      "--strict-catalog",
+      "fail when a declared right or preserveUnknown dimension is absent from this host's permission catalog (default: skip it with a warning)",
+    )
+    .option(
       "--detailed-exitcode",
       "Terraform-style exit code: 0 = no changes, 1 = error, 2 = changes pending (resource or permission)",
     )
@@ -112,12 +117,18 @@ export function planCommand(): Command {
         configPath: opts.config,
         statePath: opts.state,
         environment: opts.env,
+        strictCatalog: opts.strictCatalog,
       });
       const { project, value } = result;
       const catalogPath = value.permissionCatalogPath
         ? relative(project.cwd, value.permissionCatalogPath)
         : null;
       if (catalogPath) info(`permission catalog: ${catalogPath}`);
+      // Said out loud for the same reason the catalog path is: a reference resolving through a
+      // committed map rather than through state or a live name is worth knowing before reading a diff.
+      if (value.tofuIdMapPath) {
+        info(`tofu id map: ${relative(project.cwd, value.tofuIdMapPath)}`);
+      }
 
       // Additive on top of the raw plan/permissions (#24) — existing consumers of `plan`/
       // `permissions` are unaffected. Every projection below consumes this one computation.

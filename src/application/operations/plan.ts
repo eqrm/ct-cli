@@ -3,8 +3,10 @@ import { authedSession, type AuthedSession } from "../../api/session.js";
 import { loadConfig } from "../../config/load.js";
 import { buildPlan } from "../../engine/build.js";
 import { summarize, type Plan, type PlanAction } from "../../engine/types.js";
+import { setStrictCatalog } from "../../permissions/catalog.js";
 import { CATALOG_DIR, loadHostCatalog } from "../../permissions/catalog-store.js";
 import { buildPermissionPlan, type PermissionPlanItem } from "../../permissions/plan.js";
+import { loadIdMap } from "../../resolve/idMap.js";
 import { Resolver } from "../../resolve/resolver.js";
 import { loadState, type State } from "../../state/state.js";
 import type { CtClient } from "../../api/ctClient.js";
@@ -12,7 +14,17 @@ import type { CtWarning, OperationResult, ProjectRequest } from "../contracts.js
 import { noopObserver, type OperationObserver } from "../ports.js";
 import { resolveProject, type ProjectResolutionDependencies } from "../project.js";
 
-export type PlanRequest = ProjectRequest;
+export interface PlanRequest extends ProjectRequest {
+  /**
+   * `--strict-catalog` (#178): treat a declared right (or `preserveUnknown` dimension) the active
+   * permission catalog does not define as a hard error, even when ct's bundled catalog defines it.
+   *
+   * The default is the skip-with-warning posture, which is what lets ONE config serve two instances
+   * with different modules installed. This flag is for a repo that would rather planning failed than
+   * have any declaration silently not apply.
+   */
+  strictCatalog?: boolean;
+}
 
 export interface PlanSummary {
   resources: Record<PlanAction, number>;
@@ -41,6 +53,8 @@ export interface PlanValue {
    */
   buildWarnings: string[];
   permissionCatalogPath: string | null;
+  /** The committed OpenTofu id map this plan resolved through (#181), when the repo has one. */
+  tofuIdMapPath: string | null;
 }
 
 export type PlanResult = OperationResult<PlanValue>;
@@ -51,6 +65,7 @@ export interface PlanOperationDependencies {
   project?: ProjectResolutionDependencies;
   resolveProject?: typeof resolveProject;
   loadHostCatalog?: typeof loadHostCatalog;
+  loadIdMap?: typeof loadIdMap;
   loadConfig?: typeof loadConfig;
   loadState?: typeof loadState;
   authedSession?: () => Promise<AuthedSession>;
@@ -104,10 +119,16 @@ export async function buildPlanContext(
   const project = await (dependencies.resolveProject ?? resolveProject)(request, dependencies.project);
 
   observer.emit({ type: "phase-started", phase: "load-project" });
+  // Set BEFORE the catalog and the config load: the config's own `preserveUnknown` validation reads
+  // it at eval time (config/context.ts), and it must describe the catalog that is about to be loaded.
+  setStrictCatalog(request.strictCatalog ?? false);
   const catalogPath = await (dependencies.loadHostCatalog ?? loadHostCatalog)(
     project.host,
     join(project.cwd, CATALOG_DIR),
   );
+  // Loaded beside the permission catalog and from the same directory: both are committed, per-host
+  // artefacts a consumer repo keeps under `.ct/`.
+  const idMap = await (dependencies.loadIdMap ?? loadIdMap)(project.host, join(project.cwd, CATALOG_DIR));
   const {
     resources: desired,
     permissions,
@@ -120,6 +141,7 @@ export async function buildPlanContext(
     state,
     desired,
     host: project.host,
+    idMap,
   });
 
   observer.emit({ type: "phase-started", phase: "build-plan" });
@@ -158,6 +180,7 @@ export async function buildPlanContext(
         stateHost: state.host,
         buildWarnings: resourceResult.warnings ?? [],
         permissionCatalogPath: catalogPath,
+        tofuIdMapPath: idMap?.path ?? null,
       },
     },
   };

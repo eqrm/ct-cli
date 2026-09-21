@@ -78,13 +78,31 @@ const DEFAULT_PAGE_LIMIT = 100;
  * exactly as it always has.
  */
 export interface SessionCache {
-  load(host: string, token: string): Promise<{ cookie: string; csrfToken: string } | null>;
+  /**
+   * `obtainedAt` (epoch ms) is optional and purely informational: it lets a caller that HANDS THE
+   * SESSION ON say when it was bought, and therefore how long it may still be reused (#179).
+   * A cache that does not track it simply omits it.
+   */
+  load(
+    host: string,
+    token: string,
+  ): Promise<{ cookie: string; csrfToken: string; obtainedAt?: number } | null>;
   save(host: string, token: string, session: { cookie: string; csrfToken: string }): Promise<void>;
   drop(host: string): Promise<void>;
 }
 
+/**
+ * A cross-process brake on the login handshake (#179). Injected for the same reason
+ * {@link SessionCache} is: a client built in a test must not touch the developer's disk, and a client
+ * without one behaves exactly as it always has.
+ */
+export interface LoginThrottleGate {
+  acquire(host: string): Promise<void>;
+}
+
 export interface CtClientOptions {
   sessionCache?: SessionCache;
+  loginThrottle?: LoginThrottleGate;
 }
 
 /** Human-readable "wait this long" for a 429, from `Retry-After` when the server sent one. */
@@ -105,6 +123,9 @@ export class CtClient {
   private ctVersion: string | null = null;
   /** Kept so an expired session can be re-bought without the caller having to notice (#145). */
   private loginToken: string | null = null;
+  /** When the live session was bought, and whether this process bought it (#179). */
+  private sessionObtainedAt: number | null = null;
+  private sessionSource: "cache" | "handshake" | null = null;
   /** Re-entrancy guards: no self-heal while a login (or a resume probe) is already in flight. */
   private loggingIn = false;
   private resuming = false;
@@ -202,7 +223,7 @@ export class CtClient {
     if (!cache) {
       return null;
     }
-    let cached: { cookie: string; csrfToken: string } | null = null;
+    let cached: { cookie: string; csrfToken: string; obtainedAt?: number } | null = null;
     try {
       cached = await cache.load(this.config.host, loginToken);
     } catch {
@@ -213,6 +234,8 @@ export class CtClient {
     }
     this.cookie = cached.cookie;
     this.csrfToken = cached.csrfToken;
+    this.sessionObtainedAt = cached.obtainedAt ?? null;
+    this.sessionSource = "cache";
     this.resuming = true;
     try {
       return await this.get<WhoAmI>("/whoami");
@@ -241,7 +264,36 @@ export class CtClient {
     }
   }
 
+  /**
+   * The live session, for a caller whose whole job is to hand it to another tool (`ct auth token`,
+   * #179). Returns `null` before the handshake has run.
+   *
+   * This is the ONE deliberate exit from the rule that the cookie never leaves this object: a
+   * ChurchTools session expires and can be dropped (`ct auth logout`), while the personal login
+   * token it was bought with is permanent and, on prod, an admin credential. Handing out the session
+   * is what lets the OpenTofu provider authenticate without the permanent secret ever leaving the
+   * Keychain. Nothing here logs or formats it — `sessionCredential` is read only by a caller that has
+   * already decided where the value is allowed to go.
+   */
+  sessionCredential(): {
+    cookie: string;
+    csrfToken: string;
+    obtainedAt: number;
+    source: "cache" | "handshake";
+  } | null {
+    if (!this.cookie || this.csrfToken === null) return null;
+    return {
+      cookie: this.cookie,
+      csrfToken: this.csrfToken,
+      obtainedAt: this.sessionObtainedAt ?? Date.now(),
+      source: this.sessionSource ?? "handshake",
+    };
+  }
+
   private async performLogin(loginToken: string): Promise<WhoAmI> {
+    // Before the request, not after: the point is to not ADD to a burst that is already in progress,
+    // including one started by a different `ct` process (#179).
+    await this.options.loginThrottle?.acquire(this.config.host);
     // The token rides as a URL query param (it lands in the server's access logs). This is
     // unavoidable for this token class: the handshake above is documented to require the
     // `login_token` query param — an `Authorization` header yields a null CSRF token and breaks
@@ -271,6 +323,8 @@ export class CtClient {
     if (!this.cookie) {
       throw new CtApiError("Login succeeded but no session cookie was returned", res.status, null);
     }
+    this.sessionObtainedAt = Date.now();
+    this.sessionSource = "handshake";
     await this.refreshCsrfToken();
     // Keep the freshly bought session for the NEXT invocation. Best-effort: a store
     // that refuses (no Keychain, locked Keychain) must not fail the command.

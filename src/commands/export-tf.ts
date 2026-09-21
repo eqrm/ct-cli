@@ -1,3 +1,4 @@
+import { relative } from "node:path";
 import { Command } from "commander";
 import { runExportTf } from "../application/operations/export-tf.js";
 import { info, warn } from "../ui.js";
@@ -8,6 +9,7 @@ interface ExportTfOptions {
   only?: string[];
   out: string;
   versions: boolean;
+  ids: boolean;
 }
 
 export function exportCommand(): Command {
@@ -21,6 +23,10 @@ export function exportCommand(): Command {
       "--no-versions",
       "do not write or prune versions.tf — use when your repo owns it (e.g. to pin a provider version)",
     )
+    .option(
+      "--no-ids",
+      "do not write .ct/ids.<host>.json — the key→id map ct resolves leftover references through once these resources leave its state",
+    )
     .action(async (opts: ExportTfOptions) => {
       const { value, warnings } = await runExportTf({
         statePath: opts.state,
@@ -28,11 +34,13 @@ export function exportCommand(): Command {
         only: opts.only,
         outDir: opts.out,
         writeVersions: opts.versions,
+        writeIds: opts.ids,
       });
       for (const file of value.files) info(`wrote ${opts.out}/${file}`);
       for (const r of value.relabelled) {
         info(`relabelled "${r.key}" -> "${r.label}" (HCL references must be identifiers)`);
       }
+      if (value.idMapPath) info(`wrote ${relative(process.cwd(), value.idMapPath)}`);
       info(`${value.imported} resources exported`);
       // Printed last, after the success line, so the gap is the final thing on
       // screen rather than scrolled off above a list of written files.

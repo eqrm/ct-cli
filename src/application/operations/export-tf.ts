@@ -5,6 +5,8 @@ import { assertLabelsUnique, hclLabel, hclType, renderResource } from "../../exp
 import { renderImports, type ImportTarget } from "../../export/imports.js";
 import { EXPORTABLE_TYPES, fileForType, OWNED_FILES } from "../../export/layout.js";
 import { renderVersions } from "../../export/provider.js";
+import { CATALOG_DIR } from "../../permissions/catalog-store.js";
+import { writeIdMap, type IdMapEntry } from "../../resolve/idMap.js";
 import { loadState } from "../../state/state.js";
 import type { CtWarning, OperationResult, ProjectRequest } from "../contracts.js";
 import { resolveProject } from "../project.js";
@@ -26,6 +28,15 @@ export interface ExportTfRequest extends ProjectRequest {
    * file outright — worse than overwriting it, because nothing hints at why.
    */
   writeVersions?: boolean;
+  /**
+   * Also write `.ct/ids.<host>.json`, the committed key→id map ct resolves leftover references
+   * through once these resources are no longer in its state (#181). Default true: every export is a
+   * step towards ct not declaring these any more, and that is exactly when the map becomes load-bearing.
+   *
+   * Written OUTSIDE `outDir`, beside the per-instance permission catalog, because it is ct's input,
+   * not part of the tofu root module.
+   */
+  writeIds?: boolean;
 }
 
 export interface ExportTfValue {
@@ -35,6 +46,8 @@ export interface ExportTfValue {
   relabelled: { key: string; label: string }[];
   /** Managed types the provider has no mapping for yet, with how many were skipped. */
   skipped: { type: string; count: number }[];
+  /** Path of the id map written beside the export, or null when `--no-ids` was passed. */
+  idMapPath: string | null;
 }
 
 export type ExportTfResult = OperationResult<ExportTfValue>;
@@ -90,6 +103,7 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
   const byFile = new Map<string, string[]>();
   const imports: ImportTarget[] = [];
   const relabelled: { key: string; label: string }[] = [];
+  const idEntries: IdMapEntry[] = [];
 
   for (const resource of [...selected].sort((a, b) => {
     const left = address(a.type, a.key);
@@ -107,6 +121,15 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     // the report cannot drift from what was written.
     const label = block.split('"')[3];
     if (label !== undefined && label !== resource.key) relabelled.push({ key: resource.key, label });
+    // The id map is built from the same loop, so it cannot describe a different set of resources
+    // than the HCL and the import blocks do. The label rides along so a later `ct ids sync` can map
+    // a tofu address back to the ct key (the relabelling is many-to-one, #181).
+    idEntries.push({
+      type: resource.type,
+      key: resource.key,
+      id: resource.id,
+      ...(label !== undefined && label !== resource.key ? { label } : {}),
+    });
   }
 
   const outDir = isAbsolute(request.outDir) ? request.outDir : join(project.cwd, request.outDir);
@@ -134,6 +157,11 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     await rm(join(outDir, file), { force: true });
   }
 
+  const idMapPath =
+    (request.writeIds ?? true)
+      ? await writeIdMap(project.host, idEntries, join(project.cwd, CATALOG_DIR))
+      : null;
+
   const warnings: CtWarning[] = skipped.map(({ type, count }) => ({
     code: "EXPORT_TYPE_UNSUPPORTED",
     message:
@@ -145,7 +173,7 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
   return {
     operation: "export-tf",
     project,
-    value: { files: written, imported: imports.length, relabelled, skipped },
+    value: { files: written, imported: imports.length, relabelled, skipped, idMapPath },
     warnings,
   };
 }

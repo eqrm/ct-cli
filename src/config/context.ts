@@ -23,7 +23,7 @@ import {
 import { collectRefs } from "../resolve/refs.js";
 import type { DomainType } from "../permissions/grants.js";
 import type { DesiredPermission, Grant, PreserveUnknown } from "../permissions/types.js";
-import { KNOWN_SCOPE_FIELDS } from "../permissions/catalog.js";
+import { scopeFieldVerdict } from "../permissions/catalog.js";
 import { GROUP_STATUS_NO_CATALOG, isRef, ref, refKey, type Ref } from "../resolve/refs.js";
 import { normalizeScopeEntry } from "../permissions/scope.js";
 import { conventionalRulesetRef, isCallerAssignedId, knownFields } from "../resources/registry.js";
@@ -281,7 +281,11 @@ function normalizePreserveUnknown(
         `default, or name the dimensions to leave alone.`,
     );
   }
-  const unknown = value.filter((d) => !KNOWN_SCOPE_FIELDS.has(d));
+  // A dimension the ACTIVE catalog lacks but ct's bundled catalog knows is a host difference, not a
+  // typo (#178): the module that scopes by it is not installed here. It stays in the declaration and
+  // is reported by `buildPermissionPlan`; only a name no catalog defines is still fatal, because that
+  // is the case this guard was written for — a typo silently preserving nothing.
+  const unknown = value.filter((d) => scopeFieldVerdict(d) === "unknown");
   if (unknown.length > 0) {
     throw new Error(
       `${domainType} "${input.key}": "preserveUnknown" names ${unknown.length === 1 ? "a scope dimension" : "scope dimensions"} ` +

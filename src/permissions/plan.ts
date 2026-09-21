@@ -10,6 +10,10 @@ import type { State } from "../state/state.js";
 import type { DesiredResource } from "../engine/types.js";
 import {
   resolveAuthId,
+  catalogVerdict,
+  describeCatalog,
+  scopeFieldVerdict,
+  BUNDLED_CATALOG_VERSION,
   CATALOG_META,
   CATALOG_IS_PER_INSTANCE,
   KNOWN_AUTH_IDS,
@@ -50,6 +54,26 @@ export interface PermissionPlanItem {
 }
 
 /**
+ * A declaration this HOST cannot act on, because the right (or `preserveUnknown` dimension) it names
+ * is absent from the host's own permission catalog while ct's bundled catalog has it (#178).
+ *
+ * Reported, never fatal. An estate whose instances have different modules installed cannot express
+ * the difference in one declarative file, so a `jpmFlowManager:*` right that is correct on prod used
+ * to make the whole plan — including the 100 rights that DO apply — abort on dev. The mirror case has
+ * always been handled this way: a live grant whose authId the catalog cannot name is reported and
+ * left untouched. This is the same posture in the other direction — say what you cannot manage,
+ * manage the rest.
+ */
+export interface CatalogSkip {
+  domainType: DomainType;
+  /** The declaration's key, e.g. the group_role key. */
+  key: string;
+  /** What was skipped: a right name, or a `preserveUnknown` scope dimension. */
+  name: string;
+  kind: "right" | "dimension";
+}
+
+/**
  * Fan out each grant to (authId, dataId) tuples. ChurchTools reads a scoped grant back as
  * ONE ROW PER dataId with a scalar `dataId` (see `normalizeActual`), so a desired tuple with
  * `dataId.length >= 2` can never equal any actual tuple and would churn forever. To match the
@@ -61,9 +85,18 @@ export function desiredTuples(
   state: State,
   declaredGroupKeys: ReadonlySet<string> = new Set(),
   scopeRefs: ScopeRefMap = new Map(),
+  onSkip?: (skip: CatalogSkip) => void,
 ): GrantTuple[] {
   return p.grants.flatMap((g): GrantTuple[] => {
     const name = typeof g === "string" ? g : g.right;
+    // A right this host's catalog does not define, but ct's bundled catalog does (#178): emit NO
+    // tuple at all. No tuple means no PUT, and — because the host cannot have a live row under a
+    // name it does not define — nothing this declaration could have owned goes unclaimed, so
+    // nothing lands in toDelete either. The grant is simply not this host's business.
+    if (catalogVerdict(name) === "host-missing") {
+      onSkip?.({ domainType: p.domainType, key: p.key, name, kind: "right" });
+      return [];
+    }
     const entry = resolveAuthId(name);
     if (typeof g === "string") {
       // A scoped right declared as a bare string would emit `dataId: []` — a silent GLOBAL grant.
@@ -206,6 +239,32 @@ async function resolveDomainIds(
   return resolved;
 }
 
+/**
+ * One line per skipped declaration (#178), naming the right, the declaration, and BOTH catalogs —
+ * the host's (what it can do) and the bundled one (where the name came from). Without the second
+ * half the warning reads like a typo; with it, it reads like the module difference it is.
+ */
+function renderSkip(skip: CatalogSkip): string {
+  // A skip can only arise while a per-instance capture is active AND the bundled catalog has the name
+  // (that is what `catalogVerdict` decided), so the provenance clause always has something to say.
+  const provenance = BUNDLED_CATALOG_VERSION
+    ? ` ct's bundled catalog (ChurchTools ${BUNDLED_CATALOG_VERSION}) defines it, so this reads as a ` +
+      `module this instance does not have.`
+    : "";
+  const what =
+    skip.kind === "right"
+      ? `right "${skip.name}" is absent from this host's permission catalog`
+      : `"preserveUnknown" names the scope dimension "${skip.name}", which no right in this host's permission catalog scopes by`;
+  const consequence =
+    skip.kind === "right"
+      ? "skipped for this host — never granted, never revoked"
+      : "ignored for this host — it can preserve nothing here";
+  return (
+    `${skip.domainType} "${skip.key}": ${what} (${describeCatalog()}) — ${consequence}.${provenance} ` +
+    `Pass --strict-catalog to fail on it instead.`
+  );
+}
+
 export async function buildPermissionPlan(
   client: PermissionReader,
   state: State,
@@ -217,6 +276,22 @@ export async function buildPermissionPlan(
   const items: PermissionPlanItem[] = [];
   const fetchErrors: string[] = [];
   const warnings: string[] = [];
+  // Deduped by declaration+name: a right declared on two roles is two skips, the same right listed
+  // twice on one role is one.
+  const skips = new Map<string, CatalogSkip>();
+  const noteSkip = (skip: CatalogSkip): void => {
+    skips.set(`${skip.domainType}:${skip.key}:${skip.kind}:${skip.name}`, skip);
+  };
+  // `preserveUnknown` dimensions are validated at config-eval time (config/context.ts), which keeps
+  // a typo fatal — but a dimension that exists only on the OTHER host cannot be judged there without
+  // making the config non-portable, so it is passed through and reported here instead (#178).
+  for (const p of permissions) {
+    if (!Array.isArray(p.preserveUnknown)) continue;
+    for (const dimension of p.preserveUnknown) {
+      if (scopeFieldVerdict(dimension) === "host-missing")
+        noteSkip({ domainType: p.domainType, key: p.key, name: dimension, kind: "dimension" });
+    }
+  }
   // Catalog staleness (#25/#105): the catalog is a snapshot captured against one CT version. If the
   // live instance reports a different version, right names/authIds/scopeFields may have drifted —
   // warn (never fail) so the diff is trusted-but-verified.
@@ -280,7 +355,7 @@ export async function buildPermissionPlan(
         // domainId is irrelevant to desiredTuples (it only reads key/domainType/grants); pass the
         // pending Ref through so the shape stays a valid DesiredPermission.
         diff: diffGrants(
-          desiredTuples({ ...p, domainId: p.pendingDomain }, state, declaredGroupKeys, scopeRefs),
+          desiredTuples({ ...p, domainId: p.pendingDomain }, state, declaredGroupKeys, scopeRefs, noteSkip),
           [],
         ),
       });
@@ -327,7 +402,7 @@ export async function buildPermissionPlan(
       domainType: p.domainType,
       domainId: p.domainId,
       diff: diffGrants(
-        desiredTuples(p, state, declaredGroupKeys, scopeRefs),
+        desiredTuples(p, state, declaredGroupKeys, scopeRefs, noteSkip),
         knownActual,
         preservePredicateFor(p.preserveUnknown),
         // The unknown-authId guard (#25) deliberately does NOT apply here: an unnameable right can
@@ -335,6 +410,11 @@ export async function buildPermissionPlan(
         effectiveAll,
       ),
     });
+  }
+  for (const skip of [...skips.values()].sort((a, b) =>
+    `${a.key}${a.name}` < `${b.key}${b.name}` ? -1 : 1,
+  )) {
+    warnings.push(renderSkip(skip));
   }
   return { items, fetchErrors, warnings };
 }

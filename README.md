@@ -237,6 +237,10 @@ ct plan                       # diff the config against ChurchTools (read-only)
 ct plan --format markdown     # plain-language review report (German by default)
 ct apply                      # create + update in dependency order (confirm + backup first)
 ct refresh --group <key>      # make ChurchTools re-evaluate one auto-group now
+
+ct export tf                  # render managed state as OpenTofu HCL + import blocks
+ct ids sync --tofu-state -    # refresh the key->id map ct resolves tofu-owned resources through
+ct auth token --env dev       # hand a short-lived session to another tool (credential helper)
 ```
 
 Run without `--token`, `ct auth login` asks how you want to authenticate: **username and
@@ -250,12 +254,19 @@ export `CT_HOST` and `CT_LOGINTOKEN` there.
 
 `state rm` is the inverse of `adopt`, and only of `adopt`: it removes the entry
 from the state file, makes no HTTP call, and leaves the resource in place in
-ChurchTools, now unmanaged. It refuses a key the config still declares — that
+ChurchTools, now unmanaged. It refuses a key the config still **declares** — that
 would make the next plan propose creating a resource that already exists — so
 delete the declaration first, or pass `--force` to do both in one change.
-"Declares" covers permission declarations too, not only resources: a key named
-by a `ct.groupRole` domain or a group scope is just as broken to remove, and the
-refusal is what keeps that from surfacing one command later as a plan error.
+
+A key the config only **references** is a different matter and is removed: a
+logical reference asks the host for an id, so it never proposes creating the
+resource it points at. `state rm` says how many references stay behind, because
+they now resolve against the live instance by name (or through the
+[id map](docs/opentofu-migration.md)) rather than from state. The one reference
+that still blocks removal is a **group**: groups are managed-only, with no live
+catalog to fall back to, so dropping a group a `ct.groupRole` domain or a group
+scope names would make the next plan fail to resolve it — the refusal is what
+keeps that from surfacing one command later.
 
 `apply` reconciles **creates and updates** only, saving state after each action
 (crash-safe / resumable). It **never deletes**: a resource dropped from the
@@ -336,6 +347,7 @@ only; it carries no instance data.
 
 - [`docs/configuration.md`](docs/configuration.md) — writing the config: keys, portable references, escape hatches
 - [`docs/environments.md`](docs/environments.md) · [`docs/ci.md`](docs/ci.md) — multi-instance and automation
+- [`docs/opentofu-migration.md`](docs/opentofu-migration.md) — living alongside terraform-provider-churchtools: the committed id map, and `ct auth token` as a credential helper
 - [`docs/handbuch/`](docs/handbuch/) — the **generic ChurchTools reference** (permissions, dynamic groups, field definitions, blueprints), published into the Handbuch
 - [`docs/api-coverage.md`](docs/api-coverage.md) · [`docs/runbook-manual-surface.md`](docs/runbook-manual-surface.md) — what the API supports, and what still has to be done by hand
 - [`docs/README.md`](docs/README.md) — how the docs are organised and how pages stay in sync with the code

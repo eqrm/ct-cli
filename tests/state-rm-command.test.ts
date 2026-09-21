@@ -15,6 +15,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emptyState, loadState, saveState } from "../src/state/state.js";
+import { removeStateEntry } from "../src/application/operations/state.js";
 
 const authedSession = vi.fn(async () => {
   throw new Error("ct state rm must never contact ChurchTools");
@@ -109,16 +110,72 @@ describe("ct state rm (#122)", () => {
   // A key can be named by a PERMISSION declaration without being declared as a resource. A
   // resources-only guard waves those through, and the breakage surfaces one command later as a
   // `ct plan` hard error ("does not resolve to a managed group") — after the state file was written.
+  //
+  // Still refused after #180, which stopped treating a reference as a declaration: a GROUP reference
+  // is the one class that genuinely cannot survive the removal, because groups are managed-only and
+  // have no live catalog to fall back to. The refusal now says that instead of claiming the key is
+  // declared — it is not — so the two cases can be told apart.
   it("refuses a key a permission DOMAIN still names, not just a declared resource", async () => {
     await writeFile(
       configPath,
       `export default (ct) => { ct.groupRole({ key: "youth_leiter", group: "youth", role: "Leiter", grants: ["churchcore:administer settings"] }); };`,
     );
     await expect(run(["group", "youth", "--state", statePath])).rejects.toThrow(
-      /still declared in the config/,
+      /still referenced by the config as a resource that only ct's state can resolve/,
     );
     const state = await loadState(statePath, HOST);
     expect(state.resources.youth).toBeDefined();
+  });
+
+  // #180: the tier-0 OpenTofu cutover leaves 232 `campus:`/`groupType:`/`department:` REFERENCES
+  // behind in the config with the declarations gone. Those are logical refs — they ask the host for
+  // the id — so `--force` was being demanded for 49 of 50 entries, which suppresses the check for the
+  // one case it is actually meant to catch.
+  it("removes a campus the config only references, and says the refs now resolve live", async () => {
+    await writeFile(
+      configPath,
+      `export default (ct) => { ct.group({ key: "kids", name: "Kids", campus: "mainz", groupTypeId: 1 }); };`,
+    );
+    const result = await removeStateEntry({ type: "campus", key: "mainz", statePath, configPath });
+    expect(result.value.removed).toBe(true);
+    const warning = result.warnings.find((w) => w.code === "STILL_REFERENCED");
+    expect(warning?.message).toMatch(/references "mainz" 1 time\(s\) but does not declare it/);
+    expect(warning?.message).toMatch(/resolve against https:\/\/mychurch\.church\.tools by name/);
+    const state = await loadState(statePath, HOST);
+    expect(state.resources.mainz).toBeUndefined();
+  });
+
+  // The guard's original purpose, unchanged: a real declaration means the next plan would propose
+  // CREATING something that already exists on this host.
+  it("still refuses a campus the config DECLARES", async () => {
+    await writeFile(configPath, `export default (ct) => { ct.campus({ key: "mainz", name: "Mainz" }); };`);
+    await expect(run(["campus", "mainz", "--state", statePath])).rejects.toThrow(
+      /still declared in the config/,
+    );
+    const state = await loadState(statePath, HOST);
+    expect(state.resources.mainz).toBeDefined();
+  });
+
+  // Declarations are matched on type AND key: a `campus` declaration says nothing about what
+  // removing a group-type of the same name would do.
+  it("does not let a declaration of another type block a removal", async () => {
+    await writeFile(configPath, `export default (ct) => { ct.campus({ key: "mainz", name: "Mainz" }); };`);
+    const state = await loadState(statePath, HOST);
+    state.resources["mainz-type"] = {
+      type: "group-type",
+      id: 12,
+      key: "mainz",
+      fields: {},
+      adoptedAt: "t",
+      updatedAt: "t",
+    };
+    // Re-key the entry under the colliding key so the removal targets group-type/mainz.
+    delete state.resources.mainz;
+    state.resources.mainz = { ...state.resources["mainz-type"]! };
+    delete state.resources["mainz-type"];
+    await saveState(statePath, state);
+    await run(["group-type", "mainz", "--state", statePath]);
+    expect((await loadState(statePath, HOST)).resources.mainz).toBeUndefined();
   });
 
   it("refuses a key a permission SCOPE still names", async () => {
@@ -127,7 +184,7 @@ describe("ct state rm (#122)", () => {
       `export default (ct) => { ct.groupRole({ key: "p", id: 77, grants: [{ right: "churchgroup:view group", scope: ["youth"] }] }); };`,
     );
     await expect(run(["group", "youth", "--state", statePath])).rejects.toThrow(
-      /still declared in the config/,
+      /still referenced by the config as a resource that only ct's state can resolve/,
     );
     const state = await loadState(statePath, HOST);
     expect(state.resources.youth).toBeDefined();

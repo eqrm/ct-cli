@@ -211,3 +211,42 @@ describe("writeVersions: false", () => {
     expect(files).toContain("versions.tf");
   });
 });
+
+/**
+ * The id map written beside the export (#181): the same key→id table, for ct's own resolution once
+ * these resources leave its state. Written under `.ct/`, not into the tofu root module — it is ct's
+ * input, not part of what tofu reads.
+ */
+describe("runExportTf — the id map", () => {
+  it("writes one entry per exported resource, keyed by host", async () => {
+    const result = await exportInto({
+      mainz: row("campus", "mainz", 0),
+      struktur: row("group-type", "struktur", 9),
+      jugend: row("group", "jugend", 99), // not exportable → not in the map either
+    });
+    expect(result.value.idMapPath).toBe(join(dir, ".ct", "ids.example.church.tools.json"));
+    const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
+    expect(map.campus).toEqual({ mainz: { id: 0 } });
+    expect(map["group-type"]).toEqual({ struktur: { id: 9 } });
+    expect(map.group).toBeUndefined();
+    expect(map.$meta).toMatchObject({ host: HOST, source: "ct export tf", entries: 2 });
+  });
+
+  it("records the HCL relabelling, which cannot be inverted by rule", async () => {
+    const result = await exportInto({ "3_active": row("group-type", "3_active", 4) });
+    const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
+    expect(map["group-type"]).toEqual({ "3_active": { id: 4, label: "g_3_active" } });
+  });
+
+  it("writes nothing under .ct when --no-ids is passed", async () => {
+    await stateWith({ mainz: row("campus", "mainz", 0) });
+    const result = await runExportTf({
+      cwd: dir,
+      statePath: "ct-state.json",
+      outDir: "tofu",
+      writeIds: false,
+    });
+    expect(result.value.idMapPath).toBeNull();
+    await expect(readdir(join(dir, ".ct"))).rejects.toThrow(/ENOENT/);
+  });
+});
