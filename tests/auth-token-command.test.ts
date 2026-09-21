@@ -129,3 +129,24 @@ describe("ct auth token", () => {
     expect(stderr.join("")).toMatch(/fresh login handshake/);
   });
 });
+
+/**
+ * The envelope is read by `data "external"` (terraform-provider-churchtools), which requires EVERY
+ * value in the JSON object to be a string. A single `null` fails inside the external provider with
+ * a message about JSON types that names neither this command nor the field — so the one credential
+ * helper in the system breaks in the least diagnosable way available.
+ */
+describe('ct auth token — an envelope `data "external"` can consume', () => {
+  it("reports no environment as an empty string, never null", async () => {
+    await run([]);
+    const parsed = JSON.parse(stdout[0]!) as Record<string, unknown>;
+    expect(parsed.environment).toBe("");
+  });
+
+  it("emits an object whose values are all strings", async () => {
+    await run([]);
+    const parsed = JSON.parse(stdout[0]!) as Record<string, unknown>;
+    const nonStrings = Object.entries(parsed).filter(([, value]) => typeof value !== "string");
+    expect(nonStrings).toEqual([]);
+  });
+});
