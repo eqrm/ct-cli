@@ -238,6 +238,60 @@ describe("runExportTf — the id map", () => {
     expect(map["group-type"]).toEqual({ "3_active": { id: 4, label: "g_3_active" } });
   });
 
+  // A partial export describes the types it was asked for, but the map it writes is the whole file.
+  // Rewriting it from one run's entries dropped every id the previous export put there — and a
+  // `personStatus: "status_unbekannt"` reference cannot fall back to the live name (the key is not
+  // name-derived), so the next `ct plan` hard-errors on a map the operator never meant to shrink.
+  it("carries over the types a --only export never looked at", async () => {
+    const rows = {
+      mainz: row("campus", "mainz", 4),
+      status_unbekannt: row("person-status", "status_unbekannt", 9),
+    };
+    await exportInto(rows);
+    const result = await exportInto(rows, ["campus"]);
+    const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
+    expect(map.campus).toEqual({ mainz: { id: 4 } });
+    expect(map["person-status"]).toEqual({ status_unbekannt: { id: 9 } });
+    expect(map.$meta).toMatchObject({ entries: 2 });
+  });
+
+  // The other half of the same rule: a type the export DID cover is rewritten wholesale, because a
+  // resource that left ct's state has left ct's ownership and its id must go with it.
+  it("drops an entry whose resource left state, for a type the export covered", async () => {
+    await exportInto({
+      mainz: row("campus", "mainz", 4),
+      horgen: row("campus", "horgen", 5),
+      status_unbekannt: row("person-status", "status_unbekannt", 9),
+    });
+    const result = await exportInto({ mainz: row("campus", "mainz", 4) }, ["campus"]);
+    const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
+    expect(map.campus).toEqual({ mainz: { id: 4 } });
+    expect(map["person-status"]).toEqual({ status_unbekannt: { id: 9 } });
+  });
+
+  // The end state the map exists to serve: tier-0 has left ct.config.ts AND ct-state.<env>.json, so
+  // a full `ct export tf` (a `make export`, a CI regen, a second env) selects every type, finds
+  // nothing, and would write `entries: 0` over the only thing still resolving every leftover
+  // `campus:` / `personStatus:` reference. An export that exported nothing has learned nothing.
+  it("never empties a populated map, however complete the export", async () => {
+    await exportInto({
+      mainz: row("campus", "mainz", 4),
+      status_unbekannt: row("person-status", "status_unbekannt", 9),
+    });
+    const result = await exportInto({});
+    const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
+    expect(map.campus).toEqual({ mainz: { id: 4 } });
+    expect(map["person-status"]).toEqual({ status_unbekannt: { id: 9 } });
+    expect(result.warnings.map((w) => w.code)).toContain("IDS_KEPT");
+  });
+
+  it("still writes an empty map when there was nothing to keep", async () => {
+    const result = await exportInto({});
+    const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
+    expect(map.$meta).toMatchObject({ entries: 0 });
+    expect(result.warnings.map((w) => w.code)).not.toContain("IDS_KEPT");
+  });
+
   it("writes nothing under .ct when --no-ids is passed", async () => {
     await stateWith({ mainz: row("campus", "mainz", 0) });
     const result = await runExportTf({

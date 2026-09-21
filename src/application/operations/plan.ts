@@ -3,7 +3,7 @@ import { authedSession, type AuthedSession } from "../../api/session.js";
 import { loadConfig } from "../../config/load.js";
 import { buildPlan } from "../../engine/build.js";
 import { summarize, type Plan, type PlanAction } from "../../engine/types.js";
-import { setStrictCatalog } from "../../permissions/catalog.js";
+import { STRICT_CATALOG, setStrictCatalog } from "../../permissions/catalog.js";
 import { CATALOG_DIR, loadHostCatalog } from "../../permissions/catalog-store.js";
 import { buildPermissionPlan, type PermissionPlanItem } from "../../permissions/plan.js";
 import { loadIdMap } from "../../resolve/idMap.js";
@@ -121,67 +121,78 @@ export async function buildPlanContext(
   observer.emit({ type: "phase-started", phase: "load-project" });
   // Set BEFORE the catalog and the config load: the config's own `preserveUnknown` validation reads
   // it at eval time (config/context.ts), and it must describe the catalog that is about to be loaded.
+  //
+  // Restored in the `finally` below, so the flag lives no longer than the build that asked for it.
+  // For a one-shot CLI that is merely tidy, but `contracts.ts` anticipates an HTTP adapter, and in a
+  // long-lived process one `--strict-catalog` plan would otherwise leave EVERY later plan strict —
+  // a setting silently outliving its request, on the exact flag whose whole job is to decide whether
+  // a plan fails or warns.
+  const previousStrict = STRICT_CATALOG;
   setStrictCatalog(request.strictCatalog ?? false);
-  const catalogPath = await (dependencies.loadHostCatalog ?? loadHostCatalog)(
-    project.host,
-    join(project.cwd, CATALOG_DIR),
-  );
-  // Loaded beside the permission catalog and from the same directory: both are committed, per-host
-  // artefacts a consumer repo keeps under `.ct/`.
-  const idMap = await (dependencies.loadIdMap ?? loadIdMap)(project.host, join(project.cwd, CATALOG_DIR));
-  const {
-    resources: desired,
-    permissions,
-    configDir,
-  } = await (dependencies.loadConfig ?? loadConfig)(project.configPath);
-  const state = await (dependencies.loadState ?? loadState)(project.statePath, project.host);
-  const { client } = await (dependencies.authedSession ?? authedSession)();
-  const resolver = (dependencies.createResolver ?? ((options) => new Resolver(options)))({
-    client,
-    state,
-    desired,
-    host: project.host,
-    idMap,
-  });
-
-  observer.emit({ type: "phase-started", phase: "build-plan" });
-  const [resourceResult, permissionResult] = await Promise.all([
-    (dependencies.buildPlan ?? buildPlan)(client, state, desired, { configDir, resolver }),
-    (dependencies.buildPermissionPlan ?? buildPermissionPlan)(
+  try {
+    const catalogPath = await (dependencies.loadHostCatalog ?? loadHostCatalog)(
+      project.host,
+      join(project.cwd, CATALOG_DIR),
+    );
+    // Loaded beside the permission catalog and from the same directory: both are committed, per-host
+    // artefacts a consumer repo keeps under `.ct/`.
+    const idMap = await (dependencies.loadIdMap ?? loadIdMap)(project.host, join(project.cwd, CATALOG_DIR));
+    const {
+      resources: desired,
+      permissions,
+      configDir,
+    } = await (dependencies.loadConfig ?? loadConfig)(project.configPath);
+    const state = await (dependencies.loadState ?? loadState)(project.statePath, project.host);
+    const { client } = await (dependencies.authedSession ?? authedSession)();
+    const resolver = (dependencies.createResolver ?? ((options) => new Resolver(options)))({
       client,
       state,
-      permissions,
       desired,
-      resolver,
-      client.version ?? undefined,
-    ),
-  ]);
-  const fetchErrors = [...resourceResult.fetchErrors, ...permissionResult.fetchErrors];
-  const warnings: CtWarning[] = permissionResult.warnings.map((message) => ({
-    code: "PERMISSION_CATALOG",
-    message,
-  }));
+      host: project.host,
+      idMap,
+    });
 
-  return {
-    client,
-    state,
-    actual: resourceResult.actual,
-    result: {
-      operation: "plan",
-      project,
-      warnings,
-      value: {
-        plan: resourceResult.plan,
-        permissions: permissionResult.items,
-        summary: summarizePlan(resourceResult.plan, permissionResult.items),
-        complete: fetchErrors.length === 0,
-        fetchErrors,
-        churchToolsVersion: client.version,
-        stateHost: state.host,
-        buildWarnings: resourceResult.warnings ?? [],
-        permissionCatalogPath: catalogPath,
-        tofuIdMapPath: idMap?.path ?? null,
+    observer.emit({ type: "phase-started", phase: "build-plan" });
+    const [resourceResult, permissionResult] = await Promise.all([
+      (dependencies.buildPlan ?? buildPlan)(client, state, desired, { configDir, resolver }),
+      (dependencies.buildPermissionPlan ?? buildPermissionPlan)(
+        client,
+        state,
+        permissions,
+        desired,
+        resolver,
+        client.version ?? undefined,
+      ),
+    ]);
+    const fetchErrors = [...resourceResult.fetchErrors, ...permissionResult.fetchErrors];
+    const warnings: CtWarning[] = permissionResult.warnings.map((message) => ({
+      code: "PERMISSION_CATALOG",
+      message,
+    }));
+
+    return {
+      client,
+      state,
+      actual: resourceResult.actual,
+      result: {
+        operation: "plan",
+        project,
+        warnings,
+        value: {
+          plan: resourceResult.plan,
+          permissions: permissionResult.items,
+          summary: summarizePlan(resourceResult.plan, permissionResult.items),
+          complete: fetchErrors.length === 0,
+          fetchErrors,
+          churchToolsVersion: client.version,
+          stateHost: state.host,
+          buildWarnings: resourceResult.warnings ?? [],
+          permissionCatalogPath: catalogPath,
+          tofuIdMapPath: idMap?.path ?? null,
+        },
       },
-    },
-  };
+    };
+  } finally {
+    setStrictCatalog(previousStrict);
+  }
 }

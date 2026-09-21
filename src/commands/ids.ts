@@ -42,12 +42,21 @@ export function idsCommand(): Command {
         const serial = value.serial === null ? "" : ` (tofu state serial ${value.serial})`;
         if (value.written) {
           success(`${where}: ${value.entries.length} ids from ${project.host}${serial}.`);
+        } else if (value.entries.length === 0) {
+          // Not "wrote 0 ids": the empty-map guard below REFUSES. A dry run has to name the outcome
+          // it would reach; a real run has to name the one it did reach, in the tense it happened in.
+          const verb = opts.dryRun ? "Would refuse to write" : "Refused to write";
+          info(`${verb} ${where}: the state maps to no ids${serial}.`);
         } else {
           info(`Would write ${where}: ${value.entries.length} ids from ${project.host}${serial}.`);
         }
         // An empty read never overwrites a good map — the likeliest cause is the wrong workspace,
         // and replacing 50 working ids with nothing would break every reference at once.
-        if (!value.written && !opts.dryRun) process.exitCode = 1;
+        //
+        // The dry run exits non-zero on the SAME condition, rather than only the real run: a CI gate
+        // built on `--dry-run` exists to catch exactly this, and an exit code that disagrees with the
+        // run it is predicting would pass the check precisely when the real thing would fail it.
+        if (value.entries.length === 0) process.exitCode = 1;
       } catch (caught) {
         error(formatError(caught));
         process.exitCode = 1;

@@ -24,6 +24,8 @@ export interface TfStateReadResult {
   entries: IdMapEntry[];
   /** Provider resources in the state whose type ct has no mapping for — reported, never fatal. */
   unmapped: string[];
+  /** `for_each`/`count` blocks, whose label is not a resource key — reported, never guessed at. */
+  multiInstance: string[];
   /** Terraform's own serial, if present, so a sync can say which state version it read. */
   serial: number | null;
 }
@@ -32,7 +34,7 @@ interface TfResource {
   mode?: string;
   type?: string;
   name?: string;
-  instances?: { attributes?: Record<string, unknown> }[];
+  instances?: { attributes?: Record<string, unknown>; index_key?: unknown }[];
 }
 
 /**
@@ -56,6 +58,7 @@ export function readTfState(
   }
   const entries: IdMapEntry[] = [];
   const unmapped = new Set<string>();
+  const multiInstance = new Set<string>();
   for (const raw of (state.resources ?? []) as TfResource[]) {
     // `data` blocks describe reads, not managed objects: their id is whatever the data source
     // happened to return, and nothing in the config keys off it.
@@ -68,10 +71,25 @@ export function readTfState(
       if (raw.type.startsWith("churchtools_")) unmapped.add(raw.type);
       continue;
     }
-    const attributes = raw.instances?.[0]?.attributes ?? {};
-    const id = Number(attributes.id);
-    // A resource in state with no numeric id is mid-create or tainted; an unresolvable reference is
-    // a better outcome than a reference resolved to NaN.
+    const instances = raw.instances ?? [];
+    // A `for_each`/`count` block is ONE resource with many instances, and its `name` is the block's
+    // (`campuses`), not any resource's key. Taking `[0]` would map that one label to one arbitrary
+    // id and report every real key as removed — and because the result is non-empty, the
+    // empty-map guard in `ct ids sync` would not catch it. Report it and map nothing.
+    if (instances.length > 1 || instances[0]?.index_key !== undefined) {
+      multiInstance.add(`${raw.type}.${raw.name}`);
+      continue;
+    }
+    const attributes = instances[0]?.attributes ?? {};
+    // NOT `Number(attributes.id)`: `Number(null)`, `Number("")`, `Number([])` and `Number(false)` are
+    // all 0, and `Number.isFinite(0)` is true — so a resource that is mid-create, tainted or
+    // hand-edited would be written into the map as id 0. Zero is a REAL ChurchTools id here (the
+    // comment-viewer "Alle", and campus 0 in ct's own fixtures), so the reference would resolve
+    // silently to the wrong live object instead of failing. Only a genuine number or numeric string.
+    const rawId = attributes.id;
+    if (typeof rawId !== "number" && !(typeof rawId === "string" && rawId.trim() !== "")) continue;
+    const id = Number(rawId);
+    // Mid-create or tainted: an unresolvable reference is a better outcome than a wrong one.
     if (!Number.isFinite(id)) continue;
     const key = keysByLabel.get(`${ctType}\u0000${raw.name}`) ?? raw.name;
     entries.push(key === raw.name ? { type: ctType, key, id } : { type: ctType, key, id, label: raw.name });
@@ -79,6 +97,7 @@ export function readTfState(
   return {
     entries,
     unmapped: [...unmapped].sort(),
+    multiInstance: [...multiInstance].sort(),
     serial: typeof state.serial === "number" ? state.serial : null,
   };
 }

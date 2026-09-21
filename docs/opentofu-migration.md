@@ -78,6 +78,19 @@ ct export tf --env prod --no-ids   # …without the map, if your repo generates 
 The map is written under `.ct/`, not into the tofu output directory: it is `ct`'s
 input, not part of the root module tofu reads.
 
+A partial export (`--only campus`) rewrites only the types it was asked for and
+carries the rest of the map over untouched — otherwise a type-at-a-time cutover
+would drop the ids of every type it had not reached yet. Within a type the
+rewrite is wholesale: a resource that has left `ct`'s state has left `ct`'s
+ownership, and its id goes with it.
+
+An export that maps **nothing** leaves an existing map alone and says so, rather
+than emptying it. That is not an edge case but the end state: once tier-0 is gone
+from `ct.config.ts` and `ct-state.<env>.json`, every `ct export tf` exports zero
+resources, and the map it would overwrite is the only thing still resolving the
+references that stayed behind. From that point on the map is refreshed from tofu,
+with `ct ids sync` — not from `ct`.
+
 ### Keeping it current
 
 An export can only describe what `ct` still holds. Once tier-0 belongs to tofu,
@@ -157,15 +170,25 @@ _is_ needed, a cross-process brake keeps it from becoming a burst:
 
 - handshakes against one host are spaced at least 3s apart (waited out, not an
   error);
-- more than 20 in a rolling hour is refused, naming when the window frees up —
+- more than 120 in a rolling hour is refused, naming when the window frees up —
   that is a runaway loop, and hammering a throttled instance only lengthens the
   outage for everyone on it;
 - `CT_NO_LOGIN_THROTTLE=1` disables it, for a CI job that knows it runs alone.
 
 The counter lives in `$XDG_CACHE_HOME/ct-cli/login-throttle.<host>.json` and holds
 nothing but timestamps. Deleting it, or being unable to write it, simply means no
-throttle.
+throttle. It is read-modify-written without a lock, so it bounds a _sequence_ of
+invocations rather than a simultaneous burst: two `ct` processes starting at the
+same instant are spaced no better than not at all.
 
-**CI is unaffected and needs none of this.** A CI job passes the token explicitly
-from a GitHub secret, which is already storage-free; this path exists for local
+**The brake sits in the login handshake, so it covers every `ct` command**, not
+just `ct auth token` — and on Linux and Windows there is no session cache, so
+there each invocation is one handshake. That is why the hourly cap is 120 rather
+than a number sized for a credential helper alone: a pipeline should never reach
+it, while a runaway loop passes it in about six minutes. A CI job that runs more
+`ct` invocations than that against one host in an hour should set
+`CT_NO_LOGIN_THROTTLE=1`.
+
+A CI job otherwise needs none of this: it passes the token explicitly from a
+GitHub secret, which is already storage-free. This path exists for local
 development, where the alternative was a token on disk.

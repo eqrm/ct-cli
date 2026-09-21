@@ -155,19 +155,23 @@ export async function removeStateEntry(
           project.configPath,
           dependencies,
         );
+        // Declaredness is checked FIRST because it is the more specific verdict: it is matched on
+        // type AND key, while the state-only reference check below can only match on key. A key that
+        // is both declared and referenced would otherwise be refused with the vaguer of the two
+        // messages, naming a consequence that is not the main one.
+        if (declared.has(declarationId(request.type, request.key))) {
+          throw new Error(
+            `"${request.key}" is still declared in the config, so removing it from state would make the next ` +
+              `plan propose CREATING a resource that already exists on this host. Remove the ` +
+              `declaration first, or pass --force if you are deleting both in the same change.`,
+          );
+        }
         if (stateOnlyRefs.has(request.key)) {
           throw new Error(
             `"${request.key}" is still referenced by the config as a resource that only ct's state can ` +
               `resolve (a group has no live master-data catalog to fall back to), so removing it would make ` +
               `the next plan fail to resolve those references. Remove the references first, or pass --force ` +
               `if you are deleting both in the same change.`,
-          );
-        }
-        if (declared.has(declarationId(request.type, request.key))) {
-          throw new Error(
-            `"${request.key}" is still declared in the config, so removing it from state would make the next ` +
-              `plan propose CREATING a resource that already exists on this host. Remove the ` +
-              `declaration first, or pass --force if you are deleting both in the same change.`,
           );
         }
         // Referenced but not declared — allowed, and worth saying out loud: every one of those refs

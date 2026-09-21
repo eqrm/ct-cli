@@ -141,10 +141,33 @@ describe("runIdsSync", () => {
     expect(result.value.written).toBe(false);
     expect(result.value.added.map((e) => e.key)).toEqual(["mainz"]);
     await expect(readFile(join(dir, ".ct", "ids.eqrm.church.tools.json"), "utf8")).rejects.toThrow(/ENOENT/);
+    // The path it REPORTS is the one it would have written. Built from the raw host, it read
+    // `.ct/ids.https:/eqrm.church.tools.json` — a filename that exists nowhere, in the one mode
+    // whose entire output is "here is what I would do".
+    expect(result.value.path).toBe(join(dir, ".ct", "ids.eqrm.church.tools.json"));
   });
 
   it("says where to look rather than parsing garbage", async () => {
     await expect(sync("not json")).rejects.toThrow(/not valid JSON/);
+  });
+
+  // `loadIdMap` throws on a malformed or foreign-host map, and this is the one command able to
+  // replace one. Refusing to run until the broken file is deleted by hand makes the repair tool
+  // need the repair.
+  it("regenerates over a malformed map instead of refusing to run", async () => {
+    await writeFile(join(dir, ".ct", "ids.eqrm.church.tools.json"), "not json at all", "utf8");
+    const result = await sync(tfstate([CAMPUS_MAINZ]));
+    expect(result.value.written).toBe(true);
+    expect(result.value.entries.map((e) => e.key)).toEqual(["mainz"]);
+    expect(result.warnings.map((w) => w.code)).toContain("IDS_PREVIOUS_UNREADABLE");
+  });
+
+  // Every other path in this operation is anchored to project.cwd; this one read from process.cwd(),
+  // so an embedded or HTTP caller passing `cwd` read a different file than it asked for.
+  it("resolves a relative --tofu-state against the project cwd", async () => {
+    await writeFile(join(dir, "terraform.tfstate"), tfstate([CAMPUS_MAINZ]), "utf8");
+    const result = await runIdsSync({ cwd: dir, tofuState: "terraform.tfstate" });
+    expect(result.value.entries.map((e) => e.key)).toEqual(["mainz"]);
   });
 });
 

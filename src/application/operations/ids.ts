@@ -8,9 +8,9 @@
  * --tofu-state -` works against any backend without ct learning to speak S3.
  */
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { CATALOG_DIR } from "../../permissions/catalog-store.js";
-import { loadIdMap, writeIdMap, type IdMapEntry } from "../../resolve/idMap.js";
+import { idMapPath, loadIdMap, writeIdMap, type IdMapEntry } from "../../resolve/idMap.js";
 import { readTfState } from "../../resolve/tfstate.js";
 import type { CtWarning, OperationResult, ProjectRequest } from "../contracts.js";
 import { resolveProject, type ProjectResolutionDependencies } from "../project.js";
@@ -68,7 +68,7 @@ export async function runIdsSync(
   const raw =
     request.tofuState === "-"
       ? await (dependencies.readStdin ?? readAllStdin)()
-      : await readFile(request.tofuState, "utf8");
+      : await readFile(resolve(project.cwd, request.tofuState), "utf8");
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -82,8 +82,22 @@ export async function runIdsSync(
   // valid HCL identifiers, many-to-one, so a tofu address can only be mapped back to its ct key with
   // the map that recorded the relabelling. Without one, a label is taken as the key — correct for
   // every key that needed no relabelling, which is all of them on a normal instance.
-  const previous = await (dependencies.loadIdMap ?? loadIdMap)(project.host, dir);
-  const { entries, unmapped, serial } = readTfState(parsed, previous?.keysByLabel ?? new Map());
+  //
+  // Read SOFTLY: `loadIdMap` throws on a malformed or foreign-host map, and this is the one command
+  // able to replace one. Refusing to run until the broken file is deleted by hand makes the repair
+  // tool need the repair. The cost of continuing is only that relabelled keys fall back to their
+  // labels, so the failure is named rather than swallowed.
+  let previous: Awaited<ReturnType<typeof loadIdMap>> = null;
+  let previousUnreadable: string | null = null;
+  try {
+    previous = await (dependencies.loadIdMap ?? loadIdMap)(project.host, dir);
+  } catch (err) {
+    previousUnreadable = (err as Error).message;
+  }
+  const { entries, unmapped, multiInstance, serial } = readTfState(
+    parsed,
+    previous?.keysByLabel ?? new Map(),
+  );
 
   const previousById = new Map((previous?.entries ?? []).map((e) => [entryId(e), e]));
   const nextById = new Map(entries.map((e) => [entryId(e), e]));
@@ -98,6 +112,26 @@ export async function runIdsSync(
   const removed = (previous?.entries ?? []).filter((e) => !nextById.has(entryId(e)));
 
   const warnings: CtWarning[] = [];
+  if (previousUnreadable) {
+    warnings.push({
+      code: "IDS_PREVIOUS_UNREADABLE",
+      message:
+        `The existing id map could not be read, so this sync rewrites it from scratch: ` +
+        `${previousUnreadable} Keys the exporter relabelled fall back to their HCL label.`,
+      details: { reason: previousUnreadable },
+    });
+  }
+  if (multiInstance.length > 0) {
+    warnings.push({
+      code: "IDS_MULTI_INSTANCE",
+      message:
+        `Ignored ${multiInstance.length} resource block(s) with more than one instance ` +
+        `(${multiInstance.join(", ")}): a for_each/count block's label is not a resource key, so ct ` +
+        `cannot tell which id belongs to which key. Declare those resources individually, or pin the ` +
+        `references to numeric ids.`,
+      details: { blocks: multiInstance },
+    });
+  }
   if (unmapped.length > 0) {
     warnings.push({
       code: "IDS_TYPE_UNSUPPORTED",
@@ -119,7 +153,7 @@ export async function runIdsSync(
   const written = !request.dryRun && entries.length > 0;
   const path = written
     ? await (dependencies.writeIdMap ?? writeIdMap)(project.host, entries, dir, "ct ids sync")
-    : (previous?.path ?? join(dir, `ids.${project.host}.json`));
+    : (previous?.path ?? idMapPath(project.host, dir));
 
   return {
     operation: "ids",

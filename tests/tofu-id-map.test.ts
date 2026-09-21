@@ -202,3 +202,55 @@ describe("readTfState", () => {
     expect(() => readTfState({ resources: {} })).toThrow(/"resources" is not an array/);
   });
 });
+
+/**
+ * Reading a tofu state defensively (#181 review): the two ways `readTfState` could put a
+ * CONFIDENTLY WRONG row into a committed map, which is worse than putting none there.
+ */
+describe("readTfState — ids it must refuse to guess", () => {
+  const managed = (name: string, id: unknown) => ({
+    mode: "managed",
+    type: "churchtools_campus",
+    name,
+    instances: [{ attributes: { id } }],
+  });
+
+  // `Number(null)`, `Number("")`, `Number([])` and `Number(false)` are all 0, and `Number.isFinite(0)`
+  // is true — so the finite check alone let a mid-create or tainted resource through as id 0. Zero is
+  // a REAL ChurchTools id, so the reference would have resolved silently to the wrong live object.
+  it("does not turn a null or empty id into the real id 0", () => {
+    const { entries } = readTfState({
+      resources: [managed("mainz", null), managed("koeln", ""), managed("bonn", [])],
+    });
+    expect(entries).toEqual([]);
+  });
+
+  it("still accepts a genuine 0 and a numeric string", () => {
+    const { entries } = readTfState({ resources: [managed("mainz", 0), managed("koeln", "7")] });
+    expect(entries).toEqual([
+      { type: "campus", key: "mainz", id: 0 },
+      { type: "campus", key: "koeln", id: 7 },
+    ]);
+  });
+
+  // A for_each/count block is ONE resource with many instances, and its name is the block's, not any
+  // resource's key. Taking instances[0] mapped that label to one arbitrary id and reported every real
+  // key as removed — and being non-empty, it would sail past the empty-map guard in `ct ids sync`.
+  it("reports a for_each block instead of mapping its label to one arbitrary id", () => {
+    const { entries, multiInstance } = readTfState({
+      resources: [
+        {
+          mode: "managed",
+          type: "churchtools_campus",
+          name: "campuses",
+          instances: [
+            { index_key: "mainz", attributes: { id: 4 } },
+            { index_key: "koeln", attributes: { id: 5 } },
+          ],
+        },
+      ],
+    });
+    expect(entries).toEqual([]);
+    expect(multiInstance).toEqual(["churchtools_campus.campuses"]);
+  });
+});

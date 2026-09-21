@@ -16,6 +16,16 @@
  *     is a runaway loop, not a burst, and continuing to hammer a throttled instance only lengthens
  *     the outage for everyone on it.
  *
+ * ## What it does not do
+ *
+ * The counter is read, modified and written without a lock, so it bounds a SEQUENCE of invocations,
+ * not a simultaneous burst: two processes that read the same file at the same moment compute the
+ * same wait, sleep it together, and the second write drops the first one's timestamp. Truly parallel
+ * handshakes are therefore spaced no better than not at all, and the hourly count under-reports them.
+ * Holding a lock across a network handshake is its own hazard (a crashed `ct` would wedge every later
+ * one), and the 429 this exists to avoid is driven by sustained rate, not by two coincident logins —
+ * so the honest bound is the useful one, and it is stated here rather than implied away.
+ *
  * Deliberately NOT in the Keychain: there is no secret here (see the blob shape below), and a
  * Keychain read is an ACL prompt away from being the very thing that makes the CLI unusable in a
  * script. A cache file that a user deletes, or that never appears at all, simply means no throttle —
@@ -28,8 +38,20 @@ import { hostSlug } from "../permissions/catalog-store.js";
 
 /** Minimum spacing between two handshakes against one host. Waited out, never an error. */
 export const MIN_INTERVAL_MS = 3_000;
-/** Handshakes per rolling hour per host before `ct` refuses to add to the pile. */
-export const MAX_PER_HOUR = 20;
+/**
+ * Handshakes per rolling hour per host before `ct` refuses to add to the pile.
+ *
+ * Sized for a CI pipeline, not for `ct auth token` alone, because the gate sits in
+ * `CtClient.performLogin` and therefore covers EVERY ct command. On Linux and Windows there is no
+ * session cache at all (`sessionStore` is Keychain-only by design), so on CI each invocation costs
+ * one handshake: at 20/hour a pipeline whose 21st `ct plan`/`ct get`/`ct apply` ran inside the hour
+ * would start failing on ct's own error, somewhere it had always worked.
+ *
+ * The number that matters for the instance is the SPACING above — it already caps a runaway loop at
+ * 20 handshakes a minute — so this is the backstop for a loop that keeps going, not the primary
+ * brake. A loop reaches 120 in about six minutes; a real pipeline does not reach it at all.
+ */
+export const MAX_PER_HOUR = 120;
 const HOUR_MS = 60 * 60 * 1000;
 
 /** What a throttle needs from its caller. Injected so a client in a test never touches the disk. */
