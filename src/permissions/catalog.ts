@@ -44,6 +44,36 @@ function splitCatalog(data: unknown): { rights: Record<string, CatalogEntry>; me
 const bundled = splitCatalog(catalogData);
 
 /**
+ * The rights in the catalog BUNDLED with this release, kept reachable after {@link useCatalog} has
+ * pointed everything else at a per-instance capture (#178).
+ *
+ * It is the only evidence `ct` has for the difference between the two ways a declared right can be
+ * absent from the active catalog:
+ *
+ *   - absent here too  → the name is a typo, or a right ChurchTools deleted. A hard error, as before.
+ *   - present here     → the name is real, this HOST just does not have it (a module that is not
+ *                        installed). Skipped with a warning, so ONE inapplicable declaration cannot
+ *                        take down planning for the 100 that do apply.
+ *
+ * That asymmetry is deliberate: the bundled snapshot is a real instance's full right set, so it is a
+ * usable "does this name exist anywhere ct knows" oracle even though it is the wrong oracle for
+ * "what can this host do".
+ */
+export const BUNDLED_CATALOG: Readonly<Record<string, CatalogEntry>> = bundled.rights;
+
+/** The ChurchTools version the bundled snapshot was captured against, for a warning that has to name
+ *  BOTH catalogs (#178). `null` on a legacy catalog with no `$meta`. */
+export const BUNDLED_CATALOG_VERSION: string | null = bundled.meta?.ctVersion ?? null;
+
+/** Scope dimensions the bundled catalog knows — the same oracle as {@link BUNDLED_CATALOG}, for
+ *  `preserveUnknown` dimensions (#178). */
+export const BUNDLED_SCOPE_FIELDS: ReadonlySet<string> = new Set(
+  Object.values(bundled.rights)
+    .map((e) => e.scopeField)
+    .filter((f): f is string => f != null),
+);
+
+/**
  * The permission catalog: name → authId bridge. Bundled at build time (see the module header), and
  * REPLACEABLE at runtime by a per-instance capture (#105 — see {@link useCatalog}).
  *
@@ -120,6 +150,59 @@ export function useCatalog(data: unknown, opts: { perInstance?: boolean } = {}):
 /** Restore the catalog bundled with this release. Exists so tests can undo {@link useCatalog}. */
 export function useBundledCatalog(): void {
   useCatalog(catalogData);
+  STRICT_CATALOG = false;
+}
+
+/**
+ * `--strict-catalog` (#178): restore the pre-#178 behaviour, where ANY declaration the active
+ * catalog cannot resolve is a hard error rather than a skip.
+ *
+ * A module-level flag rather than a threaded option because the two places that need it sit at
+ * opposite ends of the pipeline — config EVALUATION (`preserveUnknown` dimensions, deep inside a
+ * user's `ct.config.ts` callback) and plan BUILDING — and the catalog they consult is already
+ * process-wide mutable state (`CATALOG` is swapped by {@link useCatalog}). Threading a flag through
+ * both would add a parameter to every layer in between without making anything more honest.
+ */
+export let STRICT_CATALOG = false;
+
+export function setStrictCatalog(strict: boolean): void {
+  STRICT_CATALOG = strict;
+}
+
+/**
+ * Why a name is not in the active catalog (#178).
+ *
+ *  - `known`        — it is; carry on.
+ *  - `host-missing` — the active catalog is a capture from THIS host and lacks it, but the bundled
+ *                     catalog has it: a real right this instance does not have. Skip + warn.
+ *  - `unknown`      — no catalog `ct` has ever seen defines it: a typo or a deleted right. Hard error.
+ *
+ * `host-missing` requires a per-instance capture to be active. Without one the active catalog IS the
+ * bundled snapshot, so "missing from the active catalog" and "missing everywhere" are the same
+ * statement, and the verdict stays `unknown` — a repo that has not captured its host's catalog gets
+ * exactly today's behaviour, including today's errors.
+ */
+export type CatalogVerdict = "known" | "host-missing" | "unknown";
+
+export function catalogVerdict(name: string): CatalogVerdict {
+  if (CATALOG[name]) return "known";
+  if (!STRICT_CATALOG && CATALOG_IS_PER_INSTANCE && BUNDLED_CATALOG[name]) return "host-missing";
+  return "unknown";
+}
+
+/** The same verdict for a scope DIMENSION rather than a right (#178, `preserveUnknown`). */
+export function scopeFieldVerdict(dimension: string): CatalogVerdict {
+  if (KNOWN_SCOPE_FIELDS.has(dimension)) return "known";
+  if (!STRICT_CATALOG && CATALOG_IS_PER_INSTANCE && BUNDLED_SCOPE_FIELDS.has(dimension))
+    return "host-missing";
+  return "unknown";
+}
+
+/** How to describe the active catalog in a warning: where it came from and how big it is. */
+export function describeCatalog(): string {
+  if (!CATALOG_META) return `${Object.keys(CATALOG).length} rights`;
+  const scope = CATALOG_IS_PER_INSTANCE ? "this host's catalog" : "ct's bundled catalog";
+  return `${scope}: ChurchTools ${CATALOG_META.ctVersion}, ${Object.keys(CATALOG).length} rights`;
 }
 
 export function resolveAuthId(name: string): CatalogEntry {

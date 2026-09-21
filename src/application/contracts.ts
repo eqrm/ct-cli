@@ -3,7 +3,7 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export type OperationName =
-  "plan" | "apply" | "coverage" | "adopt" | "state" | "refresh" | "destroy" | "auth" | "export-tf";
+  "plan" | "apply" | "coverage" | "adopt" | "state" | "refresh" | "destroy" | "auth" | "export-tf" | "ids";
 
 /** Common project selection accepted by CLI and, later, HTTP adapters. */
 export interface ProjectRequest {

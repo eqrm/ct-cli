@@ -7,7 +7,7 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: c3a6740c4d4bc134
+sources_hash: 1ccb85af4d54a491
 reviewed: 2026-08-28
 ---
 
@@ -152,7 +152,10 @@ Each line shows the name, its numeric `authId`, and whether it's `scoped`
 when grants are resolved to tuples against the catalog, after the authed
 fetch — with a "did you mean" hint drawn from same-module names. (Config
 evaluation only checks a grant's _shape_: `module:right` string or
-`{ right, scope }`; it does not resolve the name against the catalog.)
+`{ right, scope }`; it does not resolve the name against the catalog.) A name the
+**active** catalog does not define but ct's bundled catalog does is a different
+case — a host difference, not a typo — and is skipped rather than fatal; see
+[A right this host does not have](#a-right-this-host-does-not-have-178).
 
 ## Catalog lifecycle & staleness (#25)
 
@@ -211,6 +214,50 @@ records the version the catalog was captured from. On every `plan`/`apply`:
 
 Both are warnings, not errors: the plan still runs and the exit code stays
 success. `ct permissions catalog --refresh` is the fix for both.
+
+### A right this host does not have (#178)
+
+An estate's instances do not all have the same modules installed, and one
+declarative config is supposed to serve all of them. So a **declared** right
+that the active catalog does not define is not automatically an error:
+
+- the name is in **ct's bundled catalog** but not in this host's capture → a real
+  right this instance does not have (a module that is not installed). `ct` prints
+  a warning naming the right, the declaration and both catalog versions, and
+  **skips that one grant on this host** — it is never granted and never revoked.
+  Everything else in the same declaration still plans.
+- the name is in **no** catalog `ct` has ever seen → still a hard error with the
+  "did you mean" hint. That is a typo, or a right ChurchTools deleted, and it is
+  the case the error was written for.
+
+The same split applies to a [`preserveUnknown`](#partial-ownership-preserveunknown-opt-in-102)
+dimension: one no right on this host scopes by is reported and ignored, one no
+catalog knows is still rejected at config-evaluation time.
+
+This mirrors what `ct` has always done in the other direction — a _live_ grant
+whose `authId` the catalog cannot name is reported and left alone. Say what you
+cannot manage, manage the rest.
+
+Note the precondition: the "it exists elsewhere" verdict needs a **per-instance
+capture** to be active. Without one, the active catalog _is_ the bundled snapshot,
+so "missing here" and "missing everywhere" are the same statement and every
+absence stays fatal. This is one more reason to commit
+`.ct/permission-catalog.<host>.json` per host.
+
+```bash
+ct plan --env dev
+# ! group_role "implementierung_churchtools_mitglied": right "jpmFlowManager:view" is absent
+#   from this host's permission catalog (this host's catalog: ChurchTools 3.137.0-RC13, 221 rights)
+#   — skipped for this host — never granted, never revoked. ct's bundled catalog
+#   (ChurchTools 3.134.0) defines it, so this reads as a module this instance does not have.
+#   Pass --strict-catalog to fail on it instead.
+
+ct plan --env dev --strict-catalog   # every unresolvable declaration is an error again
+```
+
+`--strict-catalog` is available on `ct plan` and `ct apply`. Exit codes are
+unchanged either way: a skip is not a pending change, so `--detailed-exitcode`
+still reports 0 for a clean plan.
 
 ## `domainId` semantics
 
@@ -488,6 +535,14 @@ and `6` on eqrm dev. A campus-scoped grant written as a numeric literal is
 therefore a cross-environment misgrant, and because declaring a domain makes
 `ct` _own_ it, the wrong-scope grant also revokes whatever is really there on
 the other host. The typed reference makes one config plan clean on both.
+
+Between those two sits one more source, for a repo mid-migration: the committed
+**OpenTofu id map** (`.ct/ids.<host>.json`, #181). It is consulted after managed
+state and before the live catalog, and it exists because a resource that moved to
+`terraform-provider-churchtools` leaves ct's state entirely — at which point a
+reference like `personStatus: "status_unbekannt"` has nothing left to resolve
+against, since ct's keys are not derived from the live names the catalog matches
+on. See [Living alongside terraform-provider-churchtools](https://github.com/eqrm/ct-cli/blob/main/docs/opentofu-migration.md).
 
 Resolution mirrors the domain-reference rules: managed state first, the live
 master-data catalog second, and a target **declared in this same config**

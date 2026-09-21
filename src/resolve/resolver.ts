@@ -7,6 +7,12 @@
  *     state resolves to a {@link PendingRef} (its id is only known after the
  *     resource tier applies — re-resolved at apply time, mirroring the permission
  *     scope pattern in src/permissions/scope.ts).
+ *  1b. The committed OpenTofu id map for this host (`.ct/ids.<host>.json`, #181), an EXACT
+ *     `key -> id` table for resources that moved to terraform-provider-churchtools and are therefore
+ *     no longer in ct's state. After managed state (ct never stops trusting what it owns) and before
+ *     the catalog below (an exact table beats a name guess) — and it is what keeps a reference like
+ *     `personStatus: "status_unbekannt"` resolving at all, since ct's tier-0 keys are not derived
+ *     from the live names the catalog matches on.
  *  2. Live catalog master data, matched by `slug(name) === key` with an exact-name
  *     secondary: campus → /campuses, group-type → /group/grouptypes, role-def → /group/roles.
  *     Each catalog is fetched at most once per run and cached by a `Map<RefKind, Promise>`,
@@ -27,6 +33,7 @@
  */
 import type { CtClient } from "../api/ctClient.js";
 import type { State } from "../state/state.js";
+import type { IdMap } from "./idMap.js";
 import type { DesiredResource } from "../engine/types.js";
 import { slug } from "../resources/registry.js";
 import {
@@ -127,6 +134,19 @@ const CATALOG_PATH: Partial<Record<RefKind, string>> = {
   "role-def": "/group/roles",
 };
 
+/**
+ * Can a reference of this kind resolve WITHOUT ct's managed state — i.e. does it have a live
+ * master-data catalog to fall back to (#180)?
+ *
+ * Read by `ct state rm`, which has to predict what removing a state entry does to the NEXT plan. A
+ * `campus`/`person-status`/`group-type` ref falls back to the catalog and keeps resolving; a `group`
+ * ref has no catalog at all (groups are managed-only), so removing the group it names turns the next
+ * plan into a hard error. Same table, one question, so the two cannot drift.
+ */
+export function refKindResolvesLive(kind: RefKind): boolean {
+  return CATALOG_PATH[kind] !== undefined;
+}
+
 interface CatalogRecord {
   id: number;
   name?: string;
@@ -146,6 +166,11 @@ export interface ResolverDeps {
   desired: DesiredResource[];
   /** Host label for error messages. Defaults to `state.host`. */
   host?: string;
+  /**
+   * The committed OpenTofu id map for this host (#181), when one exists. Loaded by the command layer
+   * (like the per-instance permission catalog) so the resolver stays filesystem-free.
+   */
+  idMap?: Pick<IdMap, "ids" | "path"> | null;
 }
 
 /**
@@ -197,6 +222,7 @@ export class Resolver {
   private readonly client: Pick<CtClient, "get"> & Partial<Pick<CtClient, "getAll">>;
   private readonly state: State;
   private readonly host: string;
+  private readonly idMap: Pick<IdMap, "ids" | "path"> | null;
   private readonly catalogs = new Map<RefKind, Promise<CatalogRecord[]>>();
   /** Per-group role list cache (group_role domain resolution), keyed by group id, fetched at most once. */
   private readonly groupRoleLists = new Map<number, Promise<CatalogRecord[]>>();
@@ -229,6 +255,7 @@ export class Resolver {
     this.client = deps.client;
     this.state = deps.state;
     this.host = deps.host ?? deps.state.host;
+    this.idMap = deps.idMap ?? null;
     for (const d of deps.desired) {
       let set = this.declaredByType.get(d.type);
       if (!set) {
@@ -266,6 +293,13 @@ export class Resolver {
       const managed = this.state.resources[r.key];
       if (managed && managed.type === type) return managed.id;
       if (this.declaredByType.get(type)?.has(r.key)) return pendingRef(r);
+    }
+    // (1b) the OpenTofu id map (#181): an exact key→id table for what tofu now owns. Consulted only
+    // for kinds that HAVE a managed resource type — the map is written from resources ct exported,
+    // so a kind ct never manages can never be in it, and asking would only slow the miss down.
+    if (type !== undefined) {
+      const mapped = this.idMap?.ids.get(`${type}\u0000${r.key}`);
+      if (mapped !== undefined) return mapped;
     }
     // (2) live catalog
     if (CATALOG_PATH[r.kind] !== undefined) return this.resolveFromCatalog(r, site);
@@ -636,6 +670,17 @@ export class Resolver {
     const where = catalog
       ? `no managed resource and no live ${r.kind} at ${catalog} matches key "${r.key}"`
       : `no managed ${r.kind} named "${r.key}" is declared or adopted`;
+    // A repo mid-cutover has the map loaded and the key missing from it — by far the likeliest
+    // reason a reference that used to resolve stops (#181), and the one remedy the generic advice
+    // below does not name.
+    if (this.idMap) {
+      return new Error(
+        `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: ${where}, and ` +
+          `${this.idMap.path} has no ${r.kind} "${r.key}" either. If OpenTofu owns it now, refresh the ` +
+          `map (\`tofu state pull | ct ids sync --tofu-state -\`); otherwise declare/adopt it, fix the ` +
+          `key/name, or use a numeric id.`,
+      );
+    }
     return new Error(
       `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: ${where}. ` +
         `Declare/adopt it, fix the key/name, or use a numeric id.`,

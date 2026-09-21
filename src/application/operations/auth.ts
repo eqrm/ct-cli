@@ -4,7 +4,7 @@ import { CtClient, type WhoAmI } from "../../api/ctClient.js";
 import { formatError } from "../../api/format.js";
 import { meetsMinVersion, MIN_CT_VERSION, type CtInfo } from "../../api/version.js";
 import { checkAllEnvAuth, type EnvAuthStatus } from "../../auth/status.js";
-import { keychainSessionCache } from "../../auth/sessionStore.js";
+import { keychainSessionCache, SESSION_MAX_AGE_MS } from "../../auth/sessionStore.js";
 import {
   clearCredentials,
   readToken,
@@ -148,6 +148,108 @@ export async function runAuthLogout(
     environment: profile.name,
     host: profile.host,
     clearedDefault,
+  };
+}
+
+export interface AuthTokenRequest {
+  cwd?: string;
+  environment?: string;
+}
+
+/**
+ * A ChurchTools SESSION, for handing to another tool (#179).
+ *
+ * Deliberately not the login token. The OpenTofu provider declares `token` as required, so the
+ * tier-0 cutover meant writing a personal ChurchTools login token to local disk — a permanent,
+ * full-privilege credential (an admin one on prod) that ChurchTools offers no way to scope or
+ * rotate. The session bought with it is the one short-lived credential in the system: it expires,
+ * `ct auth logout` drops it, and a copy that leaks into a `tofu` debug log or a CI artifact is dead
+ * within hours rather than forever. So that is what `ct auth token` emits, and the token itself never
+ * leaves the Keychain.
+ */
+export interface AuthTokenResult {
+  operation: "auth";
+  action: "token";
+  environment: string | null;
+  host: string;
+  cookie: string;
+  csrfToken: string;
+  /**
+   * When `ct` will stop reusing this session (its `obtainedAt` + the 12h reuse ceiling in
+   * sessionStore). A CEILING, not a promise: ChurchTools does not advertise its session lifetime, so
+   * the server may end the session sooner. A consumer should treat a 401 as "ask again", not as an
+   * error — which is also why this command is cheap to call on every run.
+   */
+  expiresAt: string;
+  /** `cache` — reused an existing session; `handshake` — one login handshake was spent to buy it. */
+  source: "cache" | "handshake";
+}
+
+export interface AuthTokenDependencies {
+  project?: ProjectResolutionDependencies;
+  resolveProject?: typeof resolveProject;
+  readToken?: typeof readToken;
+  authedSession?: () => Promise<AuthedSession>;
+  env?: NodeJS.ProcessEnv;
+  cwd?: () => string;
+}
+
+/**
+ * Resolve host + session for one environment, buying a session only if there is no reusable one.
+ *
+ * Returns the credential; it never prints, logs or formats it — every caller decides where the value
+ * is allowed to go (the CLI adapter puts it on stdout alone, and refuses a terminal).
+ */
+export async function runAuthToken(
+  request: AuthTokenRequest = {},
+  dependencies: AuthTokenDependencies = {},
+): Promise<AuthTokenResult> {
+  const env = dependencies.env ?? process.env;
+  const cwd = resolve(dependencies.cwd?.() ?? process.cwd(), request.cwd ?? ".");
+  let project;
+  try {
+    project = await (dependencies.resolveProject ?? resolveProject)(
+      { cwd, environment: request.environment },
+      { ...dependencies.project, env },
+    );
+  } catch (cause) {
+    if (!(cause instanceof MissingHostError)) throw cause;
+    throw new CtApplicationError(
+      "AUTH_REQUIRED",
+      "No host resolved. Pass --env <name>, or run `ct auth login --host <url> --token <token>`.",
+      { cause },
+    );
+  }
+  // Checked before the network: "no credential for this host" is the case a credential helper hits
+  // most often, and it must fail with the remedy rather than with a login error.
+  if (!(await (dependencies.readToken ?? readToken)(project.host))) {
+    throw new CtApplicationError(
+      "AUTH_REQUIRED",
+      request.environment
+        ? `No token for ${project.host}. Run \`ct auth login --env ${request.environment}\`.`
+        : `No token for ${project.host}. Run \`ct auth login --host ${project.host} --token <token>\`.`,
+      { details: { host: project.host } },
+    );
+  }
+  const { client } = await (dependencies.authedSession ?? authedSession)();
+  const session = client.sessionCredential();
+  if (!session) {
+    throw new CtApplicationError(
+      "AUTH_REQUIRED",
+      `Authenticated against ${project.host} but no session cookie was captured, so there is nothing ` +
+        `to hand over. Re-run \`ct auth login\` for this host.`,
+      { details: { host: project.host } },
+    );
+  }
+  return {
+    operation: "auth",
+    action: "token",
+    environment: project.environment,
+    host: project.host,
+    cookie: session.cookie,
+    csrfToken: session.csrfToken,
+    expiresAt: new Date(session.obtainedAt + SESSION_MAX_AGE_MS).toISOString(),
+    source: session.source,
   };
 }
 

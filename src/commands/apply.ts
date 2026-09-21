@@ -21,6 +21,7 @@ interface ApplyOptions {
   backupDir?: string;
   autoApprove?: boolean;
   refresh?: boolean;
+  strictCatalog?: boolean;
 }
 
 // Retain this command-module export for callers that used it before the application extraction.
@@ -36,6 +37,10 @@ export function applyCommand(): Command {
     .option("--backup-dir <path>", "directory for the pre-apply backup (or set CT_BACKUP_DIR)")
     .option("-y, --auto-approve", "skip the confirmation prompt")
     .option(
+      "--strict-catalog",
+      "fail when a declared right or preserveUnknown dimension is absent from this host's permission catalog (default: skip it with a warning)",
+    )
+    .option(
       "--refresh",
       "after a successful apply, POST /dynamicgroups/{id}/refresh for each changed dynamic group (per-group only)",
     )
@@ -49,6 +54,7 @@ export function applyCommand(): Command {
             environment: opts.env,
             backupDir: opts.backupDir,
             refresh: opts.refresh,
+            strictCatalog: opts.strictCatalog,
             // No wall-clock expiry: the confirmation below blocks on stdin for as long as the
             // operator needs to read the rendered diff (#156 review). Staleness is caught by the
             // state fingerprint at execute time, not by a timer.

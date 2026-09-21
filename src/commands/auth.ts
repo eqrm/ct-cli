@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { runAuthLogin, runAuthLogout, runAuthStatus } from "../application/operations/auth.js";
+import { runAuthLogin, runAuthLogout, runAuthStatus, runAuthToken } from "../application/operations/auth.js";
 import { normalizeHost } from "../config.js";
 import { isSecureStorageAvailable } from "../auth/tokenStore.js";
 import { bootstrapLoginToken } from "../auth/login.js";
@@ -114,6 +114,43 @@ export function authCommand(): Command {
         info(result.environment ? `${result.host} (env ${result.environment})` : result.host!);
         out(result.identity);
       } catch (caught) {
+        error(formatError(caught));
+        process.exitCode = 1;
+      }
+    });
+
+  cmd
+    .command("token")
+    .description("Print a short-lived ChurchTools session for another tool (credential helper)")
+    .option("-e, --env <name>", "environment profile from ct.envs.json (targets that host)")
+    .option("--raw", "print only the session cookie, with no JSON envelope")
+    .option("--allow-tty", "print the credential even though stdout is a terminal")
+    .action(async (opts: { env?: string; raw?: boolean; allowTty?: boolean }) => {
+      // A credential is for a pipe, not for scrollback: a terminal keeps it in the buffer, in a
+      // `script` capture and in whatever the user pastes next. The whole point of emitting the
+      // SESSION rather than the login token is to shorten a leak's life — printing it where it will
+      // be kept works against that, so it takes an explicit flag (#179).
+      if (process.stdout.isTTY && !opts.allowTty) {
+        error(
+          "Refusing to print a credential to a terminal. Pipe it (e.g. `ct auth token --env dev | jq`), " +
+            "or pass --allow-tty if you really want it on screen.",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        const result = await runAuthToken({ environment: opts.env });
+        // stdout carries the credential and NOTHING else, so `$(ct auth token --raw)` is safe. Every
+        // line below — and every warning, prompt and progress message anywhere in ct — is on stderr.
+        process.stdout.write(opts.raw ? `${result.cookie}\n` : `${JSON.stringify(result)}\n`);
+        info(
+          `${result.host}${result.environment ? ` (env ${result.environment})` : ""} — session from ` +
+            `${result.source === "cache" ? "the keychain cache" : "a fresh login handshake"}, ` +
+            `reusable until ${result.expiresAt}.`,
+        );
+      } catch (caught) {
+        // Nothing is written to stdout on failure: a consumer that reads stdout for a credential
+        // must get an empty stream, never a diagnostic it might mistake for one.
         error(formatError(caught));
         process.exitCode = 1;
       }
