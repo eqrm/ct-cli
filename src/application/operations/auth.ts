@@ -170,7 +170,17 @@ export interface AuthTokenRequest {
 export interface AuthTokenResult {
   operation: "auth";
   action: "token";
-  environment: string | null;
+  /**
+   * The selected environment, or `""` when none was — deliberately NOT `null`.
+   *
+   * This command's whole purpose is to be read by another tool, and the tool it was written for
+   * reads it through Terraform's `data "external"`, which requires EVERY value in the object to be
+   * a string. A `null` here fails inside the external provider with a message about JSON types that
+   * names neither this command nor the field, so the one credential helper in the system breaks in
+   * the least diagnosable way available. Every other field is already a string; this one is the
+   * exception that made the envelope unusable.
+   */
+  environment: string;
   host: string;
   cookie: string;
   csrfToken: string;
@@ -244,7 +254,7 @@ export async function runAuthToken(
   return {
     operation: "auth",
     action: "token",
-    environment: project.environment,
+    environment: project.environment ?? "",
     host: project.host,
     cookie: session.cookie,
     csrfToken: session.csrfToken,
