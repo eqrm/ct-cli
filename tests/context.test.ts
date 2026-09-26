@@ -485,11 +485,29 @@ describe("permission declarations", () => {
     expect(permissions).toHaveLength(2);
   });
 
-  it("sugars a logical `groupType` into a Ref-valued domainId (#20)", async () => {
+  it("sugars `groupType` + `role` into a group-type-role Ref — the endpoint is role-keyed (#182)", async () => {
     const { permissions } = await evaluateConfig((ct: ConfigContext) =>
-      ct.groupTypeRole({ key: "tpl", groupType: "ministry_team", grants: ["churchgroup:view group"] }),
+      ct.groupTypeRole({
+        key: "tpl",
+        groupType: "ministry_team",
+        role: "Leiter",
+        grants: ["churchgroup:view group"],
+      }),
     );
-    expect(permissions[0]?.domainId).toEqual({ __ctRef: true, kind: "group-type", key: "ministry_team" });
+    expect(permissions[0]?.domainId).toEqual({
+      __ctRef: true,
+      kind: "group-type-role",
+      groupType: "ministry_team",
+      role: "Leiter",
+    });
+  });
+
+  it("rejects a bare `groupType` — a type alone names no permission domain (#182)", async () => {
+    await expect(
+      evaluateConfig((ct: ConfigContext) =>
+        ct.groupTypeRole({ key: "tpl", groupType: "ministry_team", grants: ["churchgroup:view group"] }),
+      ),
+    ).rejects.toThrow(/keyed by ROLE id.*#182/s);
   });
 
   it("sugars group_role `group` + `role` into a compound Ref (gated at plan time, #25)", async () => {
@@ -507,7 +525,13 @@ describe("permission declarations", () => {
   it("rejects declaring both a numeric id and a logical domain form", async () => {
     await expect(
       evaluateConfig((ct: ConfigContext) =>
-        ct.groupTypeRole({ key: "tpl", id: 8, groupType: "mt", grants: ["churchgroup:view group"] }),
+        ct.groupTypeRole({
+          key: "tpl",
+          id: 8,
+          groupType: "mt",
+          role: "Leiter",
+          grants: ["churchgroup:view group"],
+        }),
       ),
     ).rejects.toThrow(/either "id".*or "groupType".*not both/);
   });
@@ -515,10 +539,15 @@ describe("permission declarations", () => {
   it("dedups two logical declarations targeting the same group-type ref", async () => {
     await expect(
       evaluateConfig((ct: ConfigContext) => {
-        ct.groupTypeRole({ key: "a", groupType: "mt", grants: ["churchgroup:view group"] });
-        ct.groupTypeRole({ key: "b", groupType: "mt", grants: ["churchdb:view group members"] });
+        ct.groupTypeRole({ key: "a", groupType: "mt", role: "Leiter", grants: ["churchgroup:view group"] });
+        ct.groupTypeRole({
+          key: "b",
+          groupType: "mt",
+          role: "Leiter",
+          grants: ["churchdb:view group members"],
+        });
       }),
-    ).rejects.toThrow(/Duplicate permission target.*group-type:mt/s);
+    ).rejects.toThrow(/Duplicate permission target.*group-type-role:mt Leiter/s);
   });
 
   // The PERSON-status permission domain (#90) — the instance-wide grant lever.

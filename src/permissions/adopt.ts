@@ -190,7 +190,11 @@ export function buildAdoptedGrants(args: AdoptGrantsArgs): AdoptedGrantsBlock {
     body.push(`  group: ${JSON.stringify(domain.group)},`);
     body.push(`  role: ${JSON.stringify(domain.role)},`);
   } else {
-    body.push(`  id: ${domainId}, // host-specific — adopt the group to emit the portable group + role form`);
+    body.push(
+      domainType === "group_type_role"
+        ? `  id: ${domainId}, // a ROLE id, host-specific (#182) — portable form: groupType: "<type key>", role: "<role name>"`
+        : `  id: ${domainId}, // host-specific — adopt the group to emit the portable group + role form`,
+    );
   }
 
   if (grants.length === 0) {

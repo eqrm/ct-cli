@@ -169,36 +169,49 @@ describe("apply-time pending re-resolution (same-run campus + group)", () => {
 });
 
 describe("permission domainId resolution", () => {
-  it("resolves a groupType ref to the domainId and diffs against it", async () => {
+  // #182: the domain is the ROLE id, never the group-type id. The fixture gives them different
+  // numbers on purpose — on eqrm prod they collided (type 9 = role 9 on another type), which is how
+  // the bug stayed invisible.
+  const roleCatalogClient = {
+    get: async <T>(path: string): Promise<T> => {
+      if (path === "/group/grouptypes") return [{ id: 9, name: "Ministry Team" }] as T;
+      if (path === "/group/roles")
+        return [
+          { id: 9, groupTypeId: 1, name: "Leiter" }, // same number as the type — must NOT be picked
+          { id: 901, groupTypeId: 9, name: "Leiter" },
+          { id: 902, groupTypeId: 9, name: "Mitglied" },
+        ] as T;
+      if (path === "/permissions/group_type_role") return [] as T;
+      throw new CtApiError(`not found: ${path}`, 404, null);
+    },
+  };
+
+  it("resolves a groupType + role ref to the ROLE id and diffs against it (#182)", async () => {
     const { permissions } = await evaluateConfig((ct) => {
-      ct.groupTypeRole({ key: "tpl", groupType: "ministry_team", grants: ["churchgroup:administer groups"] });
+      ct.groupTypeRole({
+        key: "tpl",
+        groupType: "ministry_team",
+        role: "Leiter",
+        grants: ["churchgroup:administer groups"],
+      });
     });
-    const client = {
-      get: async <T>(path: string): Promise<T> => {
-        if (path === "/group/grouptypes") return [{ id: 9, name: "Ministry Team" }] as T;
-        if (path === "/permissions/group_type_role") return [] as T;
-        throw new CtApiError(`not found: ${path}`, 404, null);
-      },
-    };
-    const { items } = await buildPermissionPlan(client, emptyState("h"), permissions);
+    const { items } = await buildPermissionPlan(roleCatalogClient, emptyState("h"), permissions);
     expect(items).toHaveLength(1);
-    expect(items[0]?.domainId).toBe(9); // resolved from the catalog, not a raw number
+    expect(items[0]?.domainId).toBe(901); // the role's id within the type — not the type id 9
   });
 
   it("rejects two permissions whose refs resolve to the same domainId (post-resolution guard)", async () => {
     const { permissions } = await evaluateConfig((ct) => {
-      ct.groupTypeRole({ key: "a", groupType: "ministry_team", grants: ["churchgroup:administer groups"] });
-      ct.groupTypeRole({ key: "b", id: 9, grants: ["churchgroup:administer groups"] });
+      ct.groupTypeRole({
+        key: "a",
+        groupType: "ministry_team",
+        role: "Leiter",
+        grants: ["churchgroup:administer groups"],
+      });
+      ct.groupTypeRole({ key: "b", id: 901, grants: ["churchgroup:administer groups"] });
     });
-    const client = {
-      get: async <T>(path: string): Promise<T> => {
-        if (path === "/group/grouptypes") return [{ id: 9, name: "Ministry Team" }] as T;
-        if (path === "/permissions/group_type_role") return [] as T;
-        throw new CtApiError(`not found: ${path}`, 404, null);
-      },
-    };
-    await expect(buildPermissionPlan(client, emptyState("h"), permissions)).rejects.toThrow(
-      /Duplicate permission target after resolution: group_type_role #9/,
+    await expect(buildPermissionPlan(roleCatalogClient, emptyState("h"), permissions)).rejects.toThrow(
+      /Duplicate permission target after resolution: group_type_role #901/,
     );
   });
 
@@ -251,6 +264,7 @@ describe("acceptance: one config, two hosts", () => {
     ct.groupTypeRole({
       key: "tpl",
       groupType: "ministry_team",
+      role: "Leiter",
       grants: [{ right: "churchgroup:view group", scope: ["kids"] }],
     });
   };
@@ -259,6 +273,7 @@ describe("acceptance: one config, two hosts", () => {
     const { resources, permissions } = await evaluateConfig(config);
     const catalogs = {
       "/group/grouptypes": [{ id: groupTypeId, name: "Ministry Team" }],
+      "/group/roles": [{ id: groupTypeId * 10, groupTypeId, name: "Leiter" }],
       "/permissions/group_type_role": [],
     };
     const client = fakeHost(catalogs);
@@ -287,9 +302,9 @@ describe("acceptance: one config, two hosts", () => {
       source: "config",
     });
 
-    // Permission domainId is resolved per host from the same logical ref.
-    expect(a.items[0]?.domainId).toBe(2);
-    expect(b.items[0]?.domainId).toBe(77);
+    // Permission domainId is resolved per host from the same logical ref — to the ROLE id (#182).
+    expect(a.items[0]?.domainId).toBe(20);
+    expect(b.items[0]?.domainId).toBe(770);
 
     // Both plans create the campus + group (2 creates each) — the config is valid against both hosts.
     expect(a.plan.items.filter((i) => i.action === "create")).toHaveLength(2);

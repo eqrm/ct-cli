@@ -203,8 +203,10 @@ Per resource item:
   `diff.toPut`/`diff.toDelete` is honestly just desired-vs-actual — this is
   the one place the tool cannot make the distinction, so it doesn't
   pretend to.
-- **A permission domain declared by reference to a same-run-created group
-  type** (e.g. `ct.groupTypeRole({ groupType: "struktur", ... })` against a
+- **A permission domain declared by reference to a same-run-created group**
+  (a `ct.groupRole` on a group in the create-set; `ct.groupTypeRole` is no
+  longer eligible, #182 — its role cannot exist before its type does), e.g.
+  historically `ct.groupTypeRole({ groupType: "struktur", ... })` against a
   fresh instance where `struktur` is itself in the create-set) plans as a
   **pending domain** instead of aborting. Its `domainId` is `null` and it
   carries a `pendingDomain` object (the logical reference, e.g.

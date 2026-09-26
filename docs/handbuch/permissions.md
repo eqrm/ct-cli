@@ -80,7 +80,8 @@ person-status rights — as code, and reconcile them idempotently with the same
 export default (ct) => {
   ct.groupTypeRole({
     key: "leiter_tpl", // logical key (unique across the whole config)
-    groupType: "ministry_team", // domain BY NAME — resolved to the domainId per host (#20)
+    groupType: "ministry_team", // domain BY (group type, role) — resolved to the ROLE id per host (#182)
+    role: "Leiter",
     grants: [
       "churchgroup:view group", // unscoped
       { right: "churchgroup:view group", scope: ["kids_area"] }, // scoped
@@ -111,8 +112,10 @@ reference or a numeric `id`:
   namespace with every other resource type).
 - **domain** — the permission domain object. Declare it **by reference** (the
   portable form, #20) or **by numeric `id`** (the escape hatch):
-  - `ct.groupTypeRole` — `groupType: "<name>"` resolves against the live
-    group-type catalog per host, or `id: <domainId>` targets one directly.
+  - `ct.groupTypeRole` — `groupType: "<name>", role: "<name>"` resolves the
+    pair against the live role catalog (`GET /group/roles`) per host, or
+    `id: <roleId>` targets one directly. `groupType` without `role` is an error
+    (#182): the domain is a role, not a type.
   - `ct.groupRole` — `group: "<key>", role: "<name>"` resolves the (group,
     role) pair to its pairing domainId per host (#25), or `id: <domainId>`
     targets one directly. The group must be **managed** (declared via `ct.group`
@@ -264,10 +267,21 @@ still reports 0 for a clean plan.
 The two DSL functions manage two different ChurchTools "domain types," and
 `id` means something different for each:
 
-- **`group_type_role`** (`ct.groupTypeRole`) — the domain is the **group type's
-  own id** (the same id you'd pass as `groupTypeId` on `ct.group`). It scopes the
-  grant to "every role holder of this group type." Declare it portably as
-  `groupType: "<name>"` (resolved per host, #20) or directly as `id: <domainId>`.
+- **`group_type_role`** (`ct.groupTypeRole`) — the domain is a **role's id**
+  (`GET /group/roles` → `id`), _not_ the group type's id. Every role of a group
+  type carries its own grant set, and the grant applies to "every holder of this
+  role in any group of this type." Declare it portably as
+  `groupType: "<name>", role: "<name>"` (resolved per host) or directly as
+  `id: <roleId>`.
+
+  > **Why this is stated so bluntly (#182).** Until ct-cli 0.x this domain was
+  > documented, and resolved, as the group type's id. The endpoint ignores that
+  > reading: on eqrm prod, `/permissions/group_type_role/12` (Local Lead's type
+  > id) returns 0 grants, while its roles 81/84/85 return 2/109/109. Ids of types
+  > and roles overlap, so a type id silently addresses whatever role shares the
+  > number — on prod, the Struktur type (9) landed on `Group`/Leiter (role 9),
+  > and on dev on no role at all. A bare `groupType` is therefore rejected.
+
 - **`group_role`** (`ct.groupRole`) — the domain is the **internal
   (group, role) pairing's own id** — a ChurchTools-internal id for one
   specific group's specific role, _not_ the group's id and _not_ the role's
@@ -338,13 +352,20 @@ The two DSL functions manage two different ChurchTools "domain types," and
   > hardcode it like any other domainId.
 
 Resolution runs in `buildPermissionPlan` (`src/permissions/plan.ts`): a numeric
-`id` passes straight through; a `groupType` reference resolves against the live
-catalog, and a `group` + `role` pair against the group's role list. After
+`id` passes straight through; a `groupType` + `role` pair resolves against the
+live role catalog (filtered to that group type), and a `group` + `role` pair
+against the group's role list. After
 resolution, two declarations that resolve to the **same** `(domainType,
 domainId)` are rejected (they would otherwise diff against each other's grants
 forever) — even if one used a name and the other a raw id.
 
 ### Domains created in the same run (fresh-instance rehearsal, #69)
+
+> **Not for `group_type_role` any more (#182).** A role only exists once its
+> group type does, and the role catalog cannot be filtered by a type that has no
+> id yet — so a `groupType` + `role` domain whose type is created in the same run
+> is a plan-time error that asks you to apply the group type first. The pending
+> mechanism below still applies to `group_role` domains on a same-run group.
 
 When a `groupType` reference names a group type that is **created in this same
 run** (empty/partial state — the type is part of the create-set), the domain is
