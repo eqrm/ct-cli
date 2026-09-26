@@ -82,6 +82,20 @@ describe("emitAdoptedGrants", () => {
     expect(block).not.toContain("authId");
   });
 
+  it("names each domain type's own portable form next to the numeric id (#182)", () => {
+    const rows: RawPermission[] = [
+      { authId: 1, dataId: null, type: "grant", domainId: 3, meta: { modifiedPid: 5 } },
+    ];
+    const idLine = (domainType: "group_type_role" | "group_role" | "status") =>
+      emitAdoptedGrants({ domainType, domainId: 3, rows, state: emptyState() })
+        .split("\n")
+        .find((l) => l.includes("id: 3,"));
+    expect(idLine("group_type_role")).toContain('groupType: "<type key>", role: "<role name>"');
+    expect(idLine("group_role")).toContain("adopt the group to emit the portable group + role form");
+    expect(idLine("status")).toContain('personStatus: "<status key>"');
+    expect(idLine("status")).not.toContain("adopt the group");
+  });
+
   it("group_role emits ct.groupRole", () => {
     const rows: RawPermission[] = [
       { authId: 1, dataId: null, type: "grant", domainId: 7, meta: { modifiedPid: 5 } },

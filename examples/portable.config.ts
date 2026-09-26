@@ -66,6 +66,7 @@ export default (ct: ConfigContext): void => {
   ct.groupTypeRole({
     key: "kids_lead_tpl",
     groupType: "ministry_team",
+    role: "Leiter",
     grants: [{ right: "churchgroup:view group", scope: ["mainz_kids_lead"] }],
   });
 };

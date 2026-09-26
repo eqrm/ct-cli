@@ -50,6 +50,14 @@ const DSL_FN: Record<DomainType, string> = {
   status: "ct.status",
 };
 
+/** The comment on an emitted numeric `id:`: it is host-specific, and this is the portable form. */
+const ID_COMMENT: Record<DomainType, string> = {
+  group_role: "host-specific — adopt the group to emit the portable group + role form",
+  group_type_role:
+    'a ROLE id, host-specific (#182) — portable form: groupType: "<type key>", role: "<role name>"',
+  status: 'host-specific — portable form: personStatus: "<status key>"',
+};
+
 /** DSL sugar field name per managed scope type, for emitting `{ campus: "koblenz" }`-style refs. */
 const SCOPE_SUGAR_FIELD: Readonly<Record<string, string>> = {
   campus: "campus",
@@ -190,7 +198,7 @@ export function buildAdoptedGrants(args: AdoptGrantsArgs): AdoptedGrantsBlock {
     body.push(`  group: ${JSON.stringify(domain.group)},`);
     body.push(`  role: ${JSON.stringify(domain.role)},`);
   } else {
-    body.push(`  id: ${domainId}, // host-specific — adopt the group to emit the portable group + role form`);
+    body.push(`  id: ${domainId}, // ${ID_COMMENT[domainType]}`);
   }
 
   if (grants.length === 0) {

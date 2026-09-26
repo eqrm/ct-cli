@@ -7,7 +7,7 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: 1ccb85af4d54a491
+sources_hash: ac44a97574ed9ba9
 reviewed: 2026-08-28
 ---
 
@@ -80,7 +80,8 @@ person-status rights — as code, and reconcile them idempotently with the same
 export default (ct) => {
   ct.groupTypeRole({
     key: "leiter_tpl", // logical key (unique across the whole config)
-    groupType: "ministry_team", // domain BY NAME — resolved to the domainId per host (#20)
+    groupType: "ministry_team", // domain BY (group type, role) — resolved to the ROLE id per host (#182)
+    role: "Leiter",
     grants: [
       "churchgroup:view group", // unscoped
       { right: "churchgroup:view group", scope: ["kids_area"] }, // scoped
@@ -111,8 +112,10 @@ reference or a numeric `id`:
   namespace with every other resource type).
 - **domain** — the permission domain object. Declare it **by reference** (the
   portable form, #20) or **by numeric `id`** (the escape hatch):
-  - `ct.groupTypeRole` — `groupType: "<name>"` resolves against the live
-    group-type catalog per host, or `id: <domainId>` targets one directly.
+  - `ct.groupTypeRole` — `groupType: "<name>", role: "<name>"` resolves the
+    pair against the live role catalog (`GET /group/roles`) per host, or
+    `id: <roleId>` targets one directly. `groupType` without `role` is an error
+    (#182): the domain is a role, not a type.
   - `ct.groupRole` — `group: "<key>", role: "<name>"` resolves the (group,
     role) pair to its pairing domainId per host (#25), or `id: <domainId>`
     targets one directly. The group must be **managed** (declared via `ct.group`
@@ -264,10 +267,20 @@ still reports 0 for a clean plan.
 The two DSL functions manage two different ChurchTools "domain types," and
 `id` means something different for each:
 
-- **`group_type_role`** (`ct.groupTypeRole`) — the domain is the **group type's
-  own id** (the same id you'd pass as `groupTypeId` on `ct.group`). It scopes the
-  grant to "every role holder of this group type." Declare it portably as
-  `groupType: "<name>"` (resolved per host, #20) or directly as `id: <domainId>`.
+- **`group_type_role`** (`ct.groupTypeRole`) — the domain is a **role's id**
+  (`GET /group/roles` → `id`), _not_ the group type's id. Every role of a group
+  type carries its own grant set, and the grant applies to "every holder of this
+  role in any group of this type." Declare it portably as
+  `groupType: "<name>", role: "<name>"` (resolved per host) or directly as
+  `id: <roleId>`.
+
+  > **Why this is stated so bluntly (#182).** Through ct-cli 3.x this domain was
+  > documented, and resolved, as the group type's id. The endpoint ignores that
+  > reading: read live, a group type's own id returned 0 grants while each of
+  > its roles returned its own set. Ids of types and roles overlap, so a type id
+  > silently addresses whatever role shares the number — on another group type,
+  > or on no role at all. A bare `groupType` is therefore rejected.
+
 - **`group_role`** (`ct.groupRole`) — the domain is the **internal
   (group, role) pairing's own id** — a ChurchTools-internal id for one
   specific group's specific role, _not_ the group's id and _not_ the role's
@@ -283,7 +296,8 @@ The two DSL functions manage two different ChurchTools "domain types," and
   check, not a truthiness one.
 
   > **Person status ≠ group status.** `groupStatusId` (`ct.group`) is a
-  > different dimension with **no** REST catalog at all (#67) and must always be
+  > different dimension: its catalog is read-only (`GET /person/masterdata` →
+  > `groupStatuses`), ct does not resolve it by name yet (#157), and it must be
   > written as a number. Person statuses do have one (`GET /statuses`, flat
   > array of `{id, name}` — live-verified 2026-08-10 on eqrm prod), so they
   > resolve by name like campuses and group types.
@@ -318,7 +332,8 @@ The two DSL functions manage two different ChurchTools "domain types," and
   no-op on prod died on dev with _"no managed resource and no live person-status
   at /statuses matches key …"_ — whose own advice ("Declare/adopt it") was not
   actually possible. A status declared in the same config resolves to a pending
-  domain and converges in one `ct apply`, exactly like a same-run group type.
+  domain and converges in one `ct apply` (see
+  [Domains created in the same run](#domains-created-in-the-same-run-fresh-instance-rehearsal-69)).
 
   > **VERIFIED LIVE (2026-08-13, CT 3.135.2).** The reference form resolves by
   > reading the group's own role list (`GET /groups/{groupId}/roles`) and taking
@@ -338,29 +353,39 @@ The two DSL functions manage two different ChurchTools "domain types," and
   > hardcode it like any other domainId.
 
 Resolution runs in `buildPermissionPlan` (`src/permissions/plan.ts`): a numeric
-`id` passes straight through; a `groupType` reference resolves against the live
-catalog, and a `group` + `role` pair against the group's role list. After
+`id` passes straight through; a `groupType` + `role` pair resolves against the
+live role catalog (filtered to that group type), and a `group` + `role` pair
+against the group's role list. After
 resolution, two declarations that resolve to the **same** `(domainType,
 domainId)` are rejected (they would otherwise diff against each other's grants
 forever) — even if one used a name and the other a raw id.
 
 ### Domains created in the same run (fresh-instance rehearsal, #69)
 
-When a `groupType` reference names a group type that is **created in this same
-run** (empty/partial state — the type is part of the create-set), the domain is
-handled as a **pending domain** rather than aborting the plan:
+When a permission domain references a resource that is **created in this same
+run** (empty/partial state — the resource is part of the create-set), the
+domain is handled as a **pending domain** rather than aborting the plan. That
+covers a `personStatus` declared in the same config (#90) and a `group_role` on
+a same-run group (#106, below):
 
-- `ct plan` renders the grant block with a
-  `<group-type:<key> (created this apply)>` marker (consistent with resource
-  pending refs, #20/#46) and counts its grants in `--json`
-  (`domainId: null` + a `pendingDomain` reference) and toward exit code `2`.
+- `ct plan` renders the grant block with a `<… (created this apply)>` marker
+  (consistent with resource pending refs, #20/#46) and counts its grants in
+  `--json` (`domainId: null` + a `pendingDomain` reference) and toward exit
+  code `2`.
 - `ct apply` runs permission reconciliation **after** the resources are
-  created, re-resolving the domain id from the fresh group type and granting in
+  created, re-resolving the domain id from the fresh resource and granting in
   the same run — so a single `ct apply` converges fully. This reuses the same
   re-resolution machinery as resource pending refs.
 - The hard error (`references a resource created in the same run` → now only a
   genuine unresolvable) is reserved for references that resolve to **nothing**:
   a key absent from the config, state, and the live catalog (a typo).
+
+> **Not for `group_type_role` (#182).** A `groupType` + `role` domain whose
+> group type — or role — is created in the same run is a plan-time error that
+> asks you to apply the master data first. #69 introduced this section for a
+> bare `groupType` domain, but that resolved to the type's id, which the
+> endpoint reads as a role id: it never granted on the type it named. Letting
+> the role-keyed form go pending is #189.
 
 **`group_role` behaves the same way since #106.** A `group_role` domain id is
 the (group, role) **pairing** id, which only exists on

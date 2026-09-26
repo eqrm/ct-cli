@@ -163,11 +163,18 @@ export interface PermissionInput {
   key: string;
   /** Numeric domainId (the escape hatch). Mutually exclusive with the logical forms below. */
   id?: number;
-  /** `group_type_role`: the group type by name/key — sugars into a Ref-valued domainId (#20). */
+  /**
+   * `group_type_role`: the group type by name/key, paired with `role` — the two resolve to that
+   * role's id (#182). `/permissions/group_type_role/<id>` is keyed by the ROLE id, not the group-type
+   * id: every role of a type carries its own grant set, so a type alone does not name a domain.
+   */
   groupType?: string;
   /** `group_role`: the group by key (paired with `role`) — resolves to the pairing domainId (#25). */
   group?: string;
-  /** `group_role`: the role name (paired with `group`) — resolves to the pairing domainId (#25). */
+  /**
+   * The role name. `group_role`: paired with `group` → the pairing domainId (#25). `group_type_role`:
+   * paired with `groupType` → the role id within that type (#182).
+   */
   role?: string;
   /** `status`: the PERSON status by name/key (`/statuses`) — sugars into a Ref-valued domainId (#90). */
   personStatus?: string;
@@ -201,7 +208,8 @@ function domainKeyPart(domainId: number | Ref): string {
 
 /**
  * Resolve a permission declaration's domain to a numeric id (escape hatch) or a {@link Ref} (#20):
- *  - `group_type_role`: numeric `id`, or logical `groupType: "<key>"` → `ref.groupType(...)`.
+ *  - `group_type_role`: numeric `id` (a ROLE id), or logical `groupType` + `role` →
+ *    `ref.groupTypeRole(...)`, resolved against `/group/roles` (#182).
  *  - `group_role`: numeric `id`, or logical `group` + `role` → `ref.groupRole(...)` (the resolver
  *    maps the pair to its pairing domainId at plan time; see #25).
  *  - `status`: numeric `id`, or logical `personStatus: "<key>"` → `ref.personStatus(...)`, resolved
@@ -210,7 +218,7 @@ function domainKeyPart(domainId: number | Ref): string {
  */
 /** The logical field name each domain type offers, for the "provide id or ..." error message. */
 const LOGICAL_FIELD: Record<DomainType, string> = {
-  group_type_role: '"groupType"',
+  group_type_role: '"groupType" + "role"',
   group_role: '"group" + "role"',
   status: '"personStatus"',
 };
@@ -222,11 +230,24 @@ function resolveDomainInput(domainType: DomainType, input: PermissionInput): num
       `${domainType} "${input.key}": declare either "id" (numeric) or ${logical} (logical), not both.`,
     );
   if (domainType === "group_type_role") {
-    if (input.groupType !== undefined) {
-      if (hasId) throw bothError('"groupType"');
+    if (input.groupType !== undefined || input.role !== undefined) {
+      if (hasId) throw bothError('"groupType" + "role"');
       if (typeof input.groupType !== "string" || !input.groupType)
         throw new Error(`${domainType} "${input.key}": "groupType" must be a non-empty group-type key.`);
-      return ref.groupType(input.groupType);
+      if (input.role === undefined)
+        // #182: this used to resolve to the group TYPE id and use it as the domainId. The endpoint is
+        // keyed by ROLE id, so it silently addressed whichever role happened to share that number —
+        // a role of another group type, or no role at all.
+        // There is no type-wide grant set in ChurchTools to fall back to, so this is an error, not a
+        // default: name the role.
+        throw new Error(
+          `${domainType} "${input.key}": "groupType" alone does not name a permission domain — ` +
+            `/permissions/group_type_role/<id> is keyed by ROLE id (eqrm/ct-cli#182). Add ` +
+            `"role": "<role name>" and declare one block per role of "${input.groupType}".`,
+        );
+      if (typeof input.role !== "string" || !input.role)
+        throw new Error(`${domainType} "${input.key}": "role" must be a non-empty role name.`);
+      return ref.groupTypeRole(input.groupType, input.role);
     }
   } else if (domainType === "status") {
     if (input.personStatus !== undefined) {

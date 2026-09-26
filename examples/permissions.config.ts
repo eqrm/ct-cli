@@ -21,7 +21,10 @@ export default (ct: ConfigContext): void => {
 
   ct.groupTypeRole({
     key: "leiter_tpl",
-    groupType: "kids", // logical domain — the resolver maps it to the group type's id per host
+    // Logical domain: the (group type, role) pair resolves to that ROLE's id per host. The endpoint is
+    // role-keyed — every role of a type has its own grant set, so the role is required (#182).
+    groupType: "kids",
+    role: "Leiter",
     grants: [
       // Unscoped: applies everywhere this group type's role holds. authId 1101.
       "churchgroup:view",

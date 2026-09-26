@@ -203,19 +203,21 @@ Per resource item:
   `diff.toPut`/`diff.toDelete` is honestly just desired-vs-actual — this is
   the one place the tool cannot make the distinction, so it doesn't
   pretend to.
-- **A permission domain declared by reference to a same-run-created group
-  type** (e.g. `ct.groupTypeRole({ groupType: "struktur", ... })` against a
-  fresh instance where `struktur` is itself in the create-set) plans as a
-  **pending domain** instead of aborting. Its `domainId` is `null` and it
-  carries a `pendingDomain` object (the logical reference, e.g.
-  `{ kind: "group-type", key: "struktur", __ctRef: true }`); the human render
-  shows `<group-type:struktur (created this apply)>`. Its grants land in
-  `diff.toPut` and count toward `summary.permissions.toPut`, `hasChanges`,
-  and exit code `2` — so a fresh-instance `ct plan` reports the create-set +
-  pending grants rather than failing. `ct apply` re-resolves the real domain
-  id after the group type is created and reconciles the grants in the same
-  run. The hard error is reserved for references that resolve to nothing at
-  all (a key absent from the config, state, and the live catalog — a typo).
+- **A permission domain declared by reference to a same-run-created resource**
+  — a `ct.groupRole` on a group in the create-set (#106), or a `ct.status` on a
+  person status in the create-set (#90) — plans as a **pending domain** instead
+  of aborting. (`ct.groupTypeRole` never goes pending: its group type and role
+  must already exist, #182/#189.) Its `domainId` is `null` and it carries a
+  `pendingDomain` object (the logical reference, e.g.
+  `{ kind: "person-status", key: "group_active", __ctRef: true }`); the human
+  render shows `<person-status:group_active (created this apply)>`. Its grants
+  land in `diff.toPut` and count toward `summary.permissions.toPut`,
+  `hasChanges`, and exit code `2` — so a fresh-instance `ct plan` reports the
+  create-set + pending grants rather than failing. `ct apply` re-resolves the
+  real domain id after the resource is created and reconciles the grants in
+  the same run. The hard error is reserved for references that resolve to
+  nothing at all (a key absent from the config, state, and the live catalog —
+  a typo).
 
 ## Posting a plan as a PR comment
 
