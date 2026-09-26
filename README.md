@@ -13,8 +13,9 @@ code, and reconcile it against the ChurchTools API with Terraform-style
 > **Frozen.** The TypeScript config DSL receives bugfixes only and is removed
 > in ct-cli 5.0. Its successor is `terraform-provider-churchtools`, an
 > OpenTofu/Terraform provider that replaces the state file with tfstate and the
-> logical-key resolver with native resource references. Its repository is not
-> public yet; this note will link it at the provider's first release.
+> logical-key resolver with native resource references:
+> [eqrm/terraform-provider-churchtools](https://github.com/eqrm/terraform-provider-churchtools)
+> (public; first releases 2026-09).
 >
 > Migrating needs no re-adoption for the resource types the provider already
 > covers: `ct export tf` generates HCL plus `import` blocks from your existing
