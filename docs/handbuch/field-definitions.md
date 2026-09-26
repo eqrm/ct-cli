@@ -88,7 +88,14 @@ Evidence:
    `churchtools-api` tested @ CT 3.104, bensteUEM `ChurchToolsAPI` @ CT 3.101)
    and the ChurchTools Academy docs. **Re-verify** against a freshly generated
    schema per the re-audit procedure in `docs/runbook-manual-surface.md`.
-2. **The REST field-definition resource is GET-only.** Every public client
+
+> **Update 2026-09-26:** the eqrm prod OpenAPI spec now lists REST writes on field definitions —
+> `POST /dbfields`, `PUT`/`DELETE /dbfields/{fieldId}`, `POST /dbfields/{fieldId}/options`,
+> `PUT`/`DELETE /dbfields/{fieldId}/options/{optionId}`. Points 2–3 below describe the state when
+> this page was written. The endpoints are **not live-tested**, and the tool still treats data fields
+> as read-only: promoting the resource is the follow-up this section describes at its end.
+
+2. **The REST field-definition resource was GET-only.** Every public client
    exposes data fields solely as `GET /dbfields` (list) and `GET /dbfields/{id}`
    (by id). No REST `POST`/`PUT`/`PATCH`/`DELETE` on a field-definition path
    exists in any of them.
@@ -117,12 +124,12 @@ re-deciding rather than merely re-reading.
 
 ## Endpoint reference
 
-| Purpose                                    | Path                                                                           | Methods (this CT)                       | `ct` surface                                        |
-| ------------------------------------------ | ------------------------------------------------------------------------------ | --------------------------------------- | --------------------------------------------------- |
-| Person master-data model + security levels | `/person/masterdata`                                                           | GET (read-only)                         | `ct get person-masterdata`                          |
-| Security levels, standalone                | `/securitylevels`, `/securitylevels/{id}`                                      | GET; POST/PATCH/DELETE on the item path | `ct get security-levels`, `ct.securityLevel` (#110) |
-| Data-field definitions (person + group)    | `/dbfields`, `/dbfields/{id}`                                                  | GET (read-only)                         | `ct get data-fields`                                |
-| Field-definition **mutation**              | legacy `churchdb` AJAX (`db_insertfields`/`db_updatefields`/`db_deletefields`) | non-REST                                | **not managed — manual**                            |
+| Purpose                                    | Path                                                                           | Methods (this CT)                          | `ct` surface                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------ | --------------------------------------------------- |
+| Person master-data model + security levels | `/person/masterdata`                                                           | GET (read-only)                            | `ct get person-masterdata`                          |
+| Security levels, standalone                | `/securitylevels`, `/securitylevels/{id}`                                      | GET; POST/PATCH/DELETE on the item path    | `ct get security-levels`, `ct.securityLevel` (#110) |
+| Data-field definitions (person + group)    | `/dbfields`, `/dbfields/{id}`                                                  | GET (writes in spec since 2026-09, unused) | `ct get data-fields`                                |
+| Field-definition **mutation**              | legacy `churchdb` AJAX (`db_insertfields`/`db_updatefields`/`db_deletefields`) | non-REST                                   | **not managed — manual**                            |
 
 All paths verified against public CT client libraries + CT Academy docs, **not**
 against this repo's (git-ignored, ungenerated) `src/api/schema.d.ts`.

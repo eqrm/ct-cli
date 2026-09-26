@@ -68,7 +68,9 @@ where it was used. Raw numeric ids remain a valid escape hatch everywhere; see
 for a zero-numeric-id config.
 
 **Exception: `groupStatusId` (a group's lifecycle status) is numeric-only,
-always.** ChurchTools exposes no REST catalog to resolve a status by name
+always.** ChurchTools does expose a read catalog (`GET /person/masterdata` →
+`groupStatuses`: 1 active, 2 pending, 3 archived, 4 finished), but ct does not resolve
+it by name yet (#157) — so a status still cannot be resolved by name
 (`/group/memberstatus` is a different dimension, member statuses; #67), so a
 `status:` declaration fails fast at eval time rather than resolving against the
 wrong dimension.
