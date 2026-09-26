@@ -4,7 +4,7 @@ sources:
   - src/config/context.ts
   - src/engine/graph.ts
   - src/engine/hierarchy.ts
-sources_hash: b183fe0075bd7ad3
+sources_hash: 636599577c600553
 reviewed: 2026-08-28
 ---
 
@@ -158,8 +158,9 @@ ct.group({
 
 And the outer default export layers a permission grant (#13 — see
 [`permissions.md`](permissions.md)) on a shared `groupTypeRole`
-template, declared once and applying across every campus's groups of that
-type:
+template, declared once and applying to every holder of that role in every
+campus's groups of that type. The domain is the role, named by its group type
+and role name (#182):
 
 ```ts
 export default (ct: ConfigContext): void => {
@@ -170,7 +171,8 @@ export default (ct: ConfigContext): void => {
   const kidsLeads = CAMPUSES.map((c) => `${c}_kids_lead`);
   ct.groupTypeRole({
     key: "kids_lead_tpl",
-    id: 2,
+    groupType: "ministry_team",
+    role: "Leiter",
     grants: [
       { right: "churchgroup:view group", scope: kidsLeads },
       { right: "churchgroup:edit group memberships of group", scope: kidsLeads },

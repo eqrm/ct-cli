@@ -170,7 +170,7 @@ describe("apply-time pending re-resolution (same-run campus + group)", () => {
 
 describe("permission domainId resolution", () => {
   // #182: the domain is the ROLE id, never the group-type id. The fixture gives them different
-  // numbers on purpose — on eqrm prod they collided (type 9 = role 9 on another type), which is how
+  // numbers on purpose — on a real instance they collided (type 9 = role 9 on another type), which is how
   // the bug stayed invisible.
   const roleCatalogClient = {
     get: async <T>(path: string): Promise<T> => {

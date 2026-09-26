@@ -237,7 +237,7 @@ function resolveDomainInput(domainType: DomainType, input: PermissionInput): num
       if (input.role === undefined)
         // #182: this used to resolve to the group TYPE id and use it as the domainId. The endpoint is
         // keyed by ROLE id, so it silently addressed whichever role happened to share that number —
-        // on eqrm prod, Struktur (type 9) landed on Group/Leiter (role 9); on dev, on nothing at all.
+        // a role of another group type, or no role at all.
         // There is no type-wide grant set in ChurchTools to fall back to, so this is an error, not a
         // default: name the role.
         throw new Error(

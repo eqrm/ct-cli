@@ -166,8 +166,8 @@ export function preservePredicateFor(
 
 /**
  * A permission whose domainId has been resolved. Either a concrete numeric domain, or — when the
- * domain is a group type created in this same run (#69) — a `pendingDomain` Ref with `domainId: null`,
- * re-resolved at apply time.
+ * domain is a resource created in this same run (a person status, #90; a group_role on a new group,
+ * #106) — a `pendingDomain` Ref with `domainId: null`, re-resolved at apply time.
  */
 type ResolvedPermission =
   | (DesiredPermission & { domainId: number; pendingDomain?: undefined })
@@ -175,7 +175,7 @@ type ResolvedPermission =
 
 /**
  * Resolve every permission's domainId (#20). A numeric domainId passes straight through; a Ref
- * (e.g. `groupType: "…"`) resolves against managed state ∪ the live catalog. A domainId that
+ * (e.g. `groupType` + `role`) resolves against managed state ∪ the live catalog. A domainId that
  * resolves to a same-run-created resource (PendingRef) is NOT rejected (#69): it is carried as a
  * `pendingDomain` and re-resolved against post-execute state at apply time — this is what lets a
  * fresh-instance plan render the create-set + pending grants instead of aborting.
@@ -204,6 +204,14 @@ async function resolveDomainIds(
       continue;
     }
     const site = `${p.domainType} "${p.key}".domainId`;
+    // #182: `/permissions/group_type_role/<id>` is keyed by ROLE id. A group-type Ref resolves to the
+    // TYPE id and would address whichever role shares that number, so it is refused here too — not
+    // only in the DSL — for any producer that builds a DesiredPermission directly.
+    if (p.domainType === "group_type_role" && p.domainId.kind === "group-type")
+      throw new Error(
+        `${site}: a group type (${refLabel(p.domainId)}) does not name a group_type_role domain — ` +
+          `the domain is keyed by ROLE id (#182). Reference the role: ref.groupTypeRole(<type>, <role>).`,
+      );
     // `pendingGroupRole` is opt-in per position (#106): this is the ONLY call site that can finish a
     // pending group_role, because `applyPermissionPlan` runs after `executePlan` and holds a client to
     // fetch the freshly created group's role list with.

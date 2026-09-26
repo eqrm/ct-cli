@@ -117,7 +117,7 @@ export async function applyPermissionPlan(
           roleLists,
         );
       } else {
-        // Every other pending domain (group type, person status) IS its resource's own id, so the
+        // Every other pending domain (a person status) IS its resource's own id, so the
         // SAME machinery that re-resolves resource pending refs finishes it from state alone.
         domainId = reresolvePendingValue(pendingRef(item.pendingDomain), state) as number;
       }
