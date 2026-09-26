@@ -7,9 +7,11 @@ on:
 
 # A newer push to the same PR supersedes the run in flight, so cancel it rather than
 # let both occupy the org's concurrent-job slots. Pushes to main are never cancelled:
-# every main commit keeps its own result.
+# every main commit keeps its own result. That needs a per-commit group for pushes —
+# a shared group still holds only one pending run and cancels the older pending one
+# when a third arrives, even with cancel-in-progress off.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege: this workflow only ever reads the checkout. Without an explicit
