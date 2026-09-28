@@ -60,6 +60,8 @@ export interface UnmappableRole {
   members: number;
   /** Role names of the target type, offered in the error so the operator can declare one. */
   candidates: string[];
+  /** Set when a DECLARED target is what failed — missing from, or ambiguous in, the target type. */
+  declaredTarget?: string;
 }
 
 export interface GroupTypeMigration {
@@ -134,7 +136,13 @@ export function deriveRoleMapping(input: DeriveRoleMappingInput): DeriveRoleMapp
       const target = uniqueTarget(declaredTargetName);
       if (!target) {
         // A declared mapping that does not land is a config error, not a guess to be papered over.
-        unmappable.push({ id: source.id, name: source.name, members, candidates });
+        unmappable.push({
+          id: source.id,
+          name: source.name,
+          members,
+          candidates,
+          declaredTarget: declaredTargetName,
+        });
         continue;
       }
       entries.push({
@@ -208,6 +216,22 @@ export function memberCountsByRole(members: { groupTypeRoleId?: number }[]): Map
   return counts;
 }
 
+type ListReader = {
+  get<T = unknown>(path: string): Promise<T>;
+  getAll?<T = unknown>(path: string, options?: { limit?: number }): Promise<{ data: T[] }>;
+};
+
+/**
+ * Read a whole CT list, every page (#101). Load-bearing for the member read: a role whose holders all
+ * sit past the first page would count as EMPTY and be mapped away by `empty-role` — moving people
+ * without asking, the one thing this module exists to prevent. `getAll` is optional only so `{ get }`
+ * test doubles stay usable; the real client always provides it.
+ */
+async function readList<T>(client: ListReader, path: string): Promise<T[]> {
+  const rows = client.getAll ? (await client.getAll<T>(path)).data : await client.get<T[]>(path);
+  return Array.isArray(rows) ? rows : [];
+}
+
 /**
  * Resolve the migration for every group update whose `groupTypeId` changes, so the plan renders the
  * same mapping the apply will send.
@@ -220,7 +244,7 @@ export function memberCountsByRole(members: { groupTypeRoleId?: number }[]): Map
  * the alternative is rendering an applicable-looking plan that CT rejects mid-apply (#171).
  */
 export async function resolveGroupTypeMigrations(
-  client: { get<T = unknown>(path: string): Promise<T> },
+  client: ListReader,
   plan: Plan,
   declaredByKey: ReadonlyMap<string, Record<string, string> | undefined>,
 ): Promise<void> {
@@ -233,21 +257,56 @@ export async function resolveGroupTypeMigrations(
   );
   if (migrating.length === 0) return;
 
-  const roles = await client.get<GroupTypeRole[]>("/group/roles");
-  const catalog = Array.isArray(roles) ? roles : [];
+  const catalog = await readList<GroupTypeRole>(client, "/group/roles");
 
   for (const item of migrating) {
     const change = item.changes.find((c) => c.field === "groupTypeId")!;
-    const fromGroupTypeId = Number(change.from);
-    const toGroupTypeId = Number(change.to);
-    if (!Number.isFinite(fromGroupTypeId) || !Number.isFinite(toGroupTypeId)) continue;
+    // Skipping here would leave `groupTypeId` on the ordinary update, which CT always rejects — the
+    // very #171 failure. A target that is still a pending ref (a group type created in this same run)
+    // has no roles to map onto yet, so refuse and say how to converge instead.
+    const fromGroupTypeId = typeof change.from === "number" ? change.from : NaN;
+    const toGroupTypeId = typeof change.to === "number" ? change.to : NaN;
+    if (!Number.isInteger(fromGroupTypeId) || !Number.isInteger(toGroupTypeId)) {
+      throw new Error(
+        `group "${item.key}": cannot plan the groupTypeId change ${JSON.stringify(change.from)} -> ` +
+          `${JSON.stringify(change.to)} as a migration: both types must already exist in ChurchTools, because ` +
+          `the role mapping is read from them. If the target type is created in this run, apply it first ` +
+          `(e.g. without the group's type change), then re-plan.`,
+      );
+    }
 
-    const members = await client.get<{ groupTypeRoleId?: number }[]>(`/groups/${item.id}/members?limit=200`);
+    const members = await readList<{ groupTypeRoleId?: number }>(client, `/groups/${item.id}/members`);
     const declared = declaredByKey.get(item.key);
+    const sourceRoles = rolesOfType(catalog, fromGroupTypeId);
+    const memberCounts = memberCountsByRole(members);
+
+    // A declared key that names no role of the current type is a typo, not a no-op: ignoring it would
+    // let a name match (or empty-role) decide where members land, contrary to what the config says.
+    const sourceSlugs = new Set(sourceRoles.map((r) => slug(r.name)));
+    const strayKeys = Object.keys(declared ?? {}).filter((k) => !sourceSlugs.has(slug(k)));
+    if (strayKeys.length > 0) {
+      throw new Error(
+        `group "${item.key}": roleMapping names ${strayKeys.map((k) => `"${k}"`).join(", ")}, which ` +
+          `${strayKeys.length === 1 ? "is not a role" : "are not roles"} of its current group type ` +
+          `${fromGroupTypeId} (${sourceRoles.map((r) => r.name).join(", ") || "no roles"}).`,
+      );
+    }
+
+    // Every occupied role must be covered by the mapping. A member holding a role the catalog did not
+    // list for the current type would otherwise fall outside the payload with nobody noticing.
+    const covered = new Set(sourceRoles.map((r) => r.id));
+    const orphaned = [...memberCounts.keys()].filter((id) => !covered.has(id));
+    if (orphaned.length > 0) {
+      throw new Error(
+        `group "${item.key}": members hold role id(s) ${orphaned.join(", ")}, which /group/roles does not ` +
+          `list under the group's current type ${fromGroupTypeId}; refusing to migrate without mapping them.`,
+      );
+    }
+
     const result = deriveRoleMapping({
-      sourceRoles: rolesOfType(catalog, fromGroupTypeId),
+      sourceRoles,
       targetRoles: rolesOfType(catalog, toGroupTypeId),
-      memberCounts: memberCountsByRole(Array.isArray(members) ? members : []),
+      memberCounts,
       ...(declared ? { declared } : {}),
     });
     if (!result.ok) {
@@ -268,9 +327,11 @@ export function unmappableRolesError(
   toGroupTypeId: number,
   unmappable: UnmappableRole[],
 ): Error {
-  const lines = unmappable.map(
-    (role) =>
-      `    - "${role.name}" (role ${role.id}, ${role.members} member(s)) has no same-named role in group type ${toGroupTypeId}`,
+  const lines = unmappable.map((role) =>
+    role.declaredTarget !== undefined
+      ? `    - "${role.name}" (role ${role.id}, ${role.members} member(s)) is declared -> "${role.declaredTarget}", ` +
+        `but group type ${toGroupTypeId} has no single role of that name (missing or ambiguous)`
+      : `    - "${role.name}" (role ${role.id}, ${role.members} member(s)) has no same-named role in group type ${toGroupTypeId}`,
   );
   return new Error(
     `group "${groupKey}": cannot change groupTypeId ${fromGroupTypeId} -> ${toGroupTypeId} without a role mapping.\n` +

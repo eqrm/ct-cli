@@ -115,9 +115,9 @@ memberships land**: whoever holds a role mapping to `X` holds `X` afterwards.
 apply will actually do:
 
 ```
-  ~ group.team_academy_first_year (#1182)
+  ~ group.youth_team (#42)
       groupTypeId: 5 -> 4
-        via POST /groups/1182/grouptype — role mapping (members follow their role):
+        via POST /groups/42/grouptype — role mapping (members follow their role):
           Mitglied -> Mitglied  (7 members, matched by name)
           Leiter -> Leiter  (2 members, matched by name)
           Supporter -> Mitglied  (0 members, matched by empty-role)
@@ -137,8 +137,8 @@ target type's roles, and you answer it on the group:
 
 ```ts
 ct.group({
-  key: "team_academy_first_year",
-  name: "Academy First Year 26/27",
+  key: "youth_team",
+  name: "Youth Team",
   groupType: "merkmal",
   roleMapping: { Supporter: "Mitglied" },
 });

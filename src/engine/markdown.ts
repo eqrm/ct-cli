@@ -691,6 +691,26 @@ function renderResourceSection(
         "",
       );
     }
+    // A group-type change moves memberships through its own endpoint (#171). The text renderer spells
+    // the mapping out; this view is what a GitOps reviewer approves, so it must not show less.
+    if (item.groupTypeMigration) {
+      lines.push(
+        locale === "de-DE"
+          ? `Gruppentyp-Wechsel über \`POST /groups/${item.id}/grouptype\` — Mitglieder folgen ihrer Rolle:`
+          : `Group-type migration via \`POST /groups/${item.id}/grouptype\` — members follow their role:`,
+        "",
+      );
+      for (const entry of item.groupTypeMigration.entries) {
+        const members =
+          locale === "de-DE"
+            ? `${entry.members} ${entry.members === 1 ? "Mitglied" : "Mitglieder"}`
+            : `${entry.members} ${entry.members === 1 ? "member" : "members"}`;
+        lines.push(
+          `- ${escapeMarkdown(entry.fromName)} → ${escapeMarkdown(entry.toName)} (${members}, ${entry.reason})`,
+        );
+      }
+      lines.push("");
+    }
   }
   return lines;
 }

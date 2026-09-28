@@ -10,7 +10,7 @@ import {
 } from "../src/engine/grouptype.js";
 
 /**
- * Real role catalogs read from a live instance (eqrm-dev, CT 3.137.0-RC21, 2026-09-28). Kept verbatim
+ * Real role catalogs read from a live instance (a dev instance, CT 3.137.0-RC21, 2026-09-28). Kept verbatim
  * rather than simplified: the interesting cases in #171 are exactly the shapes CT actually ships —
  * a type whose roles are a superset of the target's, and stock lowercase role keys sitting next to
  * church-named ones.
@@ -74,7 +74,7 @@ describe("memberCountsByRole", () => {
   });
 });
 
-describe("deriveRoleMapping — the Academy case (#139): Team -> Merkmal, no members", () => {
+describe("deriveRoleMapping — Team -> Merkmal, no members", () => {
   it("maps same-named roles by name and routes the rest to the default, since nothing can move", () => {
     const result = derive(5, 4, new Map());
     expect(result.ok).toBe(true);
@@ -220,10 +220,10 @@ describe("deriveRoleMapping — the migration this was verified against", () => 
 
 describe("unmappableRolesError", () => {
   it("names the role, its member count and the target type's roles", () => {
-    const message = unmappableRolesError("team_academy_first_year", 5, 4, [
+    const message = unmappableRolesError("youth_team", 5, 4, [
       { id: 201, name: "Supporter", members: 2, candidates: ["Mitglied", "Leiter"] },
     ]).message;
-    expect(message).toContain("team_academy_first_year");
+    expect(message).toContain("youth_team");
     expect(message).toContain("groupTypeId 5 -> 4");
     expect(message).toContain('"Supporter" (role 201, 2 member(s))');
     expect(message).toContain("POST /groups/{id}/grouptype");
