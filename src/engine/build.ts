@@ -11,6 +11,7 @@ import type { ManagedResource, State } from "../state/state.js";
 import type { DesiredResource, Plan } from "./types.js";
 import { RESOURCES, type CtWriteClient } from "../resources/registry.js";
 import { computePlan } from "./plan.js";
+import { resolveGroupTypeMigrations } from "./grouptype.js";
 import { foldSynthetic } from "./synthetic.js";
 import { Resolver } from "../resolve/resolver.js";
 import { collectPendingRefKeys } from "../resolve/refs.js";
@@ -162,6 +163,13 @@ export async function buildPlan(
   });
 
   const plan = computePlan(ordered, state, actual, { unresolved, fetchFailed });
+
+  // A `groupTypeId` change is a MIGRATION, not a field update (#171): CT refuses the field on the
+  // ordinary update and wants `POST /groups/{id}/grouptype` with a role mapping. Resolved here, while
+  // a client is in hand, so the plan renders the mapping the apply will send — and so an underivable
+  // mapping fails now instead of halfway through a write.
+  await resolveGroupTypeMigrations(client, plan, new Map(ordered.map((d) => [d.key, d.roleMapping])));
+
   const warnings = [...fetchWarnings, ...(folded.warnings ?? [])];
   return { plan, actual, fetchErrors, ...(warnings.length > 0 ? { warnings } : {}) };
 }

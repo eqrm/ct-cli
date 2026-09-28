@@ -3,6 +3,7 @@
  * plan produced by diffing desired vs state vs actual.
  */
 
+import type { GroupTypeMigration } from "./grouptype.js";
 import type { MemberFieldSpec } from "./member-fields.js";
 
 export type { MemberFieldSpec };
@@ -45,6 +46,12 @@ export interface DesiredResource {
    * touches the update path. `undefined` = not opted in (CT's default guard stays on).
    */
   allowDuplicateName?: boolean;
+  /**
+   * Group-only: explicit role mapping for a `groupTypeId` migration (#171), old role NAME → new role
+   * NAME. Only consulted when the group's type actually changes; never diffed and never written as a
+   * field. Names, not ids, so one config stays portable across hosts.
+   */
+  roleMapping?: Record<string, string>;
 }
 
 export type PlanAction = "create" | "update" | "delete" | "no-op";
@@ -116,6 +123,13 @@ export interface PlanItem {
    * when set, and never touches update/delete. Undefined elsewhere.
    */
   allowDuplicateName?: boolean;
+  /**
+   * Group-only: set when this update changes `groupTypeId` (#171). ChurchTools refuses that field on
+   * the ordinary update, so the executor sends `POST /groups/{id}/grouptype` with this mapping and
+   * leaves `groupTypeId` out of the PATCH body. Resolved during `buildPlan` (it needs the live role
+   * catalog), so the plan renders the same mapping the apply will send.
+   */
+  groupTypeMigration?: GroupTypeMigration;
 }
 
 /** Pick a stable human-facing label without coupling renderers to resource-specific branches. */

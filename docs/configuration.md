@@ -102,6 +102,53 @@ intentional-duplicate case. If a create 400s on this guard without the flag set,
 that should be adopted with `ct adopt group <id> --key <key>`) and the opt-in as
 the alternative.
 
+### Changing a group's type
+
+`groupTypeId` is managed, but changing it on an existing group is a **migration**,
+not a field update. ChurchTools refuses the field on the ordinary group update
+(`HTTP 400 groupTypeId: validation.always.invalid`) and exposes
+`POST /groups/{id}/grouptype` instead, which takes a mapping from every role of the
+old type onto a role of the new one. That mapping decides **where existing
+memberships land**: whoever holds a role mapping to `X` holds `X` afterwards.
+
+`ct plan` resolves the mapping up front and renders it, so the diff shows what the
+apply will actually do:
+
+```
+  ~ group.team_academy_first_year (#1182)
+      groupTypeId: 5 -> 4
+        via POST /groups/1182/grouptype — role mapping (members follow their role):
+          Mitglied -> Mitglied  (7 members, matched by name)
+          Leiter -> Leiter  (2 members, matched by name)
+          Supporter -> Mitglied  (0 members, matched by empty-role)
+```
+
+ct derives a mapping only where the answer cannot cost anyone their role:
+
+| matched by   | when                                                          |
+| ------------ | ------------------------------------------------------------- |
+| `name`       | exactly one role of the target type carries the same name     |
+| `empty-role` | the old role holds no members here, so no membership can move |
+| `declared`   | you said so (below) — always wins                             |
+
+A role that **holds members** and has no same-named target is a decision ct will
+not make for you. The plan refuses, naming the role, its member count and the
+target type's roles, and you answer it on the group:
+
+```ts
+ct.group({
+  key: "team_academy_first_year",
+  name: "Academy First Year 26/27",
+  groupType: "merkmal",
+  roleMapping: { Supporter: "Mitglied" },
+});
+```
+
+`roleMapping` is old role **name** → new role name (so one config stays portable
+across hosts), compared as slugs. Like `allowDuplicateName` it is never a managed
+field: not diffed, not in state, never adopted, and read only when the type
+actually changes.
+
 ## Output conventions
 
 Machine-readable output goes to **stdout** (pipe/`jq` it); human status lines go

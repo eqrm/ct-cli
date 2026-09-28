@@ -4,7 +4,7 @@ sources:
   - src/config/context.ts
   - src/engine/graph.ts
   - src/engine/hierarchy.ts
-sources_hash: 636599577c600553
+sources_hash: 57e2a48f85e93d55
 reviewed: 2026-08-28
 ---
 
