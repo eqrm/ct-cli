@@ -1,5 +1,5 @@
 ---
-sources_hash: ffdca84fefe83fde
+sources_hash: 802017b4678885e0
 title: Group member fields
 sources:
   - src/engine/member-fields.ts

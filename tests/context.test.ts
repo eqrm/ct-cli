@@ -409,6 +409,56 @@ describe("allowDuplicateName create-time opt-in (#75)", () => {
   });
 });
 
+describe("roleMapping for a group-type migration (#171)", () => {
+  it("is carried on the resource but kept out of managed fields (not diffed/adopted)", () => {
+    const { ct, resources } = createContext();
+    ct.group({ key: "academy", name: "Academy", groupTypeId: 4, roleMapping: { Supporter: "Leiter" } });
+    expect(resources[0]?.roleMapping).toEqual({ Supporter: "Leiter" });
+    expect(resources[0]?.fields).toEqual({ name: "Academy", groupTypeId: 4 });
+  });
+
+  it("defaults to undefined when not declared", () => {
+    const { ct, resources } = createContext();
+    ct.group({ key: "g", name: "G" });
+    expect(resources[0]?.roleMapping).toBeUndefined();
+  });
+
+  it("does not trip the unknown-field warning", () => {
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const { ct } = createContext();
+      ct.group({ key: "g", name: "G", roleMapping: { A: "B" } });
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("rejects the option on a non-group type", () => {
+    const { ct } = createContext();
+    expect(() => ct.campus({ key: "c", name: "C", roleMapping: { A: "B" } } as never)).toThrow(
+      /roleMapping.*only valid on a group/i,
+    );
+  });
+
+  it("rejects a non-object value", () => {
+    const { ct } = createContext();
+    expect(() => ct.group({ key: "g", name: "G", roleMapping: ["A"] as never })).toThrow(
+      /roleMapping.*must be an object/i,
+    );
+  });
+
+  it("rejects an empty or non-string target role name", () => {
+    const { ct } = createContext();
+    expect(() => ct.group({ key: "g", name: "G", roleMapping: { A: "" } })).toThrow(
+      /roleMapping\.A.*non-empty target role name/i,
+    );
+    expect(() => ct.group({ key: "g", name: "G", roleMapping: { A: 7 as never } })).toThrow(
+      /roleMapping\.A.*non-empty target role name/i,
+    );
+  });
+});
+
 describe("permission declarations", () => {
   it("collects groupRole / groupTypeRole with validated grants", async () => {
     const mod = (ct: ConfigContext) => {

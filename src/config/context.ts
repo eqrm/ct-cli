@@ -156,6 +156,15 @@ export interface ResourceInput {
    * NEVER force by default — omit (or `false`) to keep CT's guard on.
    */
   allowDuplicateName?: boolean;
+  /**
+   * Group-only (#171): where existing memberships land when this group's `groupTypeId` changes, as
+   * old role NAME → new role NAME. Consulted ONLY on a type change; never diffed, never in state.
+   *
+   * ct derives the mapping itself wherever the answer cannot cost anyone their role — a same-named
+   * role in the target type, or a role holding no members — and refuses at plan time otherwise. This
+   * is how that refusal is answered. Names, not ids, so one config stays portable across hosts.
+   */
+  roleMapping?: Record<string, string>;
   [field: string]: unknown;
 }
 
@@ -537,6 +546,7 @@ function toDesired(type: string, input: ResourceInput, location?: string): Desir
     dynamic,
     memberFields,
     allowDuplicateName,
+    roleMapping,
     ...fields
   } = input;
   if (!key || typeof key !== "string") {
@@ -551,6 +561,23 @@ function toDesired(type: string, input: ResourceInput, location?: string): Desir
     }
     if (typeof allowDuplicateName !== "boolean") {
       throw new Error(`${type} "${key}": "allowDuplicateName" must be a boolean.`);
+    }
+  }
+  // Group-only role mapping for a type migration (#171). Destructured out above like
+  // `allowDuplicateName`, so it never reaches `fields` and never trips the unknown-field warning.
+  if (roleMapping !== undefined) {
+    if (type !== "group") {
+      throw new Error(`${type} "${key}": "roleMapping" is only valid on a group.`);
+    }
+    if (typeof roleMapping !== "object" || roleMapping === null || Array.isArray(roleMapping)) {
+      throw new Error(`${type} "${key}": "roleMapping" must be an object of old role name -> new role name.`);
+    }
+    for (const [from, to] of Object.entries(roleMapping)) {
+      if (typeof to !== "string" || to.trim() === "") {
+        throw new Error(
+          `${type} "${key}": "roleMapping.${from}" must be a non-empty target role name (got ${JSON.stringify(to)}).`,
+        );
+      }
     }
   }
   // A nullish/empty `parent` is "no parent", not an opt-in to managed-empty hierarchy.
@@ -668,6 +695,7 @@ function toDesired(type: string, input: ResourceInput, location?: string): Desir
     dependsOn: edges,
     preventDestroy,
     allowDuplicateName,
+    roleMapping,
   };
 }
 

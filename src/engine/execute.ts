@@ -15,6 +15,7 @@ import { upsert, saveState } from "../state/state.js";
 import type { FieldChange, Plan, PlanItem } from "./types.js";
 import { RESOURCES, type CtWriteClient } from "../resources/registry.js";
 import { assertNotPeople } from "./guard.js";
+import { roleMappingPayload } from "./grouptype.js";
 import { isSyntheticField, syntheticField } from "./synthetic.js";
 import { reresolvePendingValue } from "../resolve/resolver.js";
 import { hasPendingRef } from "../resolve/refs.js";
@@ -234,7 +235,22 @@ export async function executePlan(plan: Plan, deps: ExecuteDeps): Promise<Execut
         // exactly that regardless of verb.
         const actualFields = item.actual ?? state.resources[item.key]?.fields ?? {};
         const snapshot = snapshotFromChanges(actualFields, changes);
-        const hasFieldChange = changes.some((c) => !isSyntheticField(c.field));
+        // A group-type change cannot ride the ordinary update — CT answers 400
+        // `groupTypeId: validation.always.invalid` — so it goes through the migration endpoint FIRST
+        // and is then withheld from the field write (#171). Ordering matters: the migration rewrites
+        // the group's role instances, and a PATCH of the remaining fields is safe either side of it,
+        // but doing the migration first means a failure here leaves every other field untouched.
+        const migration = item.groupTypeMigration;
+        if (migration) {
+          const migrationPath = `/groups/${id}/grouptype`;
+          assertNotPeople(migrationPath);
+          await client.request("POST", migrationPath, {
+            groupTypeId: migration.toGroupTypeId,
+            roleMapping: roleMappingPayload(migration),
+          });
+        }
+        const fieldChanges = migration ? changes.filter((c) => c.field !== "groupTypeId") : changes;
+        const hasFieldChange = fieldChanges.some((c) => !isSyntheticField(c.field));
         if (hasFieldChange) {
           const path = spec.itemPath(id);
           assertNotPeople(path);
@@ -246,7 +262,7 @@ export async function executePlan(plan: Plan, deps: ExecuteDeps): Promise<Execut
           } else {
             // PATCH resources take only the changed fields (unchanged/drifted siblings are left alone);
             // PUT resources replace the whole object, so send actual ∪ changes to preserve those siblings.
-            const body = spec.updateMethod === "PATCH" ? snapshotFromChanges({}, changes) : snapshot;
+            const body = spec.updateMethod === "PATCH" ? snapshotFromChanges({}, fieldChanges) : snapshot;
             await client.request(spec.updateMethod, path, body);
           }
         }

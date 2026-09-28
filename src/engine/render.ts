@@ -55,6 +55,22 @@ export function renderPlan(plan: Plan): string {
           ? `      ${c.field}: ${fmt(c.to)}`
           : `      ${c.field}: ${fmt(c.from)} -> ${fmt(c.to)}`,
       );
+      // A group-type change is a migration through a different endpoint, and it MOVES MEMBERSHIPS.
+      // Rendering it as a plain field line would under-report what applying it does (#171), so the
+      // mapping is spelled out under the field: every role, where it lands, and why.
+      if (c.field === "groupTypeId" && item.groupTypeMigration) {
+        lines.push(
+          pc.dim(`        via POST /groups/${item.id}/grouptype — role mapping (members follow their role):`),
+        );
+        for (const entry of item.groupTypeMigration.entries) {
+          const members = entry.members === 1 ? "1 member" : `${entry.members} members`;
+          lines.push(
+            pc.dim(
+              `          ${entry.fromName} -> ${entry.toName}  (${members}, matched by ${entry.reason})`,
+            ),
+          );
+        }
+      }
     }
   }
 
