@@ -6,7 +6,7 @@ sources:
   - src/engine/dynamic.ts
   - src/engine/synthetic.ts
   - src/application/operations/adopt-group.ts
-sources_hash: e38b8c0f6032d5cc
+sources_hash: 6fbc2b7cd5b48f0d
 reviewed: 2026-08-28
 ---
 
@@ -439,8 +439,27 @@ const ruleset = {
 ChurchTools' stored rulesets carry cosmetic noise that would otherwise show
 up as permanent phantom diffs on every `ct plan`:
 
-- **`dterm: [label, expr]` wrappers** — a cosmetic UI label around a
-  subtree. Never evaluated by ChurchTools; stripped down to `expr`.
+- **`dterm: [label, expr]` wrappers** — a UI label around a subtree. A string
+  or `{ title }` label is cosmetic and stripped down to `expr`. A label that
+  carries a **`stereotype`** (`{ stereotype: ["groupmembership"], title }`) is
+  **not** cosmetic and is kept: it makes ChurchTools evaluate the wrapped group
+  condition per person ("is / is not a member of group X") rather than per
+  membership row. Without it, a negated group condition such as
+  `!(member of Entabonniert)` still matches everyone who has any other
+  membership, so it excludes no one. When you author a group condition —
+  especially a negated one — wrap it the way the ChurchTools editor does:
+
+  ```json
+  { "!": [{ "dterm": [
+    { "stereotype": ["groupmembership"], "title": "Mitgliedschaft in einer Gruppe" },
+    { "oneof": [{ "var": "ctgroup.id" }, [2224]] }
+  ] }] }
+  ```
+
+  Up to v4.1.0 the normalizer stripped these wrappers too, and
+  because `apply` writes the normalized ruleset, applying a ruleset silently
+  removed them. Rulesets captured by `ct adopt` before the fix lack them;
+  re-adopt to get them back.
 - **int/string inconsistency** — the same logical id shows up as both `1`
   and `"1"` across (and even within) a single ruleset. Numeric-looking
   strings inside the `query` subtree are coerced to numbers.

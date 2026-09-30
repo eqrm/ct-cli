@@ -13,12 +13,30 @@ import type { DynamicStatus } from "./types.js";
 
 const READ_ONLY_KEYS = new Set(["dynamicGroupUpdateStarted", "dynamicGroupUpdateFinished"]);
 
-/** Recursively unwrap `dterm: [label, expr]` cosmetic wrappers to their `expr`. */
+/**
+ * A `dterm` label that carries a `stereotype` (in practice always `["groupmembership"]`) is NOT
+ * cosmetic: it tells ChurchTools to evaluate the wrapped group condition per person ("is/is not a
+ * member of group X") instead of per membership row. Without it, `!(member of Entabonniert)` is
+ * true for every person who also has any other membership row, so a negated group condition
+ * excludes no one. Measured read-only against all 72 active prod rulesets on CT 3.137
+ * (`POST /churchquery/debug/export`): keeping only these labels reproduces every live result
+ * exactly; dropping them changes 18 of them.
+ */
+function isSemanticLabel(label: unknown): boolean {
+  return !!label && typeof label === "object" && !Array.isArray(label) && "stereotype" in label;
+}
+
+/**
+ * Recursively unwrap cosmetic `dterm: [label, expr]` wrappers (string or `{ title }` labels) to
+ * their `expr`. A wrapper whose label carries a `stereotype` changes what the query selects and is
+ * kept, label and all, with its `expr` normalized in place.
+ */
 export function stripCosmeticLabels(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(stripCosmeticLabels);
   if (node && typeof node === "object") {
     const obj = node as Record<string, unknown>;
     if (Array.isArray(obj.dterm) && obj.dterm.length === 2 && Object.keys(obj).length === 1) {
+      if (isSemanticLabel(obj.dterm[0])) return { dterm: [obj.dterm[0], stripCosmeticLabels(obj.dterm[1])] };
       return stripCosmeticLabels(obj.dterm[1]); // keep the expression, drop the label
     }
     const out: Record<string, unknown> = {};
