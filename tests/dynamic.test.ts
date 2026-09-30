@@ -24,10 +24,14 @@ describe("stripCosmeticLabels", () => {
     // written it without this wrapper — the label is part of the query, not decoration.
     const label = { stereotype: ["groupmembership"], title: "Mitgliedschaft in einer Gruppe" };
     const input = {
-      "!": [{ dterm: [label, { and: [{ dterm: ["Merkmal", { oneof: [{ var: "ctgroup.id" }, ["2224"]] }] }] }] }],
+      "!": [
+        { dterm: [label, { and: [{ dterm: ["Merkmal", { oneof: [{ var: "ctgroup.id" }, ["2224"]] }] }] }] },
+      ],
     };
     const out = stripCosmeticLabels(input);
-    expect(out).toEqual({ "!": [{ dterm: [label, { and: [{ oneof: [{ var: "ctgroup.id" }, ["2224"]] }] }] }] });
+    expect(out).toEqual({
+      "!": [{ dterm: [label, { and: [{ oneof: [{ var: "ctgroup.id" }, ["2224"]] }] }] }],
+    });
     expect(stripCosmeticLabels(out)).toEqual(out); // idempotent
   });
 });

@@ -450,16 +450,23 @@ up as permanent phantom diffs on every `ct plan`:
   especially a negated one — wrap it the way the ChurchTools editor does:
 
   ```json
-  { "!": [{ "dterm": [
-    { "stereotype": ["groupmembership"], "title": "Mitgliedschaft in einer Gruppe" },
-    { "oneof": [{ "var": "ctgroup.id" }, [2224]] }
-  ] }] }
+  {
+    "!": [
+      {
+        "dterm": [
+          { "stereotype": ["groupmembership"], "title": "Mitgliedschaft in einer Gruppe" },
+          { "oneof": [{ "var": "ctgroup.id" }, [2224]] }
+        ]
+      }
+    ]
+  }
   ```
 
   Up to v4.1.0 the normalizer stripped these wrappers too, and
   because `apply` writes the normalized ruleset, applying a ruleset silently
   removed them. Rulesets captured by `ct adopt` before the fix lack them;
   re-adopt to get them back.
+
 - **int/string inconsistency** — the same logical id shows up as both `1`
   and `"1"` across (and even within) a single ruleset. Numeric-looking
   strings inside the `query` subtree are coerced to numbers.
