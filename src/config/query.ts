@@ -28,6 +28,10 @@ export const q = {
   eq: (varName: string, value: unknown): QueryNode => ({ "==": [{ var: varName }, value] }),
   oneof: (varName: string, values: unknown[]): QueryNode => ({ oneof: [{ var: varName }, values] }),
   isnull: (varName: string): QueryNode => ({ isnull: [{ var: varName }] }),
+  /** Evaluate a group condition per person ("is a member of …"), not per membership row — wrap
+   *  every `ctgroup.*` condition you negate: `q.not(q.oneof("ctgroup.id", …))` alone excludes no
+   *  one who has any other membership. Same `groupmembership` stereotype the CT editor writes. */
+  memberOf: (n: QueryNode): QueryNode => ({ dterm: [{ stereotype: ["groupmembership"] }, n] }),
 };
 
 /** Wrap a JSONLogic filter in the ChurchQuery envelope the ruleset `query` field expects.

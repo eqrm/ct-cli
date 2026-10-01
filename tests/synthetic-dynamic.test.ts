@@ -533,3 +533,61 @@ describe("dynamic synthetic field — un-portablized ruleset reporting (#101)", 
     expect(errs.join("")).not.toContain("host-specific");
   });
 });
+
+describe("dynamic synthetic field — dropped stereotype wrappers", () => {
+  /**
+   * A ruleset adopted while the normalizer still stripped `stereotype` labels lacks them. Applying
+   * it would PUT the stripped query over a live one that has them, so a negated group condition
+   * silently stops excluding anyone. Plan time is where the author can still re-adopt.
+   */
+  const membership = (expr: unknown) => ({ dterm: [{ stereotype: ["groupmembership"], title: "t" }, expr] });
+  const negated = { oneof: [{ var: "ctgroup.id" }, [7]] };
+  const state: State = {
+    version: 1,
+    host: "h",
+    resources: {
+      g: { type: "group", id: 5, key: "g", fields: { name: "G" }, adoptedAt: "t", updatedAt: "t" },
+    },
+  };
+  const fold = async (live: unknown, declared: unknown) => {
+    const actual = new Map<string, Record<string, unknown>>([["g", { name: "G" }]]);
+    const desired: DesiredResource[] = [
+      {
+        type: "group",
+        key: "g",
+        fields: { name: "G" },
+        dependsOn: [],
+        dynamic: { status: "active", ruleset: declared },
+      },
+    ];
+    const client = {
+      get: vi.fn(async (p: string) => (p.endsWith("/ruleset") ? live : { dynamicGroupStatus: "active" })),
+    };
+    const errs: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s) => {
+      errs.push(String(s));
+      return true;
+    });
+    try {
+      const result = await dynamicField().fold({ client: getClient(client), state, desired, actual });
+      return { result, out: errs.join("") };
+    } finally {
+      spy.mockRestore();
+    }
+  };
+
+  it("warns when the declared ruleset lacks a wrapper the live one has", async () => {
+    const { result, out } = await fold([{ query: { "!": [membership(negated)] } }], {
+      query: { "!": [negated] },
+    });
+    expect(out).toContain('dynamic group "g": applying would remove 1 "stereotype" dterm wrapper(s)');
+    expect(result?.warnings?.join("\n")).toContain("Re-adopt the ruleset");
+  });
+
+  it("stays silent when both sides carry the wrapper", async () => {
+    const ruleset = { query: { "!": [membership(negated)] } };
+    const { result, out } = await fold([ruleset], ruleset);
+    expect(out).not.toContain("stereotype");
+    expect(result?.warnings?.join("\n") ?? "").not.toContain("stereotype");
+  });
+});
