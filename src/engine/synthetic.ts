@@ -15,7 +15,14 @@ import { deepEqual } from "./plan.js";
 import { mapConcurrent } from "../util/concurrency.js";
 import { info, warn, formatError } from "../ui.js";
 import { slug } from "../resources/registry.js";
-import { normalizeDynamic, normalizeRuleset, putRulesetBody, resolveRulesetRef } from "./dynamic.js";
+import {
+  normalizeDynamic,
+  normalizeRuleset,
+  putRulesetBody,
+  resolveRulesetRef,
+  semanticLabels,
+  type NormalizedDynamic,
+} from "./dynamic.js";
 import { formatPortablizeWarnings, scanUnportablized } from "../config/query-refs.js";
 import {
   actualMemberFieldProps,
@@ -638,6 +645,19 @@ const dynamicField: SyntheticField = {
         for (const line of details) info(`    ${line}`);
       }
       const dynamic = normalizeDynamic({ status: d.dynamic.status, ruleset: resolvedRuleset });
+      // A ruleset adopted while the normalizer still stripped `stereotype` labels lacks them, and
+      // applying it would PUT the stripped query back — which turns a negated group condition into
+      // one that excludes no one. Say so before apply does it; re-adopting restores the wrappers.
+      const live = (actual.get(d.key)?.dynamic as NormalizedDynamic | undefined)?.ruleset;
+      const dropped = semanticLabels(live?.query).length - semanticLabels(dynamic.ruleset.query).length;
+      if (dropped > 0) {
+        const headline =
+          `dynamic group "${d.key}": applying would remove ${dropped} "stereotype" dterm wrapper(s) ` +
+          `the live ruleset has — a negated group condition without one excludes no one. ` +
+          `Re-adopt the ruleset (or add the wrapper) before applying.`;
+        warnings.push(headline);
+        warn(headline);
+      }
       return { ...d, fields: { ...d.fields, dynamic } };
     });
     return { desired: augmented, errors, unreadable, ...(warnings.length > 0 ? { warnings } : {}) };

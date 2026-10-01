@@ -6,6 +6,7 @@ import {
   coerceScalars,
   normalizeDynamic,
   putRulesetBody,
+  semanticLabels,
 } from "../src/engine/dynamic.js";
 
 describe("stripCosmeticLabels", () => {
@@ -13,18 +14,43 @@ describe("stripCosmeticLabels", () => {
     const input = { and: [{ dterm: ["Campus", { "==": [{ var: "ctgroup.campusId" }, 1] }] }] };
     expect(stripCosmeticLabels(input)).toEqual({ and: [{ "==": [{ var: "ctgroup.campusId" }, 1] }] });
   });
-  it("unwraps a dterm with an object label (title/stereotype/i18n key)", () => {
+  it("unwraps a dterm with a title-only object label (i18n key)", () => {
     const input = {
-      dterm: [
-        { title: "group.x.title", stereotype: ["groupmembership"] },
-        { isnull: [{ var: "person.dateOfDeath" }] },
-      ],
+      dterm: [{ title: "group.x.title" }, { isnull: [{ var: "person.dateOfDeath" }] }],
     };
     expect(stripCosmeticLabels(input)).toEqual({ isnull: [{ var: "person.dateOfDeath" }] });
+  });
+  it("keeps a groupmembership stereotype wrapper: it changes what a negated group condition selects", () => {
+    // `!(member of X)` excludes no one once apply has written it without this wrapper — the label
+    // is part of the query, not decoration.
+    const label = { stereotype: ["groupmembership"], title: "Mitgliedschaft in einer Gruppe" };
+    const input = {
+      "!": [
+        { dterm: [label, { and: [{ dterm: ["Merkmal", { oneof: [{ var: "ctgroup.id" }, ["42"]] }] }] }] },
+      ],
+    };
+    const out = stripCosmeticLabels(input);
+    expect(out).toEqual({
+      "!": [{ dterm: [label, { and: [{ oneof: [{ var: "ctgroup.id" }, ["42"]] }] }] }],
+    });
+    expect(stripCosmeticLabels(out)).toEqual(out); // idempotent
+    expect((out as { "!": [{ dterm: [unknown] }] })["!"][0].dterm[0]).not.toBe(label); // copied
+  });
+  it("keeps a label with any key besides title: unknown label keys are not assumed cosmetic", () => {
+    const input = { dterm: [{ title: "t", hint: "perperson" }, { isnull: [{ var: "person.dateOfDeath" }] }] };
+    expect(stripCosmeticLabels(input)).toEqual(input);
   });
 });
 
 describe("coerceScalars", () => {
+  it("leaves a kept dterm label verbatim: a numeric-looking title is free text, not an id", () => {
+    const input = {
+      dterm: [{ stereotype: ["groupmembership"], title: "2024" }, { oneof: [{ var: "ctgroup.id" }, ["5"]] }],
+    };
+    expect(coerceScalars(input)).toEqual({
+      dterm: [{ stereotype: ["groupmembership"], title: "2024" }, { oneof: [{ var: "ctgroup.id" }, [5]] }],
+    });
+  });
   it("coerces numeric strings to numbers so int/string drift is not spurious", () => {
     expect(coerceScalars({ "==": [{ var: "ctgroup.campusId" }, "1"] })).toEqual({
       "==": [{ var: "ctgroup.campusId" }, 1],
@@ -95,12 +121,17 @@ describe("normalizeRuleset", () => {
     expect(JSON.stringify(normalizeRuleset(once))).toBe(JSON.stringify(once)); // byte-identical + idempotent
   });
 
-  it("read-then-normalize of every live fixture is stable and label-free", () => {
+  it("read-then-normalize of every live fixture is stable and keeps only stereotype labels", () => {
     for (const name of ["ruleset-683", "ruleset-2022", "ruleset-1092"]) {
       const raw = JSON.parse(readFileSync(`tests/fixtures/dynamic/${name}.get.json`, "utf8")); // array shape
       const once = normalizeRuleset(raw);
       expect(normalizeRuleset(once)).toEqual(once); // idempotent
-      expect(JSON.stringify(once)).not.toContain("dterm"); // cosmetic labels stripped
+      // cosmetic labels stripped, every stereotype wrapper the fixture carries survives
+      const wrappers = (JSON.stringify(once).match(/"dterm"/g) ?? []).length;
+      const stereotypes = (JSON.stringify(raw).match(/"stereotype"/g) ?? []).length;
+      expect(stereotypes).toBeGreaterThan(0);
+      expect(semanticLabels(once.query)).toHaveLength(stereotypes);
+      expect(wrappers).toBe(stereotypes);
     }
   });
 });

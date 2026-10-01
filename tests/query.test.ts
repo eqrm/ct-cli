@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { q, churchQuery } from "../src/config/query.js";
-import { normalizeRuleset } from "../src/engine/dynamic.js";
+import { normalizeRuleset, stripCosmeticLabels } from "../src/engine/dynamic.js";
 
 describe("typed query builder", () => {
   it("builds a JSONLogic tree", () => {
@@ -20,6 +20,14 @@ describe("typed query builder", () => {
   it("q.not array-wraps the operand, matching the real ruleset's `!` shape", () => {
     const operand = q.isnull("person.dateOfDeath");
     expect(q.not(operand)).toEqual({ "!": [{ isnull: [{ var: "person.dateOfDeath" }] }] });
+  });
+
+  it("q.memberOf wraps in the groupmembership stereotype, which normalization keeps", () => {
+    const node = q.memberOf(q.oneof("ctgroup.id", [7]));
+    expect(node).toEqual({
+      dterm: [{ stereotype: ["groupmembership"] }, { oneof: [{ var: "ctgroup.id" }, [7]] }],
+    });
+    expect(stripCosmeticLabels(node)).toEqual(node);
   });
 
   it("q.or", () => {

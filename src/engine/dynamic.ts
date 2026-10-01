@@ -13,19 +13,57 @@ import type { DynamicStatus } from "./types.js";
 
 const READ_ONLY_KEYS = new Set(["dynamicGroupUpdateStarted", "dynamicGroupUpdateFinished"]);
 
-/** Recursively unwrap `dterm: [label, expr]` cosmetic wrappers to their `expr`. */
+/**
+ * Whether a `dterm` label is pure display text: a string, or an object carrying nothing but a
+ * `title`. Everything else is kept. In particular a `stereotype` label (in practice
+ * `["groupmembership"]`) is NOT cosmetic: it tells ChurchTools to evaluate the wrapped group
+ * condition per person ("is/is not a member of group X") instead of per membership row. Without
+ * it, `!(member of X)` is true for every person who also has any other membership row, so a
+ * negated group condition excludes no one. Measured read-only against 72 live rulesets on CT 3.137
+ * (`POST /churchquery/debug/export`): keeping these labels reproduces every live result exactly;
+ * dropping them changes 18 of them. An allowlist, so a label key ChurchTools adds later is kept
+ * rather than silently stripped.
+ */
+export function isCosmeticLabel(label: unknown): boolean {
+  if (label === null || label === undefined || typeof label === "string") return true;
+  if (typeof label !== "object" || Array.isArray(label)) return false;
+  return Object.keys(label).every((k) => k === "title");
+}
+
+function isLabelWrapper(obj: Record<string, unknown>): obj is { dterm: [unknown, unknown] } {
+  return Array.isArray(obj.dterm) && obj.dterm.length === 2 && Object.keys(obj).length === 1;
+}
+
+/**
+ * Recursively unwrap cosmetic `dterm: [label, expr]` wrappers to their `expr`. A wrapper whose
+ * label is not cosmetic (see `isCosmeticLabel`) changes what the query selects and is kept, its
+ * label copied verbatim and its `expr` normalized in place.
+ */
 export function stripCosmeticLabels(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(stripCosmeticLabels);
   if (node && typeof node === "object") {
     const obj = node as Record<string, unknown>;
-    if (Array.isArray(obj.dterm) && obj.dterm.length === 2 && Object.keys(obj).length === 1) {
-      return stripCosmeticLabels(obj.dterm[1]); // keep the expression, drop the label
+    if (isLabelWrapper(obj)) {
+      const [label, expr] = obj.dterm;
+      if (!isCosmeticLabel(label)) return { dterm: [structuredClone(label), stripCosmeticLabels(expr)] };
+      return stripCosmeticLabels(expr); // keep the expression, drop the label
     }
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(obj)) out[k] = stripCosmeticLabels(v);
     return out;
   }
   return node;
+}
+
+/** The non-cosmetic `dterm` labels in a (normalized) query, in document order. */
+export function semanticLabels(node: unknown): unknown[] {
+  if (Array.isArray(node)) return node.flatMap(semanticLabels);
+  if (node && typeof node === "object") {
+    const obj = node as Record<string, unknown>;
+    const own = isLabelWrapper(obj) && !isCosmeticLabel(obj.dterm[0]) ? [obj.dterm[0]] : [];
+    return [...own, ...Object.values(obj).flatMap(semanticLabels)];
+  }
+  return [];
 }
 
 /**
@@ -41,8 +79,12 @@ export function stripCosmeticLabels(node: unknown): unknown {
 export function coerceScalars(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(coerceScalars);
   if (node && typeof node === "object") {
+    const obj = node as Record<string, unknown>;
+    // A kept `dterm` label is free text written back to ChurchTools verbatim: a title "2024" must
+    // stay a string. Only the wrapped expression carries the int/string-inconsistent ids.
+    if (isLabelWrapper(obj)) return { dterm: [structuredClone(obj.dterm[0]), coerceScalars(obj.dterm[1])] };
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(node as Record<string, unknown>)) out[k] = coerceScalars(v);
+    for (const [k, v] of Object.entries(obj)) out[k] = coerceScalars(v);
     return out;
   }
   if (typeof node === "string" && /^(-?[1-9]\d*|0)$/.test(node)) {

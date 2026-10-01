@@ -6,7 +6,7 @@ sources:
   - src/engine/dynamic.ts
   - src/engine/synthetic.ts
   - src/application/operations/adopt-group.ts
-sources_hash: e38b8c0f6032d5cc
+sources_hash: 3872161fc3777e2b
 reviewed: 2026-08-28
 ---
 
@@ -382,15 +382,16 @@ sibling of `query`, not an argument to `churchQuery(...)`.
 
 `q` (`src/config/query.ts`) emits a JSONLogic tree:
 
-| helper                     | emits                                   |
-| -------------------------- | --------------------------------------- |
-| `q.and(...nodes)`          | `{ and: nodes }`                        |
-| `q.or(...nodes)`           | `{ or: nodes }`                         |
-| `q.not(node)`              | `{ "!": [node] }`                       |
-| `q.var(name)`              | `{ var: name }`                         |
-| `q.eq(varName, value)`     | `{ "==": [{ var: varName }, value] }`   |
-| `q.oneof(varName, values)` | `{ oneof: [{ var: varName }, values] }` |
-| `q.isnull(varName)`        | `{ isnull: [{ var: varName }] }`        |
+| helper                     | emits                                                    |
+| -------------------------- | -------------------------------------------------------- |
+| `q.and(...nodes)`          | `{ and: nodes }`                                         |
+| `q.or(...nodes)`           | `{ or: nodes }`                                          |
+| `q.not(node)`              | `{ "!": [node] }`                                        |
+| `q.var(name)`              | `{ var: name }`                                          |
+| `q.eq(varName, value)`     | `{ "==": [{ var: varName }, value] }`                    |
+| `q.oneof(varName, values)` | `{ oneof: [{ var: varName }, values] }`                  |
+| `q.isnull(varName)`        | `{ isnull: [{ var: varName }] }`                         |
+| `q.memberOf(node)`         | `{ dterm: [{ stereotype: ["groupmembership"] }, node] }` |
 
 `var` values may be **logical references** or **raw ids**. Prefer a reference so
 the ruleset is portable across hosts (#20): `q.eq("ctgroup.campusId",
@@ -439,8 +440,51 @@ const ruleset = {
 ChurchTools' stored rulesets carry cosmetic noise that would otherwise show
 up as permanent phantom diffs on every `ct plan`:
 
-- **`dterm: [label, expr]` wrappers** — a cosmetic UI label around a
-  subtree. Never evaluated by ChurchTools; stripped down to `expr`.
+- **`dterm: [label, expr]` wrappers** — a UI label around a subtree. A string
+  or `{ title }` label is cosmetic and stripped down to `expr`. A label that
+  carries a **`stereotype`** (`{ stereotype: ["groupmembership"], title }`) is
+  **not** cosmetic and is kept: it makes ChurchTools evaluate the wrapped group
+  condition per person ("is / is not a member of group X") rather than per
+  membership row. Without it, a negated group condition such as
+  `!(member of "Unsubscribed")` still matches everyone who has any other
+  membership, so it excludes no one. When you author a group condition —
+  especially a negated one — wrap it the way the ChurchTools editor does. With
+  the typed builder that is `q.memberOf`:
+
+  ```ts
+  q.not(q.memberOf(q.oneof("ctgroup.id", [ref.group("unsubscribed")])));
+  ```
+
+  and in a JSON ruleset file:
+
+  ```json
+  {
+    "!": [
+      {
+        "dterm": [
+          { "stereotype": ["groupmembership"], "title": "Mitgliedschaft in einer Gruppe" },
+          {
+            "oneof": [{ "var": "ctgroup.id" }, [{ "__ctRef": true, "kind": "group", "key": "unsubscribed" }]]
+          }
+        ]
+      }
+    ]
+  }
+  ```
+
+  Up to v4.1.0 the normalizer stripped these wrappers too, and because `apply`
+  writes the normalized ruleset, applying a ruleset silently removed them. Two
+  consequences when you upgrade:
+
+  - Rulesets captured by `ct adopt` before the fix lack the wrappers. `ct plan`
+    now warns (`applying would remove N "stereotype" dterm wrapper(s)`) for each
+    group whose live ruleset still has them. Re-adopt those rulesets before you
+    apply.
+  - A group that an earlier `apply` already stripped on the server has no
+    wrapper left to re-adopt, and `ct plan` shows nothing. Add the wrapper back
+    by hand (above), or re-save the condition in the ChurchTools editor and
+    re-adopt.
+
 - **int/string inconsistency** — the same logical id shows up as both `1`
   and `"1"` across (and even within) a single ruleset. Numeric-looking
   strings inside the `query` subtree are coerced to numbers.
