@@ -4,7 +4,7 @@ Read `CONTRIBUTING.md` first: it has the checks CI runs (`format:check`, `lint`,
 
 ## This repo is public
 
-Everything here is world-readable: code, comments, tests, docs, commit bodies, PR titles and descriptions, and issue comments. Keep instance-specific data out, meaning real campus, Bereich or group names, person ids and internal group keys (`sLL-*`, `sFlow*`). Use neutral placeholders instead. Per-instance values belong in the private `eqrm/ct-structure`. Endpoint facts and "verified on prod" provenance notes are fine. Before pushing, scan the diff _and_ the PR body, and before merging, scan the squash message you're about to write.
+Everything here is world-readable: code, comments, tests, docs, commit bodies, PR titles and descriptions, and issue comments. Keep instance-specific data out, meaning real campus, Bereich or group names, person ids and internal group keys or their naming prefixes. Use neutral placeholders instead. Per-instance values belong in the private `eqrm/ct-structure`. Endpoint facts and "verified on prod" provenance notes are fine. Before pushing, scan the diff _and_ the PR body, and before merging, scan the squash message you're about to write.
 
 ## Merging is releasing
 
