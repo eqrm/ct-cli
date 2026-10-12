@@ -221,8 +221,9 @@ async function postJson(
       },
       body: JSON.stringify(body),
     },
-    // A login POST is not idempotent, so 5xx is not retried; a 429 still is.
-    { isIdempotent: false, fetchImpl },
+    // A login POST is not idempotent, so 5xx is not retried; a 429 still is. Logins keep the
+    // short 429 budget: CT throttles them per instance, and waiting minutes helps nobody.
+    { isIdempotent: false, rateLimitRetries: 3, fetchImpl },
   );
 }
 

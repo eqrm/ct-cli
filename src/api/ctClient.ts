@@ -303,7 +303,9 @@ export class CtClient {
     const res = await fetchWithRetry(
       url,
       { headers: { Accept: "application/json" } },
-      { isIdempotent: true },
+      // Short 429 budget, as for every login: the throttle is per instance and the message below
+      // tells the user how long to wait instead.
+      { isIdempotent: true, rateLimitRetries: 3 },
     );
     this.captureCookie(res);
     if (!res.ok) {

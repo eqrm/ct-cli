@@ -35,10 +35,18 @@ function urls(mock: ReturnType<typeof vi.fn<typeof fetch>>): string[] {
   return mock.mock.calls.map((call) => String(call[0]));
 }
 
+// Time skipped by the instant `setTimeout` below. It only grows, so a 429 pause a
+// test leaves on the shared pacer is already over for the next one.
+const realNow = Date.now.bind(Date);
+let skippedMs = 0;
+
 beforeEach(() => {
   // `fetchWithRetry` sleeps between retries (429/5xx). Run those waits instantly so
-  // the retry-shaped tests below don't spend seconds actually waiting.
-  vi.stubGlobal("setTimeout", ((fn: () => void) => {
+  // the retry-shaped tests below don't spend seconds actually waiting — and move
+  // the clock along, or the pacer would see its 429 pause as still running.
+  vi.spyOn(Date, "now").mockImplementation(() => realNow() + skippedMs);
+  vi.stubGlobal("setTimeout", ((fn: () => void, ms?: number) => {
+    skippedMs += ms ?? 0;
     fn();
     return 0;
   }) as unknown as typeof setTimeout);
