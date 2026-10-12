@@ -182,6 +182,26 @@ describe("fetchWithRetry under a rate limit", () => {
     await fetchWithRetry("https://x/api/groups/2", {}, { sleep, fetchImpl: sibling, pacer });
     expect(sleep).toHaveBeenCalledWith(2000);
   });
+
+  it("re-checks the pause after sleeping toward an already reserved slot", async () => {
+    let clock = 0;
+    const pacer = new RequestPacer(100, () => clock);
+    pacer.reserve(); // a sibling holds slot 0, so this request is given slot 100
+    const sleep = vi.fn(async (ms: number) => {
+      // While this request sleeps, the sibling gets a 429 and starts a 2s pause.
+      if (clock === 0) {
+        pacer.pauseFor(2000);
+      }
+      clock += ms;
+    });
+    let firedAt = -1;
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      firedAt = clock;
+      return res(200);
+    });
+    await fetchWithRetry("https://x/api/groups/2", {}, { sleep, fetchImpl, pacer });
+    expect(firedAt).toBeGreaterThanOrEqual(2000);
+  });
 });
 
 describe("RequestPacer", () => {

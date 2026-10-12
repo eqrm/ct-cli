@@ -37,7 +37,8 @@ alone do not bypass that guardrail.
 ChurchTools answers bursts with HTTP 429. `ct` therefore paces its own
 requests: at most 10 request starts per second per host by default, and when
 any request gets a 429 every request to that host waits out the same pause
-(`Retry-After` when sent, otherwise exponential backoff, up to 6 times).
+(`Retry-After` when sent, capped at 60s per wait, otherwise exponential
+backoff). A request gives up after 6 such waits, a login after 3.
 Set `CT_MAX_REQUESTS_PER_SECOND` to change the rate. `0` turns the spacing
 off and keeps only the shared pause.
 

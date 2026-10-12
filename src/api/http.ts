@@ -37,7 +37,10 @@ export interface RetryOptions {
   pacer?: RequestPacer | null;
 }
 
-/** 429 retries when the caller sets no budget: backoff 0.5s → 16s, about 30s waited in all. */
+/**
+ * 429 retries when the caller sets no budget: backoff 0.5s → 16s, about 30s
+ * waited in all. A `Retry-After` replaces the backoff (each wait capped at 60s).
+ */
 export const DEFAULT_RATE_LIMIT_RETRIES = 6;
 
 /**
@@ -64,7 +67,7 @@ export class RequestPacer {
 
   constructor(
     private readonly minIntervalMs: number,
-    private readonly now: () => number = Date.now,
+    private readonly now: () => number = () => Date.now(),
   ) {}
 
   /** Claim the next start slot and return how long to wait for it, in ms. */
@@ -73,6 +76,11 @@ export class RequestPacer {
     const start = Math.max(now, this.nextStartAt, this.pausedUntil);
     this.nextStartAt = start + this.minIntervalMs;
     return start - now;
+  }
+
+  /** How much of the shared 429 pause is still left, in ms. */
+  pauseRemaining(): number {
+    return Math.max(0, this.pausedUntil - this.now());
   }
 
   /** Hold every request to this host back for `ms` — a 429 is about the client, not one request. */
@@ -188,9 +196,11 @@ export async function fetchWithRetry(
   let failures = 0;
   let rateLimited = 0;
   for (;;) {
-    const wait = pacer?.reserve() ?? 0;
-    if (wait > 0) {
+    let wait = pacer?.reserve() ?? 0;
+    while (wait > 0) {
       await sleep(wait);
+      // A sibling's 429 may have started a pause while this request slept toward its slot.
+      wait = pacer && pacer.pauseRemaining() > 0 ? pacer.reserve() : 0;
     }
     let res: Response;
     try {
