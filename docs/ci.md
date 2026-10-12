@@ -32,6 +32,15 @@ target — see [Environments](environments.md) — and a protected env's
 apply/destroy still needs `--confirm-env <name>`; `CT_LOGINTOKEN`/`CT_HOST`
 alone do not bypass that guardrail.
 
+### Rate limiting
+
+ChurchTools answers bursts with HTTP 429. `ct` therefore paces its own
+requests: at most 10 request starts per second per host by default, and when
+any request gets a 429 every request to that host waits out the same pause
+(`Retry-After` when sent, otherwise exponential backoff, up to 6 times).
+Set `CT_MAX_REQUESTS_PER_SECOND` to change the rate. `0` turns the spacing
+off and keeps only the shared pause.
+
 ## Detecting whether there are changes: `--detailed-exitcode`
 
 Terraform-style. With the flag, `ct plan` exits:

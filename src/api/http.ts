@@ -9,6 +9,14 @@
  * errors — a write that may have already been applied is never blindly repeated.
  * A 429 is always safe to retry: the server rejected the request before
  * processing it.
+ *
+ * Retrying alone does not keep a fan-out under the limit: a plan reads a few
+ * hundred resources through several concurrent pools, every request that 429s
+ * backs off on its own while its siblings keep firing, and three quick retries
+ * can run out before the instance lets anyone through again (a prod drift
+ * check lost `GET /groups/{id}` that way). So every request also goes through
+ * one {@link RequestPacer} per host, which spaces request starts and holds ALL
+ * requests to that host back when any of them is told to slow down.
  */
 
 export interface RetryOptions {
@@ -17,8 +25,87 @@ export interface RetryOptions {
   baseDelayMs?: number;
   /** GET/HEAD are idempotent; writes are not. Controls 5xx/network retry. */
   isIdempotent?: boolean;
+  /**
+   * Max additional attempts after a 429 specifically. Defaults to `retries` when
+   * that is set, else {@link DEFAULT_RATE_LIMIT_RETRIES}: waiting out a throttle
+   * needs a longer budget than riding out a flaky 5xx.
+   */
+  rateLimitRetries?: number;
   sleep?: (ms: number) => Promise<void>;
   fetchImpl?: typeof fetch;
+  /** Pacer to go through; defaults to the shared one for the request's host. `null` skips pacing. */
+  pacer?: RequestPacer | null;
+}
+
+/** 429 retries when the caller sets no budget: backoff 0.5s → 16s, about 30s waited in all. */
+export const DEFAULT_RATE_LIMIT_RETRIES = 6;
+
+/**
+ * Request starts per second per host when {@link MAX_RPS_ENV} is unset.
+ *
+ * ChurchTools publishes no number for its API limit, so this is set well below
+ * what the unpaced client reached (eight concurrent reads at a few hundred ms
+ * each), which is what tripped 429. Override it with the env var; `0` turns the
+ * spacing off and keeps only the shared 429 pause.
+ */
+export const DEFAULT_MAX_REQUESTS_PER_SECOND = 10;
+export const MAX_RPS_ENV = "CT_MAX_REQUESTS_PER_SECOND";
+
+/**
+ * Spaces request starts to one host and shares a 429 pause across them.
+ *
+ * {@link reserve} is synchronous on purpose: concurrent callers each claim a
+ * distinct start slot before any of them awaits, so N workers released at once
+ * still start {@link minIntervalMs} apart instead of in a burst.
+ */
+export class RequestPacer {
+  private nextStartAt = 0;
+  private pausedUntil = 0;
+
+  constructor(
+    private readonly minIntervalMs: number,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** Claim the next start slot and return how long to wait for it, in ms. */
+  reserve(): number {
+    const now = this.now();
+    const start = Math.max(now, this.nextStartAt, this.pausedUntil);
+    this.nextStartAt = start + this.minIntervalMs;
+    return start - now;
+  }
+
+  /** Hold every request to this host back for `ms` — a 429 is about the client, not one request. */
+  pauseFor(ms: number): void {
+    this.pausedUntil = Math.max(this.pausedUntil, this.now() + ms);
+  }
+}
+
+function minIntervalFromEnv(): number {
+  const raw = process.env[MAX_RPS_ENV]?.trim();
+  const rps = raw ? Number(raw) : DEFAULT_MAX_REQUESTS_PER_SECOND;
+  if (!Number.isFinite(rps) || rps < 0) {
+    return 1000 / DEFAULT_MAX_REQUESTS_PER_SECOND;
+  }
+  return rps === 0 ? 0 : 1000 / rps;
+}
+
+const pacers = new Map<string, RequestPacer>();
+
+/** The process-wide pacer for `input`'s origin, created on first use. */
+export function pacerFor(input: string | URL): RequestPacer | null {
+  let origin: string;
+  try {
+    origin = new URL(input).origin;
+  } catch {
+    return null;
+  }
+  let pacer = pacers.get(origin);
+  if (!pacer) {
+    pacer = new RequestPacer(minIntervalFromEnv());
+    pacers.set(origin, pacer);
+  }
+  return pacer;
 }
 
 /** Cap on any single wait, so an outsized `Retry-After` can't hang the CLI. */
@@ -89,27 +176,52 @@ export async function fetchWithRetry(
   opts: RetryOptions = {},
 ): Promise<Response> {
   const retries = opts.retries ?? 3;
+  const rateLimitRetries = opts.rateLimitRetries ?? opts.retries ?? DEFAULT_RATE_LIMIT_RETRIES;
   const base = opts.baseDelayMs ?? 500;
   const isIdempotent = opts.isIdempotent ?? true;
   const sleep = opts.sleep ?? defaultSleep;
   const doFetch = opts.fetchImpl ?? fetch;
+  const pacer = opts.pacer === undefined ? pacerFor(input) : opts.pacer;
 
-  let attempt = 0;
+  // Two budgets: 429s are waited out on their own, longer one, so a throttle
+  // cannot use up the retries a later 5xx or network error is owed.
+  let failures = 0;
+  let rateLimited = 0;
   for (;;) {
-    attempt++;
+    const wait = pacer?.reserve() ?? 0;
+    if (wait > 0) {
+      await sleep(wait);
+    }
     let res: Response;
     try {
       res = await doFetch(input, init);
     } catch (err) {
-      if (attempt <= retries && isIdempotent) {
-        await sleep(backoffMs(base, attempt));
+      if (failures < retries && isIdempotent) {
+        failures++;
+        await sleep(backoffMs(base, failures));
         continue;
       }
       throw err;
     }
-    if (attempt <= retries && shouldRetryStatus(res.status, isIdempotent)) {
-      const delay = retryAfterMs(res) ?? backoffMs(base, attempt);
+    if (res.status === 429) {
+      if (rateLimited >= rateLimitRetries) {
+        return res;
+      }
+      rateLimited++;
+      const delay = retryAfterMs(res) ?? backoffMs(base, rateLimited);
       // Drain the response we're discarding so its socket isn't left buffered.
+      await res.body?.cancel().catch(() => {});
+      // The pacer's next reserve() waits this out — for this request and every sibling.
+      if (pacer) {
+        pacer.pauseFor(delay);
+      } else {
+        await sleep(delay);
+      }
+      continue;
+    }
+    if (failures < retries && shouldRetryStatus(res.status, isIdempotent)) {
+      failures++;
+      const delay = retryAfterMs(res) ?? backoffMs(base, failures);
       await res.body?.cancel().catch(() => {});
       await sleep(delay);
       continue;
