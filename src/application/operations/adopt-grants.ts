@@ -9,6 +9,9 @@ import { fetchPermissionRows, type PermissionReader } from "../../permissions/fe
 import { CATALOG_DIR, loadHostCatalog } from "../../permissions/catalog-store.js";
 import { declarability, decodeGroupsWithRoles, type RoleInstance } from "../../coverage/report.js";
 import { slug } from "../../resources/registry.js";
+import { ReverseResolver } from "../../resolve/reverse.js";
+import { Resolver } from "../../resolve/resolver.js";
+import { ref } from "../../resolve/refs.js";
 import { loadState, type State } from "../../state/state.js";
 import type { CtWarning, OperationResult, ProjectRequest } from "../contracts.js";
 import { resolveProject } from "../project.js";
@@ -133,7 +136,7 @@ export async function runAdoptGrants(
 
 /** The original single-domain form: `ct adopt grants <domainType> <domainId>`. */
 async function emitSingle(
-  client: PermissionReader,
+  client: PermissionReader & Pick<CtClient, "get" | "getAll">,
   state: State,
   rawType: string | undefined,
   rawId: string | undefined,
@@ -151,7 +154,50 @@ async function emitSingle(
   const path = `/permissions/${domainType}/${domainId}`;
   assertNotPeople(path); // belt-and-suspenders: the domain-type guard already excludes people
   const rows = await fetchPermissionRows(client, path);
-  return buildAdoptedGrants({ domainType, domainId, rows, state });
+  const domain =
+    domainType === "group_type_role" ? await portableGroupTypeRoleDomain(client, state, domainId) : undefined;
+  return buildAdoptedGrants({
+    domainType,
+    domainId,
+    rows,
+    state,
+    domain,
+    key: domain ? `${domain.groupType}_${slug(domain.role)}` : undefined,
+  });
+}
+
+/**
+ * The portable `groupType` + `role` form for a group_type_role domain (a role id, #182), or undefined
+ * when that pair would not resolve back to the SAME role (the caller then keeps the numeric `id:` output).
+ *
+ * The pair is only worth printing if the forward resolver agrees with it: managed state is consulted
+ * before the catalog, so a catalog slug can name a different group type than the one meant, and two
+ * types or roles whose names slug alike make the pair ambiguous. So the candidate is round-tripped
+ * through the real {@link Resolver}; any mismatch or error falls back to the id. The group type's key
+ * prefers a managed state key over the slug of its name.
+ */
+async function portableGroupTypeRoleDomain(
+  client: Pick<CtClient, "get" | "getAll">,
+  state: State,
+  roleId: number,
+): Promise<{ groupType: string; role: string } | undefined> {
+  const reverse = new ReverseResolver(client);
+  const entry = (await reverse.roleGroupTypeCatalog()).get(roleId);
+  if (!entry) return undefined;
+  const managed = Object.values(state.resources).find(
+    (r) => r.type === "group-type" && r.id === entry.groupTypeId,
+  );
+  const groupTypeKey = managed?.key ?? (await reverse.idToKeyByKind("group-type")).get(entry.groupTypeId);
+  if (!groupTypeKey) return undefined;
+  try {
+    const resolved = await new Resolver({ client, state, desired: [] }).resolve(
+      ref.groupTypeRole(groupTypeKey, entry.name),
+      "adopt grants",
+    );
+    return resolved === roleId ? { groupType: groupTypeKey, role: entry.name } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

@@ -457,8 +457,12 @@ export class Resolver {
         .join(", ");
       throw new Error(
         `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: group type #${groupTypeId} ` +
-          `has no role named "${r.role}"${available ? ` (available: ${available})` : ""}. Fix the role ` +
-          `name, or pass a numeric id.`,
+          `has no role named "${r.role}"${available ? ` (available: ${available})` : ""}. ` +
+          (this.declaresRoleNamed(r.role)
+            ? `"${r.role}" is declared as a roleDefinition in this config, but a group-type-scoped role ` +
+              `id only exists once the role does: apply once to create the role, then add the ` +
+              `groupTypeRole and apply again.`
+            : `Fix the role name, or pass a numeric role id as \`id\` instead of groupType + role.`),
       );
     }
     if (matches.length > 1) {
@@ -471,9 +475,11 @@ export class Resolver {
       const adopts = matches.map((c) => `\`ct adopt group-role ${c.id} -k <shared-key>\``).join(" / ");
       throw new Error(
         `Ambiguous ${refLabel(r)} referenced at ${site} on ${this.host}: ${matches.length} roles on group ` +
-          `type #${groupTypeId} match — ${list}. Adopt the one you mean under a logical key, on EVERY ` +
-          `host, and reference it as { kind: "role-def", key: "<shared-key>" } — ${adopts}. ` +
-          `(Renaming in ChurchTools and passing a numeric id both work on one host only.)`,
+          `type #${groupTypeId} match — ${list}. ct.groupTypeRole's \`role\` only takes a name, so there is ` +
+          `no portable way to pick one: pass the numeric role id as \`id\` instead of groupType + role ` +
+          `(host-specific, so a config shared across hosts needs one block per host), or rename one of ` +
+          `the roles in ChurchTools (also per host). To manage the role itself under a shared key, ` +
+          `adopt it: ${adopts}.`,
       );
     }
     return matches[0]!.id;
@@ -483,7 +489,7 @@ export class Resolver {
    * Resolve the group-type half of a group-type-role ref to a concrete numeric id, reusing the normal
    * group-type resolution (managed state ∪ `/group/grouptypes` catalog). A same-run-declared group type
    * would resolve to a PendingRef here — reject it, since the role catalog can't be filtered without a
-   * concrete id (its message tells the author to apply the group type first or pass a numeric role id).
+   * concrete id (its message tells the author to apply in two steps).
    */
   private async groupTypeIdForRole(r: GroupTypeRoleRef, site: string): Promise<number> {
     const gtRef: SimpleRef = { __ctRef: true, kind: "group-type", key: r.groupType };
@@ -492,7 +498,8 @@ export class Resolver {
       throw new Error(
         `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: group type "${r.groupType}" ` +
           `is declared in this config but not yet created — a group-type-scoped role id only exists once ` +
-          `the group type does. Apply the group type first, then re-run, or pass a numeric id.`,
+          `the group type does. Same-run creation is not supported: apply the config in two steps (create ` +
+          `the group type first, then add the groupTypeRole and apply again).`,
       );
     }
     return resolved;
