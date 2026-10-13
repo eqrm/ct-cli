@@ -43,8 +43,9 @@ export type { RoleCatalogEntry };
  *      it collides there is no fix available in a shared config, which is precisely why (1) exists.
  *
  * Deliberately absent (the escape hatch — unknown vars are left untouched by {@link portablizeRuleset}):
- *   - `ctgroup.groupStatusId` — group statuses have NO REST catalog (#67; `/group/memberstatus` is a
- *     different dimension). Not a managed entity → never rewritten, stays a plain number.
+ *   - `ctgroup.groupStatusId` — not rewritten yet: group statuses are read from the nested
+ *     `/person/masterdata` → `groupStatuses` catalog (#157), which the portablizer does not index
+ *     (`/group/memberstatus` is a different dimension). Stays a plain number.
  *   - `person.isArchived`, `person.dateOfDeath` — boolean/date literals, not entity refs.
  */
 export const VAR_REF_KINDS: Readonly<Record<string, RefKind>> = {
@@ -84,7 +85,7 @@ export type PortablizeReason =
   | "role-unknown"
   /** A role resolved, but the group TYPE it belongs to is not managed, so no portable pair exists. */
   | "role-group-type-unmanaged"
-  /** The dimension has no logical reference form at all (e.g. group statuses — no REST catalog). */
+  /** The dimension has no logical reference form at all (e.g. group statuses — their catalog is nested in `/person/masterdata`, #157). */
   | "no-ref-kind"
   /**
    * Reported by {@link scanUnportablized} only: the id sits in an entity position and is therefore
@@ -113,7 +114,8 @@ export interface PortablizeWarning {
  * is a literal, not an id, and reporting it would bury the real findings in noise.
  */
 const UNPORTABLE_ENTITY_VARS: Readonly<Record<string, string>> = {
-  "ctgroup.groupStatusId": "group statuses have no REST catalog (#67) — no logical form exists",
+  "ctgroup.groupStatusId":
+    "not rewritten yet — group statuses live in the nested `/person/masterdata` → `groupStatuses` catalog (#157), which ruleset portablizing does not index; keep the numeric id",
   // #127. A ruleset that includes or excludes specific people by id is common — four of five
   // auto-group rulesets captured in one week did it — and it was the ONE entity var the audit never
   // mentioned, so the only way to find it was to read the captured JSON by hand. The absence of a

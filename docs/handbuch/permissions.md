@@ -297,8 +297,8 @@ The two DSL functions manage two different ChurchTools "domain types," and
 
   > **Person status ≠ group status.** `groupStatusId` (`ct.group`) is a
   > different dimension: its catalog is read-only (`GET /person/masterdata` →
-  > `groupStatuses`), ct does not resolve it by name yet (#157), and it must be
-  > written as a number. Person statuses do have one (`GET /statuses`, flat
+  > `groupStatuses`) and is resolved by `status:` on a group (#157), not by the
+  > person-status domain. Person statuses do have one (`GET /statuses`, flat
   > array of `{id, name}` — live-verified 2026-08-10 on eqrm prod), so they
   > resolve by name like campuses and group types.
 

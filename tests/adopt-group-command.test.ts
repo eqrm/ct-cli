@@ -485,7 +485,7 @@ describe("ct adopt group --with-dynamic --portable-rulesets (#76 Stage 3)", () =
     // Detail is id-free: formatPortablizeWarnings prints the ids once, ahead of it, so a detail
     // naming one id would be stamped across every id merged into the line.
     expect(warned).toMatch(/ctgroup\.id: 999 left numeric — not under management/);
-    expect(warned).toMatch(/ctgroup\.groupStatusId: 1, 2 left numeric — group statuses have no REST catalog/);
+    expect(warned).toMatch(/ctgroup\.groupStatusId: 1, 2 left numeric — not rewritten yet/);
   });
 
   it("is ON by default since #101: a plain --with-dynamic capture emits ref markers", async () => {

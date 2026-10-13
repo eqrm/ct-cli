@@ -18,13 +18,8 @@
  *     Each catalog is fetched at most once per run and cached by a `Map<RefKind, Promise>`,
  *     so the resolver is safe to share across `buildPlan` and `buildPermissionPlan` running
  *     concurrently (both await the same in-flight promise). group-status ("group-status" /
- *     `ref.status`) has NO catalog here — ChurchTools exposes no REST list endpoint for group
- *     statuses at all (live-verified 2026-07-10 on eqrm prod; see the note by `CATALOG_PATH`
- *     below and #67). A declared `status:` field fails fast at eval time (src/config/context.ts)
- *     before it ever reaches this resolver — but a `groupStatusId: ref.status(...)` value skips
- *     that guard (the id-field escape hatch accepts any Ref) and lands on step 3 below, where
- *     `notFound` special-cases "group-status" to give the same actionable message instead of
- *     the generic "declare/adopt it" advice, which would be wrong (no such resource, no catalog).
+ *     `ref.status` / `status:`) is read from the nested `groupStatuses` list of
+ *     `GET /person/masterdata` (#157), matched on the technical `name` like every other catalog.
  *  3. Hard error naming the kind, key, referencing site, and host.
  *
  * Unknown / ambiguous references THROW (a config error — distinct from the
@@ -48,7 +43,6 @@ import {
 import {
   collectRefs,
   deepMapRefs,
-  GROUP_STATUS_NO_CATALOG,
   isPendingRef,
   isRef,
   pendingRef,
@@ -63,7 +57,7 @@ import {
   type SimpleRef,
 } from "./refs.js";
 
-/** ref kind → managed resource type (state/desired). group-status has neither: no catalog and never managed (#67). */
+/** ref kind → managed resource type (state/desired). group-status has none: it is a read-only catalog (#157). */
 const REF_KIND_TYPE: Partial<Record<RefKind, string>> = {
   campus: "campus",
   "group-type": "group-type",
@@ -95,16 +89,10 @@ const REF_KIND_TYPE: Partial<Record<RefKind, string>> = {
 /**
  * ref kind → live catalog path. `group` has no catalog (managed-only); `group-role` is gated.
  *
- * `group-status` is deliberately ABSENT (#67, disproving the prior assumption documented here):
- * `GET /group/memberstatus` is NOT a group-status catalog — live-verified 2026-07-10 on eqrm prod,
- * it returns MEMBER statuses (`{id: "active", name: "Active"}, {id: "requested", ...}`, STRING ids),
- * a completely different dimension from `groupStatusId` (numeric — e.g. 1 = active, 4 = archived on
- * that instance). Further probing found no REST list endpoint for group statuses at all
- * (`/groups/statuses` parses as `/groups/{groupId}`, `/group/statuses` and `/groupstatuses` 404) —
- * neither read nor write. So `status:` sugar fails fast at eval time instead (src/config/context.ts)
- * rather than reaching this resolver and either resolving against the wrong dimension or landing
- * here as an unconditional hard error. If CT ever ships a real group-status endpoint, add it back
- * here and restore the `status` entry to `ID_SUGAR` in context.ts.
+ * `group-status` is read from `GET /person/masterdata` → `groupStatuses` (#157): there is no dedicated
+ * endpoint, and `GET /group/memberstatus` is a different dimension (member statuses, string ids).
+ * That response is an object, not a list, so {@link Resolver.catalog} unwraps the nested key
+ * (see `NESTED_CATALOG_KEY`).
  */
 const CATALOG_PATH: Partial<Record<RefKind, string>> = {
   campus: "/campuses",
@@ -126,12 +114,19 @@ const CATALOG_PATH: Partial<Record<RefKind, string>> = {
   // is why nothing in the resolve path may treat a falsy id as "missing".
   "comment-viewer": "/person/commentviewers",
   "group-type": "/group/grouptypes",
-  // PERSON statuses — the domain of a `status` permission declaration (#90). Unlike GROUP statuses
-  // (see the note above), these DO have a flat REST catalog: `GET /statuses` returns
+  // GROUP statuses (`groupStatusId`): nested in the masterdata response, see the note above.
+  "group-status": "/person/masterdata",
+  // PERSON statuses — the domain of a `status` permission declaration (#90). Unlike GROUP statuses,
+  // these have a flat REST catalog: `GET /statuses` returns
   // `[{id, name, shorty, …}]` — live-verified 2026-08-10 on eqrm prod. (`/person/masterdata` carries
   // the same rows under a `statuses` key, but nested; this catalog reader expects a top-level array.)
   "person-status": "/statuses",
   "role-def": "/group/roles",
+};
+
+/** Catalogs whose rows sit under a key of an object response instead of being the top-level array. */
+const NESTED_CATALOG_KEY: Partial<Record<RefKind, string>> = {
+  "group-status": "groupStatuses",
 };
 
 /**
@@ -336,10 +331,14 @@ export class Resolver {
     let p = this.catalogs.get(kind);
     if (!p) {
       const path = CATALOG_PATH[kind]!;
-      const rows = this.client.getAll
-        ? this.client.getAll<CatalogRecord>(path).then((page) => page.data)
-        : this.client.get<CatalogRecord[]>(path);
-      p = rows.then((r) => (Array.isArray(r) ? r : []));
+      const nestedKey = NESTED_CATALOG_KEY[kind];
+      // A nested catalog is a single object (not paginated), so a plain `get` is the right read.
+      const rows: Promise<unknown> = nestedKey
+        ? this.client.get<Record<string, unknown>>(path).then((body) => body?.[nestedKey])
+        : this.client.getAll
+          ? this.client.getAll<CatalogRecord>(path).then((page) => page.data)
+          : this.client.get<CatalogRecord[]>(path);
+      p = rows.then((r) => (Array.isArray(r) ? (r as CatalogRecord[]) : []));
       this.catalogs.set(kind, p);
     }
     return p;
@@ -642,17 +641,6 @@ export class Resolver {
   }
 
   private notFound(r: SimpleRef, site: string): Error {
-    // group-status (#67, reviewer follow-up): a `groupStatusId: ref.status(...)` value bypasses the
-    // eval-time guard in src/config/context.ts (the id-field escape hatch accepts any Ref) and lands
-    // here. The generic "declare/adopt it, fix the key" advice below is actively wrong for
-    // group-status — there is no such managed resource type and no catalog to adopt against — so
-    // give the same actionable message the eval-time guard uses instead (shared constant so the two
-    // sites can't drift).
-    if (r.kind === "group-status") {
-      return new Error(
-        `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: ${GROUP_STATUS_NO_CATALOG}`,
-      );
-    }
     const catalog = CATALOG_PATH[r.kind];
     // A catalog-only kind has no managed resource type, so "Declare/adopt it" is advice the tool
     // cannot honour (#96's exact complaint about the old person-status message). The message says

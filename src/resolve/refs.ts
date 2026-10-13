@@ -32,21 +32,6 @@ export type RefKind =
   | "group-type-role"
   | "group-member-field";
 
-/**
- * Shared explanation for why a group-status reference can never be resolved by name (#67):
- * ChurchTools exposes no REST catalog for group statuses — `GET /group/memberstatus` is a
- * different dimension (member statuses, string ids), live-verified 2026-07-10 on eqrm prod.
- * Used verbatim by both guards that can see a group-status reference, so their messages can't
- * drift apart:
- *  - the eval-time guard (src/config/context.ts) for a declared `status:` field, and
- *  - the plan-time guard (src/resolve/resolver.ts) for a `groupStatusId: ref.status(...)` value
- *    that bypassed the eval-time guard (the id-field escape hatch accepts any Ref) and reached
- *    the resolver directly.
- */
-export const GROUP_STATUS_NO_CATALOG =
-  `group statuses have no REST catalog (GET /group/memberstatus is a different dimension: member ` +
-  `statuses, string ids — verified 2026-07-10). Declare a numeric "groupStatusId" instead (e.g. "groupStatusId: 1").`;
-
 /** Simple key-addressed reference: campus / department / security level / group type / group status / person status / role definition / group. */
 export interface SimpleRef {
   __ctRef: true;
@@ -211,8 +196,8 @@ export const ref = {
   }),
   /**
    * A PERSON status (`/statuses` — "0 - First", "3 - Group Active", …), the domain of a `status`
-   * permission declaration. Unrelated to {@link ref.status} (GROUP status, `groupStatusId`), which
-   * has no catalog at all (#67) — person statuses do, so this one resolves by name like any other
+   * permission declaration. Unrelated to {@link ref.status} (GROUP status, `groupStatusId`, read from `/person/masterdata`
+   * — #157) — both resolve by name like any other
    * master-data ref.
    */
   personStatus: (key: string): SimpleRef => ({
