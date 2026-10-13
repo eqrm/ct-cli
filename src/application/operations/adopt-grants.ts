@@ -9,6 +9,7 @@ import { fetchPermissionRows, type PermissionReader } from "../../permissions/fe
 import { CATALOG_DIR, loadHostCatalog } from "../../permissions/catalog-store.js";
 import { declarability, decodeGroupsWithRoles, type RoleInstance } from "../../coverage/report.js";
 import { slug } from "../../resources/registry.js";
+import { ReverseResolver } from "../../resolve/reverse.js";
 import { loadState, type State } from "../../state/state.js";
 import type { CtWarning, OperationResult, ProjectRequest } from "../contracts.js";
 import { resolveProject } from "../project.js";
@@ -133,7 +134,7 @@ export async function runAdoptGrants(
 
 /** The original single-domain form: `ct adopt grants <domainType> <domainId>`. */
 async function emitSingle(
-  client: PermissionReader,
+  client: PermissionReader & Pick<CtClient, "getAll">,
   state: State,
   rawType: string | undefined,
   rawId: string | undefined,
@@ -151,7 +152,31 @@ async function emitSingle(
   const path = `/permissions/${domainType}/${domainId}`;
   assertNotPeople(path); // belt-and-suspenders: the domain-type guard already excludes people
   const rows = await fetchPermissionRows(client, path);
-  return buildAdoptedGrants({ domainType, domainId, rows, state });
+  const domain =
+    domainType === "group_type_role" ? await portableGroupTypeRoleDomain(client, domainId) : undefined;
+  return buildAdoptedGrants({
+    domainType,
+    domainId,
+    rows,
+    state,
+    domain,
+    key: domain ? `${domain.groupType}_${slug(domain.role)}` : undefined,
+  });
+}
+
+/**
+ * The portable `groupType` + `role` form for a group_type_role domain (a role id, #182), or undefined
+ * when the role or its group type can't be mapped (the caller then keeps the numeric `id:` output).
+ */
+async function portableGroupTypeRoleDomain(
+  client: Pick<CtClient, "getAll">,
+  roleId: number,
+): Promise<{ groupType: string; role: string } | undefined> {
+  const reverse = new ReverseResolver(client);
+  const entry = (await reverse.roleGroupTypeCatalog()).get(roleId);
+  if (!entry) return undefined;
+  const groupTypeKey = (await reverse.idToKeyByKind("group-type")).get(entry.groupTypeId);
+  return groupTypeKey ? { groupType: groupTypeKey, role: entry.name } : undefined;
 }
 
 /**

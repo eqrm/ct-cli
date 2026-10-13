@@ -9,9 +9,11 @@ const rows: RawPermission[] = [
   { authId: 1, dataId: null, type: "grant", domainId: 42, meta: { modifiedPid: 5 } },
 ];
 const getMock = vi.fn(async (): Promise<RawPermission[]> => rows);
+const catalogs: Record<string, unknown[]> = {};
+const getAllMock = vi.fn(async (path: string) => ({ data: catalogs[path] ?? [] }));
 
 vi.mock("../src/api/session.js", () => ({
-  authedSession: vi.fn(async () => ({ client: { get: getMock }, me: { id: 1 } })),
+  authedSession: vi.fn(async () => ({ client: { get: getMock, getAll: getAllMock }, me: { id: 1 } })),
 }));
 
 const { adoptCommand } = await import("../src/commands/adopt.js");
@@ -25,6 +27,8 @@ async function run(args: string[]): Promise<void> {
 
 beforeEach(() => {
   getMock.mockClear();
+  getAllMock.mockClear();
+  for (const k of Object.keys(catalogs)) delete catalogs[k];
   process.env.CT_HOST = HOST;
 });
 
@@ -47,6 +51,42 @@ describe("ct adopt grants", () => {
     }
     expect(getMock).toHaveBeenCalledWith("/permissions/group_type_role/42");
     expect(writes.join("")).toContain("ct.groupTypeRole({");
+  });
+
+  it("prints the portable groupType + role form for a group_type_role whose type and role map", async () => {
+    catalogs["/group/roles"] = [{ id: 42, name: "Leiter", groupTypeId: 7 }];
+    catalogs["/group/grouptypes"] = [{ id: 7, name: "Team" }];
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s) => {
+      writes.push(String(s));
+      return true;
+    });
+    try {
+      await run(["grants", "group_type_role", "42", "--state", "/does/not/exist.json"]);
+    } finally {
+      spy.mockRestore();
+    }
+    const out = writes.join("");
+    expect(out).toContain('groupType: "team"');
+    expect(out).toContain('role: "Leiter"');
+    expect(out).not.toMatch(/\bid: 42/);
+  });
+
+  it("falls back to the numeric id when the group_type_role cannot be mapped", async () => {
+    catalogs["/group/roles"] = [{ id: 42, name: "Leiter", groupTypeId: 7 }]; // type 7 not in catalog
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s) => {
+      writes.push(String(s));
+      return true;
+    });
+    try {
+      await run(["grants", "group_type_role", "42", "--state", "/does/not/exist.json"]);
+    } finally {
+      spy.mockRestore();
+    }
+    const out = writes.join("");
+    expect(out).toContain("id: 42,");
+    expect(out).not.toMatch(/^\s*groupType:/m);
   });
 
   it("accepts the hyphenated domain type spelling", async () => {

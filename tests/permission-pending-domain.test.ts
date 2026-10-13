@@ -68,7 +68,7 @@ describe("group_type_role is keyed by role, not by group type (#182)", () => {
       grants,
     };
     await expect(buildPermissionPlan(client, emptyState(HOST), [rolePerm], strukturType)).rejects.toThrow(
-      /group type "struktur" is declared in this config but not yet created/,
+      /group type "struktur" is declared in this config but not yet created.*two steps/s,
     );
   });
 
