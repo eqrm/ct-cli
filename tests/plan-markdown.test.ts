@@ -320,8 +320,8 @@ describe("plain-language Markdown plan", () => {
     };
     const output = renderPlanMarkdown(plan, [], context);
     expect(output).toContain("```diff");
-    expect(output).toContain("- ruleset.query.a[0].coalesce[0].var = x");
-    expect(output).toContain("+ ruleset.query.a[0].coalesce[0].var = y");
+    expect(output).toContain('- ruleset.query.a[0].coalesce[0].var = "x"');
+    expect(output).toContain('+ ruleset.query.a[0].coalesce[0].var = "y"');
     expect(output).not.toContain("same");
     expect(output).not.toContain("coalesce[1]");
     // No escaped brackets or dollar signs in table cells (KaTeX/MathJax delimiters).
@@ -344,6 +344,67 @@ describe("plain-language Markdown plan", () => {
       ],
     };
     expect(renderPlanMarkdown(plan, [], context)).toContain("````diff");
+  });
+
+  const settingsPlan = (from: unknown, to: unknown): Plan => ({
+    items: [
+      {
+        type: "group",
+        key: "g",
+        displayName: "G",
+        id: 5,
+        action: "update",
+        changes: [{ field: "settings", from, to, source: "config" }],
+      },
+    ],
+  });
+
+  it("redacts nested secret leaves in the diff and the appendix", () => {
+    const output = renderPlanMarkdown(
+      settingsPlan({ auth: { password: "hunter1" } }, { auth: { password: "hunter2" } }),
+      [],
+      context,
+    );
+    expect(output).toContain("- auth.password = [REDACTED]");
+    expect(output).toContain("+ auth.password = [REDACTED]");
+    expect(output).not.toContain("hunter");
+  });
+
+  it("shows a type change between a string and a number or null", () => {
+    const a = renderPlanMarkdown(settingsPlan({ a: "1" }, { a: 1 }), [], context);
+    expect(a).toContain('- a = "1"');
+    expect(a).toContain("+ a = 1");
+    const b = renderPlanMarkdown(settingsPlan({ a: null }, { a: "null" }), [], context);
+    expect(b).toContain("- a = null");
+    expect(b).toContain('+ a = "null"');
+  });
+
+  it("cannot forge a diff line through a newline in a value", () => {
+    const output = renderPlanMarkdown(settingsPlan({ a: "x" }, { a: "y\n- b = 2" }), [], context);
+    expect(output).not.toMatch(/^- b = 2$/m);
+    expect(output).toContain('+ a = "y\\n- b = 2"');
+  });
+
+  it("labels the -1 parameter as all and falls back to the scope key", () => {
+    const plan: Plan = {
+      items: [{ type: "group", key: "g", displayName: "Jugend", id: 7, action: "no-op", changes: [] }],
+    };
+    const item = permission({
+      diff: {
+        toPut: [
+          { authId: 403, dataId: [-1], type: "grant" },
+          { authId: 10101, dataId: [3], scopeKey: "jugend", type: "grant" },
+        ],
+        toDelete: [],
+        preserved: [],
+        preservedUnknown: [],
+      },
+    });
+    const output = renderPlanMarkdown(plan, [item], context);
+    expect(output).toContain("Kalender: alle");
+    expect(output).not.toContain("-1");
+    expect(output).toContain("Sicherheitsstufe: jugend (\\#3)");
+    expect(renderPlanMarkdown(plan, [item], { ...context, locale: "en" })).toContain("Calendar: all");
   });
 
   it("labels right parameters by their dimension and keeps unknown names unresolved (#170)", () => {

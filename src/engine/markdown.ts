@@ -83,6 +83,7 @@ interface Copy {
   right: string;
   parameter: string;
   noParameters: string;
+  allValues: string;
   unresolved: string;
   changedBelow: string;
   effect: string;
@@ -158,6 +159,7 @@ const COPY: Record<PlanMarkdownLocale, Copy> = {
     right: "Recht",
     parameter: "Parameter",
     noParameters: "Keine Parameter",
+    allValues: "alle",
     unresolved: "Name nicht aufgelöst",
     changedBelow: "teilweise geändert, siehe Details unten",
     effect: "Auswirkung",
@@ -229,6 +231,7 @@ const COPY: Record<PlanMarkdownLocale, Copy> = {
     right: "Right",
     parameter: "Parameters",
     noParameters: "No parameters",
+    allValues: "all",
     unresolved: "name not resolved",
     changedBelow: "partially changed, see details below",
     effect: "Effect",
@@ -469,12 +472,18 @@ function fence(lang: string, body: string[]): string[] {
   return [`${ticks}${lang}`, ...body, ticks];
 }
 
+/** A diff leaf as JSON, so a string "1" and a number 1 differ and a newline cannot forge a line; secret paths are masked. */
+function leafText(path: string, value: unknown): string {
+  if (SECRET_KEY.test(path)) return "[REDACTED]";
+  return redactPlanReportSecrets(JSON.stringify(sanitize(value)) ?? "null");
+}
+
 function diffLines(change: FieldChange): string[] {
   const lines: string[] = [];
   for (const d of deepDiff(change.from, change.to)) {
     const path = d.path || change.field;
-    if (d.from !== undefined) lines.push(`- ${path} = ${redactPlanReportSecrets(stableJson(d.from))}`);
-    if (d.to !== undefined) lines.push(`+ ${path} = ${redactPlanReportSecrets(stableJson(d.to))}`);
+    if (d.from !== undefined) lines.push(`- ${path} = ${leafText(path, d.from)}`);
+    if (d.to !== undefined) lines.push(`+ ${path} = ${leafText(path, d.to)}`);
   }
   return lines;
 }
@@ -850,11 +859,16 @@ function tupleParameters(
   const label = field ? (PARAMETER_LABELS[locale][field] ?? field) : copy.unknown;
   if (tuple.pending && tuple.scopeKey) return `${label}: ${tuple.scopeKey} (${copy.pending})`;
   if (tuple.dataId.length === 0) return copy.noParameters;
+  const fallbackKey = tuple.scopeKey;
   return [...tuple.dataId]
     .sort((a, b) => a - b)
     .map((id) => {
+      // -1 is ChurchTools' "alle" sentinel, not an id (#115).
+      if (id === -1) return `${label}: ${copy.allValues}`;
       const name = field ? names[field]?.get(id) : undefined;
-      return name ? `${label}: ${name} (#${id})` : `${label}: #${id} (${copy.unresolved})`;
+      if (name) return `${label}: ${name} (#${id})`;
+      if (fallbackKey && tuple.dataId.length === 1) return `${label}: ${fallbackKey} (#${id})`;
+      return `${label}: #${id} (${copy.unresolved})`;
     })
     .join("; ");
 }
@@ -956,7 +970,19 @@ function renderAppendix(plan: Plan, locale: PlanMarkdownLocale, copy: Copy): str
         SECRET_KEY.test(change.field)
           ? { ...change, from: change.from === undefined ? undefined : "[REDACTED]", to: "[REDACTED]" }
           : isNested(change)
-            ? { field: change.field, source: change.source, paths: deepDiff(change.from, change.to) }
+            ? {
+                field: change.field,
+                source: change.source,
+                paths: deepDiff(change.from, change.to).map((d) =>
+                  SECRET_KEY.test(d.path)
+                    ? {
+                        path: d.path,
+                        from: d.from === undefined ? undefined : "[REDACTED]",
+                        to: d.to === undefined ? undefined : "[REDACTED]",
+                      }
+                    : d,
+                ),
+              }
             : change,
       );
     const technical = {
