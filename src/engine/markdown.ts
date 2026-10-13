@@ -81,7 +81,11 @@ interface Copy {
   pending: string;
   domain: string;
   right: string;
-  scope: string;
+  parameter: string;
+  noParameters: string;
+  allValues: string;
+  unresolved: string;
+  changedBelow: string;
   effect: string;
   permissionPreserved: string;
   automaticGroup: string;
@@ -153,7 +157,11 @@ const COPY: Record<PlanMarkdownLocale, Copy> = {
     pending: "wird beim Anwenden erzeugt",
     domain: "Bereich",
     right: "Recht",
-    scope: "Geltungsbereich",
+    parameter: "Parameter",
+    noParameters: "Keine Parameter",
+    allValues: "alle",
+    unresolved: "Name nicht aufgelöst",
+    changedBelow: "teilweise geändert, siehe Details unten",
     effect: "Auswirkung",
     permissionPreserved: "wird nicht verwaltet und bleibt erhalten",
     automaticGroup: "Automatische Gruppe",
@@ -221,7 +229,11 @@ const COPY: Record<PlanMarkdownLocale, Copy> = {
     pending: "created during apply",
     domain: "Domain",
     right: "Right",
-    scope: "Scope",
+    parameter: "Parameters",
+    noParameters: "No parameters",
+    allValues: "all",
+    unresolved: "name not resolved",
+    changedBelow: "partially changed, see details below",
     effect: "Effect",
     permissionPreserved: "not managed and left untouched",
     automaticGroup: "Automatic group",
@@ -357,14 +369,18 @@ function stableJson(value: unknown): string {
 
 /** Escape user-controlled text for both Markdown tables and prose. */
 export function escapeMarkdown(value: unknown): string {
-  return redactPlanReportSecrets(String(value ?? ""))
-    .replace(/\\/g, "\\\\")
-    .replace(/\|/g, "\\|")
-    .replace(/([*_<>#])/g, "\\$1")
-    .replaceAll("[", "\\[")
-    .replaceAll("]", "\\]")
-    .replace(/`/g, "&#96;")
-    .replace(/\r?\n/g, "<br>");
+  return (
+    redactPlanReportSecrets(String(value ?? ""))
+      .replace(/\\/g, "\\\\")
+      .replace(/\|/g, "\\|")
+      .replace(/([*_<>#])/g, "\\$1")
+      // `\[` / `\]` (and `$`) open math in KaTeX/MathJax renderers (#163); numeric entities cannot.
+      .replaceAll("[", "&#91;")
+      .replaceAll("]", "&#93;")
+      .replaceAll("$", "&#36;")
+      .replace(/`/g, "&#96;")
+      .replace(/\r?\n/g, "<br>")
+  );
 }
 
 function typeLabel(type: string, locale: PlanMarkdownLocale): string {
@@ -419,6 +435,74 @@ function renderValue(value: unknown, field: string, copy: Copy): string {
   return escapeMarkdown(semantic ?? valueText(value, copy));
 }
 
+function isStructured(value: unknown): value is Record<string, unknown> | unknown[] {
+  return value !== null && typeof value === "object" && !pendingRefOf(value);
+}
+
+interface PathChange {
+  path: string;
+  from: unknown;
+  to: unknown;
+}
+
+/** Leaf-level differences between two JSON values, as `a.b[0].c` paths (#163). */
+export function deepDiff(from: unknown, to: unknown, path = ""): PathChange[] {
+  if (isStructured(from) && isStructured(to) && Array.isArray(from) === Array.isArray(to)) {
+    const out: PathChange[] = [];
+    if (Array.isArray(from) && Array.isArray(to)) {
+      for (let i = 0; i < Math.max(from.length, to.length); i++) {
+        out.push(...deepDiff(from[i], to[i], `${path}[${i}]`));
+      }
+    } else {
+      const a = from as Record<string, unknown>;
+      const b = to as Record<string, unknown>;
+      for (const key of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
+        out.push(...deepDiff(a[key], b[key], path ? `${path}.${key}` : key));
+      }
+    }
+    return out;
+  }
+  return JSON.stringify(sanitize(from)) === JSON.stringify(sanitize(to)) ? [] : [{ path, from, to }];
+}
+
+/** A code fence longer than any backtick run inside, so content can never close it early. */
+function fence(lang: string, body: string[]): string[] {
+  const longest = Math.max(0, ...(body.join("\n").match(/`+/g) ?? []).map((m) => m.length));
+  const ticks = "`".repeat(Math.max(3, longest + 1));
+  return [`${ticks}${lang}`, ...body, ticks];
+}
+
+/** A diff leaf as JSON, so a string "1" and a number 1 differ and a newline cannot forge a line; secret paths are masked. */
+function leafText(path: string, value: unknown): string {
+  if (SECRET_KEY.test(path)) return "[REDACTED]";
+  return redactPlanReportSecrets(JSON.stringify(sanitize(value)) ?? "null");
+}
+
+function diffLines(change: FieldChange): string[] {
+  const lines: string[] = [];
+  for (const d of deepDiff(change.from, change.to)) {
+    const path = d.path || change.field;
+    if (d.from !== undefined) lines.push(`- ${path} = ${leafText(path, d.from)}`);
+    if (d.to !== undefined) lines.push(`+ ${path} = ${leafText(path, d.to)}`);
+  }
+  return lines;
+}
+
+/** Nested old/new values change as a whole only when both sides are structured; scalars stay in the table. */
+function isNested(change: FieldChange): boolean {
+  return isStructured(change.from) && isStructured(change.to) && !SECRET_KEY.test(change.field);
+}
+
+function nestedDetails(changes: FieldChange[], locale: PlanMarkdownLocale): string[] {
+  const lines: string[] = [];
+  for (const change of changes.filter(isNested)) {
+    const body = diffLines(change);
+    if (body.length === 0) continue;
+    lines.push(`**${escapeMarkdown(fieldLabel(change.field, locale))}**`, "", ...fence("diff", body), "");
+  }
+  return lines;
+}
+
 function table(headers: string[], rows: string[][]): string[] {
   return [
     `| ${headers.join(" | ")} |`,
@@ -436,8 +520,8 @@ function resourceHeading(item: PlanItem, locale: PlanMarkdownLocale): string {
 function changeRows(changes: FieldChange[], locale: PlanMarkdownLocale, copy: Copy): string[][] {
   return changes.map((change) => [
     escapeMarkdown(fieldLabel(change.field, locale)),
-    renderValue(change.from, change.field, copy),
-    renderValue(change.to, change.field, copy),
+    isNested(change) ? escapeMarkdown(copy.changedBelow) : renderValue(change.from, change.field, copy),
+    isNested(change) ? escapeMarkdown(copy.changedBelow) : renderValue(change.to, change.field, copy),
     escapeMarkdown(sourceLabel(change.source, copy)),
   ]);
 }
@@ -689,6 +773,7 @@ function renderResourceSection(
           changeRows(item.changes, locale, copy),
         ),
         "",
+        ...nestedDetails(item.changes, locale),
       );
     }
     // A group-type change moves memberships through its own endpoint (#171). The text renderer spells
@@ -725,10 +810,67 @@ function tupleRight(tuple: GrantTuple): string {
   return right ? `${right.description} (${right.technical}, #${tuple.authId})` : `authId #${tuple.authId}`;
 }
 
-function tupleScope(tuple: GrantTuple, copy: Copy): string {
-  if (tuple.pending && tuple.scopeKey) return `${tuple.scopeKey} (${copy.pending})`;
-  if (tuple.scopeKey) return tuple.scopeKey;
-  return tuple.dataId.length > 0 ? tuple.dataId.map((id) => `#${id}`).join(", ") : copy.none;
+const PARAMETER_LABELS: Record<PlanMarkdownLocale, Record<string, string>> = {
+  "de-DE": {
+    cc_calcategory: "Kalender",
+    cc_securitylevel: "Sicherheitsstufe",
+    cdb_gruppe: "Gruppe",
+    cdb_gruppentyp: "Gruppentyp",
+    cdb_bereich: "Bereich",
+    cdb_station: "Station",
+    cs_servicegroup: "Dienstkategorie",
+    cs_songcategory: "Songkategorie",
+    cr_resource: "Ressource",
+    cc_wikicategory: "Wiki-Kategorie",
+  },
+  en: {
+    cc_calcategory: "Calendar",
+    cc_securitylevel: "Security level",
+    cdb_gruppe: "Group",
+    cdb_gruppentyp: "Group type",
+    cdb_bereich: "Area",
+    cdb_station: "Station",
+    cs_servicegroup: "Service category",
+    cs_songcategory: "Song category",
+    cr_resource: "Resource",
+    cc_wikicategory: "Wiki category",
+  },
+};
+
+/** Display names already known to the plan, per right-parameter dimension. Never invented. */
+function parameterNames(plan: Plan): Record<string, Map<number, string>> {
+  const byType = (type: string): Map<number, string> =>
+    new Map(
+      plan.items
+        .filter((item) => item.type === type && item.id !== null)
+        .map((item) => [item.id as number, item.displayName || item.key]),
+    );
+  return { cdb_gruppe: byType("group"), cdb_gruppentyp: byType("group-type") };
+}
+
+/** The right's parameters as `Type: name (#id)`; ids stay visible, unknown names stay visibly unresolved. */
+function tupleParameters(
+  tuple: GrantTuple,
+  locale: PlanMarkdownLocale,
+  copy: Copy,
+  names: Record<string, Map<number, string>>,
+): string {
+  const field = Object.values(CATALOG).find((entry) => entry.authId === tuple.authId)?.scopeField ?? null;
+  const label = field ? (PARAMETER_LABELS[locale][field] ?? field) : copy.unknown;
+  if (tuple.pending && tuple.scopeKey) return `${label}: ${tuple.scopeKey} (${copy.pending})`;
+  if (tuple.dataId.length === 0) return copy.noParameters;
+  const fallbackKey = tuple.scopeKey;
+  return [...tuple.dataId]
+    .sort((a, b) => a - b)
+    .map((id) => {
+      // -1 is ChurchTools' "alle" sentinel, not an id (#115).
+      if (id === -1) return `${label}: ${copy.allValues}`;
+      const name = field ? names[field]?.get(id) : undefined;
+      if (name) return `${label}: ${name} (#${id})`;
+      if (fallbackKey && tuple.dataId.length === 1) return `${label}: ${fallbackKey} (#${id})`;
+      return `${label}: #${id} (${copy.unresolved})`;
+    })
+    .join("; ");
 }
 
 function permissionDomain(item: PermissionPlanItem, locale: PlanMarkdownLocale, copy: Copy): string {
@@ -752,7 +894,13 @@ function permissionCounts(items: PermissionPlanItem[]): {
   };
 }
 
-function renderPermissions(items: PermissionPlanItem[], locale: PlanMarkdownLocale, copy: Copy): string[] {
+function renderPermissions(
+  items: PermissionPlanItem[],
+  plan: Plan,
+  locale: PlanMarkdownLocale,
+  copy: Copy,
+): string[] {
+  const names = parameterNames(plan);
   const visible = items.filter(
     (item) =>
       item.diff.toPut.length +
@@ -769,25 +917,25 @@ function renderPermissions(items: PermissionPlanItem[], locale: PlanMarkdownLoca
     for (const tuple of item.diff.toPut) {
       rows.push([
         escapeMarkdown(tupleRight(tuple)),
-        escapeMarkdown(tupleScope(tuple, copy)),
+        escapeMarkdown(tupleParameters(tuple, locale, copy, names)),
         escapeMarkdown(copy.grants),
       ]);
     }
     for (const tuple of item.diff.toDelete) {
       rows.push([
         escapeMarkdown(tupleRight(tuple)),
-        escapeMarkdown(tupleScope(tuple, copy)),
+        escapeMarkdown(tupleParameters(tuple, locale, copy, names)),
         escapeMarkdown(copy.revocations),
       ]);
     }
     for (const tuple of [...item.diff.preservedUnknown, ...item.diff.preserved]) {
       rows.push([
         escapeMarkdown(tupleRight(tuple)),
-        escapeMarkdown(tupleScope(tuple, copy)),
+        escapeMarkdown(tupleParameters(tuple, locale, copy, names)),
         escapeMarkdown(copy.permissionPreserved),
       ]);
     }
-    lines.push(...table([copy.right, copy.scope, copy.effect].map(escapeMarkdown), rows), "");
+    lines.push(...table([copy.right, copy.parameter, copy.effect].map(escapeMarkdown), rows), "");
   }
   return lines;
 }
@@ -803,11 +951,12 @@ function renderDrift(plan: Plan, locale: PlanMarkdownLocale, copy: Copy): string
         [copy.field, copy.before, copy.after].map(escapeMarkdown),
         (item.drift ?? []).map((change) => [
           escapeMarkdown(fieldLabel(change.field, locale)),
-          renderValue(change.from, change.field, copy),
-          renderValue(change.to, change.field, copy),
+          isNested(change) ? escapeMarkdown(copy.changedBelow) : renderValue(change.from, change.field, copy),
+          isNested(change) ? escapeMarkdown(copy.changedBelow) : renderValue(change.to, change.field, copy),
         ]),
       ),
       "",
+      ...nestedDetails(item.drift ?? [], locale),
     );
   }
   return lines;
@@ -815,11 +964,26 @@ function renderDrift(plan: Plan, locale: PlanMarkdownLocale, copy: Copy): string
 
 function renderAppendix(plan: Plan, locale: PlanMarkdownLocale, copy: Copy): string[] {
   const rows = plan.items.map((item) => {
-    const safeChanges = (changes: FieldChange[] | undefined): FieldChange[] | undefined =>
+    // Nested values appear as their changed paths only, never as two full JSON documents (#163).
+    const safeChanges = (changes: FieldChange[] | undefined): unknown[] | undefined =>
       changes?.map((change) =>
         SECRET_KEY.test(change.field)
           ? { ...change, from: change.from === undefined ? undefined : "[REDACTED]", to: "[REDACTED]" }
-          : change,
+          : isNested(change)
+            ? {
+                field: change.field,
+                source: change.source,
+                paths: deepDiff(change.from, change.to).map((d) =>
+                  SECRET_KEY.test(d.path)
+                    ? {
+                        path: d.path,
+                        from: d.from === undefined ? undefined : "[REDACTED]",
+                        to: d.to === undefined ? undefined : "[REDACTED]",
+                      }
+                    : d,
+                ),
+              }
+            : change,
       );
     const technical = {
       changes: safeChanges(item.changes),
@@ -965,7 +1129,7 @@ export function renderPlanMarkdown(
     for (const item of deleteCandidates) lines.push(resourceHeading(item, locale), "");
   }
 
-  lines.push(...renderDrift(plan, locale, copy), ...renderPermissions(permissions, locale, copy));
+  lines.push(...renderDrift(plan, locale, copy), ...renderPermissions(permissions, plan, locale, copy));
 
   if (incomplete) {
     lines.push(`## ⚠️ ${copy.incompleteTitle}`, "", copy.incompleteText, "");

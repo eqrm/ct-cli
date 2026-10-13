@@ -7,7 +7,7 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: 377aa804fcf30cf2
+sources_hash: 27a36214a25c7ac8
 reviewed: 2026-08-28
 ---
 
@@ -112,7 +112,7 @@ reference or a numeric `id`:
   namespace with every other resource type).
 - **domain** — the permission domain object. Declare it **by reference** (the
   portable form, #20) or **by numeric `id`** (the escape hatch):
-  - `ct.groupTypeRole` — `groupType: "<name>", role: "<name>"` resolves the
+  - `ct.groupTypeRole` — `groupType: "<key>", role: "<name>"` resolves the
     pair against the live role catalog (`GET /group/roles`) per host, or
     `id: <roleId>` targets one directly. `groupType` without `role` is an error
     (#182): the domain is a role, not a type.
@@ -271,7 +271,8 @@ The two DSL functions manage two different ChurchTools "domain types," and
   (`GET /group/roles` → `id`), _not_ the group type's id. Every role of a group
   type carries its own grant set, and the grant applies to "every holder of this
   role in any group of this type." Declare it portably as
-  `groupType: "<name>", role: "<name>"` (resolved per host) or directly as
+  `groupType: "<key>", role: "<name>"` (resolved per host; `<key>` is the
+  group type's state key or the slug of its name) or directly as
   `id: <roleId>`.
 
   > **Why this is stated so bluntly (#182).** Through ct-cli 3.x this domain was
@@ -382,10 +383,12 @@ a same-run group (#106, below):
 
 > **Not for `group_type_role` (#182).** A `groupType` + `role` domain whose
 > group type — or role — is created in the same run is a plan-time error that
-> asks you to apply the master data first. #69 introduced this section for a
+> asks you to apply in two steps. #69 introduced this section for a
 > bare `groupType` domain, but that resolved to the type's id, which the
-> endpoint reads as a role id: it never granted on the type it named. Letting
-> the role-keyed form go pending is #189.
+> endpoint reads as a role id: it never granted on the type it named. This
+> stays a plan-time error (#189, closed as not planned): apply in two steps
+> (create the group type or role first, then add the `ct.groupTypeRole`), or use
+> `id:`.
 
 **`group_role` behaves the same way since #106.** A `group_role` domain id is
 the (group, role) **pairing** id, which only exists on
@@ -860,6 +863,12 @@ It fetches `GET /permissions/<domainType>/<domainId>`, runs the rows through the
 prints a `ct.groupRole` / `ct.groupTypeRole` block whose every emitted grant is
 guaranteed to be accepted by `ct plan` (the round trip is locked by tests):
 
+- **`group_type_role` prints `groupType` + `role`** (#182), not the numeric id: the
+  group type's managed state key when it has one, else the slug of its name. The
+  pair is round-tripped through the resolver first, and the block falls back to
+  `id: <roleId>` whenever the pair would not resolve back to the same role (the
+  key maps to a different group type in state, or two group types or two roles in
+  one type slug alike).
 - **Everything the host grants is emitted** — direct, inherited and
   system-baseline rows alike (#114/#119). See [Provenance and
   portability](#provenance-and-portability-114119) for why this is broader than

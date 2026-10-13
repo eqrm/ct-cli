@@ -9,9 +9,11 @@ const rows: RawPermission[] = [
   { authId: 1, dataId: null, type: "grant", domainId: 42, meta: { modifiedPid: 5 } },
 ];
 const getMock = vi.fn(async (): Promise<RawPermission[]> => rows);
+const catalogs: Record<string, unknown[]> = {};
+const getAllMock = vi.fn(async (path: string) => ({ data: catalogs[path] ?? [] }));
 
 vi.mock("../src/api/session.js", () => ({
-  authedSession: vi.fn(async () => ({ client: { get: getMock }, me: { id: 1 } })),
+  authedSession: vi.fn(async () => ({ client: { get: getMock, getAll: getAllMock }, me: { id: 1 } })),
 }));
 
 const { adoptCommand } = await import("../src/commands/adopt.js");
@@ -25,6 +27,8 @@ async function run(args: string[]): Promise<void> {
 
 beforeEach(() => {
   getMock.mockClear();
+  getAllMock.mockClear();
+  for (const k of Object.keys(catalogs)) delete catalogs[k];
   process.env.CT_HOST = HOST;
 });
 
@@ -47,6 +51,120 @@ describe("ct adopt grants", () => {
     }
     expect(getMock).toHaveBeenCalledWith("/permissions/group_type_role/42");
     expect(writes.join("")).toContain("ct.groupTypeRole({");
+  });
+
+  it("prints the portable groupType + role form for a group_type_role whose type and role map", async () => {
+    catalogs["/group/roles"] = [{ id: 42, name: "Leiter", groupTypeId: 7 }];
+    catalogs["/group/grouptypes"] = [{ id: 7, name: "Team" }];
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s) => {
+      writes.push(String(s));
+      return true;
+    });
+    try {
+      await run(["grants", "group_type_role", "42", "--state", "/does/not/exist.json"]);
+    } finally {
+      spy.mockRestore();
+    }
+    const out = writes.join("");
+    expect(out).toContain('groupType: "team"');
+    expect(out).toContain('role: "Leiter"');
+    expect(out).not.toMatch(/\bid: 42/);
+  });
+
+  it("falls back to the numeric id when the group_type_role cannot be mapped", async () => {
+    catalogs["/group/roles"] = [{ id: 42, name: "Leiter", groupTypeId: 7 }]; // type 7 not in catalog
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s) => {
+      writes.push(String(s));
+      return true;
+    });
+    try {
+      await run(["grants", "group_type_role", "42", "--state", "/does/not/exist.json"]);
+    } finally {
+      spy.mockRestore();
+    }
+    const out = writes.join("");
+    expect(out).toContain("id: 42,");
+    expect(out).not.toMatch(/^\s*groupType:/m);
+  });
+
+  describe("portable group_type_role output must round-trip through the resolver", () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "adopt-gtr-"));
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    async function adoptRole(id: number, managed: Record<string, number> = {}): Promise<string> {
+      const statePath = join(dir, "state.json");
+      const state: State = {
+        version: 1,
+        host: HOST,
+        resources: Object.fromEntries(
+          Object.entries(managed).map(([key, gid]) => [
+            key,
+            { type: "group-type", id: gid, key, fields: {}, adoptedAt: "t", updatedAt: "t" },
+          ]),
+        ),
+      };
+      writeFileSync(statePath, JSON.stringify(state));
+      const writes: string[] = [];
+      const spy = vi.spyOn(process.stdout, "write").mockImplementation((s) => {
+        writes.push(String(s));
+        return true;
+      });
+      try {
+        await run(["grants", "group_type_role", String(id), "--state", statePath]);
+      } finally {
+        spy.mockRestore();
+      }
+      return writes.join("");
+    }
+
+    it("falls back to id when managed state maps the catalog slug to a different group type", async () => {
+      catalogs["/group/grouptypes"] = [
+        { id: 7, name: "Team" },
+        { id: 8, name: "Kleingruppe" },
+      ];
+      catalogs["/group/roles"] = [
+        { id: 42, name: "Leiter", groupTypeId: 7 },
+        { id: 43, name: "Leiter", groupTypeId: 8 },
+      ];
+      const out = await adoptRole(42, { team: 8 }); // state key "team" -> type #8
+      expect(out).toContain("id: 42,");
+      expect(out).not.toMatch(/^\s*groupType:/m);
+    });
+
+    it("prefers the managed state key for the group type when one exists", async () => {
+      catalogs["/group/grouptypes"] = [{ id: 7, name: "Team" }];
+      catalogs["/group/roles"] = [{ id: 42, name: "Leiter", groupTypeId: 7 }];
+      const out = await adoptRole(42, { crew: 7 });
+      expect(out).toContain('groupType: "crew"');
+      expect(out).toContain('role: "Leiter"');
+    });
+
+    it("falls back to id when two roles in the type slug alike (ambiguous on re-plan)", async () => {
+      catalogs["/group/grouptypes"] = [{ id: 7, name: "Team" }];
+      catalogs["/group/roles"] = [
+        { id: 42, name: "Co-Leiter", groupTypeId: 7 },
+        { id: 43, name: "co leiter", groupTypeId: 7 },
+      ];
+      const out = await adoptRole(42);
+      expect(out).toContain("id: 42,");
+      expect(out).not.toMatch(/^\s*role:/m);
+    });
+
+    it("falls back to id when two group types slug alike (ambiguous on re-plan)", async () => {
+      catalogs["/group/grouptypes"] = [
+        { id: 7, name: "Team" },
+        { id: 8, name: "TEAM" },
+      ];
+      catalogs["/group/roles"] = [{ id: 42, name: "Leiter", groupTypeId: 7 }];
+      const out = await adoptRole(42);
+      expect(out).toContain("id: 42,");
+      expect(out).not.toMatch(/^\s*groupType:/m);
+    });
   });
 
   it("accepts the hyphenated domain type spelling", async () => {

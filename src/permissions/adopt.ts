@@ -134,7 +134,7 @@ export interface AdoptGrantsArgs {
    * `id:` whenever the group is managed — the numeric id is host-specific, so it is exactly the edit a
    * human forgets on the 30th paste. Absent ⇒ fall back to `id:`.
    */
-  domain?: { group: string; role: string };
+  domain?: { group: string; role: string } | { groupType: string; role: string };
   /** Logical key for the emitted block. Defaults to `<domainType>_<domainId>` (the pre-#104 shape). */
   key?: string;
 }
@@ -195,7 +195,8 @@ export function buildAdoptedGrants(args: AdoptGrantsArgs): AdoptedGrantsBlock {
   }
   if (domain) {
     // Portable form: resolved per host at plan time, so the same block applies to dev and prod.
-    body.push(`  group: ${JSON.stringify(domain.group)},`);
+    if ("groupType" in domain) body.push(`  groupType: ${JSON.stringify(domain.groupType)},`);
+    else body.push(`  group: ${JSON.stringify(domain.group)},`);
     body.push(`  role: ${JSON.stringify(domain.role)},`);
   } else {
     body.push(`  id: ${domainId}, // ${ID_COMMENT[domainType]}`);
