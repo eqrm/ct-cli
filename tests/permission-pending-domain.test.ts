@@ -7,7 +7,7 @@
  * was never the group type: `/permissions/group_type_role/<id>` is keyed by ROLE id, so the pending
  * path wrote to whichever role shared the fresh type's number. A group-type Ref is now refused for
  * that domain, and a group-type-role Ref on a same-run group type is a plan-time error until it can
- * go pending (#189). The group_role pending path (#106) is unaffected.
+ * go pending (#189, closed as not planned). The group_role pending path (#106) is unaffected.
  *
  * Exercises the REAL build → execute → apply sequence with a mock client. No live instance.
  */
@@ -68,7 +68,7 @@ describe("group_type_role is keyed by role, not by group type (#182)", () => {
       grants,
     };
     await expect(buildPermissionPlan(client, emptyState(HOST), [rolePerm], strukturType)).rejects.toThrow(
-      /group type "struktur" is declared in this config but not yet created.*two steps/s,
+      /group type "struktur" is declared in this config but not yet created.*two steps(?!.*numeric role id)/s,
     );
   });
 

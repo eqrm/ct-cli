@@ -275,8 +275,24 @@ describe("Resolver.resolve — group-type-role (groupTypeRoleId, #76)", () => {
     const client = fakeClient({ "/group/roles": rolesCatalog });
     const r = new Resolver({ client, state: emptyState("h"), desired, host: "hostA" });
     await expect(r.resolve(ref.groupTypeRole("local_lead", "Leiter"), "site")).rejects.toThrow(
-      /declared in this config but not yet created.*two steps.*group type first.*numeric role id/is,
+      /declared in this config but not yet created.*two steps.*group type first/is,
     );
+    await expect(r.resolve(ref.groupTypeRole("local_lead", "Leiter"), "site")).rejects.not.toThrow(
+      /numeric role id/,
+    );
+  });
+
+  it("gives the two-step remedy when the missing role is declared in this config as a roleDefinition", async () => {
+    const desired: DesiredResource[] = [
+      { type: "group-role", key: "ghost", fields: { name: "Ghost", groupTypeId: 2 }, dependsOn: [] },
+    ];
+    const client = fakeClient({ "/group/grouptypes": groupTypesCatalog, "/group/roles": rolesCatalog });
+    const r = new Resolver({ client, state: emptyState("h"), desired, host: "hostA" });
+    const err = await r.resolve(ref.groupTypeRole("team", "Ghost"), "site").catch((e: Error) => e);
+    expect((err as Error).message).toMatch(
+      /has no role named "Ghost".*apply once to create the role, then add the groupTypeRole/is,
+    );
+    expect((err as Error).message).not.toMatch(/Fix the role name|pass a numeric role id/);
   });
 });
 
