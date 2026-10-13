@@ -6,7 +6,7 @@ sources:
   - src/engine/dynamic.ts
   - src/engine/synthetic.ts
   - src/application/operations/adopt-group.ts
-sources_hash: 3872161fc3777e2b
+sources_hash: 5d0be1f4c92a8efb
 reviewed: 2026-08-28
 ---
 
@@ -305,7 +305,7 @@ At **capture** time (`ct adopt … --with-dynamic`) the state file and the
 ```text
 ! rulesets/jugend.json keeps 5 host-specific id(s) — NOT portable to another host:
     ctgroup.id: 1246 left numeric — not under management — `ct adopt group <id>` for each (then re-adopt) makes them portable
-    ctgroup.groupStatusId: 1, 2 left numeric — no logical form yet; the catalog is `/person/masterdata` → `groupStatuses` (#157)
+    ctgroup.groupStatusId: 1, 2 left numeric — not rewritten yet — group statuses live in the nested `/person/masterdata` → `groupStatuses` catalog (#157), which ruleset portablizing does not index; keep the numeric id
     person.id: 5703, 4389 left numeric — person ids are NEVER portable — ct does not manage people, so this ruleset names DIFFERENT people on another host. Remove the clause or accept the divergence
 ```
 
@@ -345,9 +345,9 @@ reason it never checked:
 
 The capture-time reasons are distinct because the fixes are: an **unmanaged**
 target (adopt it), a **role unknown to `/group/roles`**, a role whose **group
-type is unmanaged**, or a dimension with **no logical form at all**
-(`ctgroup.groupStatusId` — no logical form yet, although `/person/masterdata` carries the catalog, #157; this one
-needs no lookup, so the plan-time scan reports it too).
+type is unmanaged**, or a dimension the portablizer does not rewrite yet
+(`ctgroup.groupStatusId`: adopt leaves it numeric, but a hand-written `group-status` marker resolves at plan
+time, #157; this one needs no lookup, so the plan-time scan reports it too).
 
 **`--strict-rulesets`** turns the warning into a refusal: adopt writes nothing
 if the ruleset would still contain a host-specific id. Use it in a repo that has

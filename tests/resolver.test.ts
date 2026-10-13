@@ -102,6 +102,15 @@ describe("Resolver.resolve", () => {
     );
   });
 
+  it("points the group-status not-found hint at a command that exists, with correct plural", async () => {
+    const client = fakeClient({ "/person/masterdata": { groupStatuses: [{ id: 1, name: "active" }] } });
+    const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED, host: "hostA" });
+    const err = await r.resolve(ref.status("candidate"), "site").catch((e: Error) => e);
+    expect((err as Error).message).toContain("ct reads group statuses but does not manage them");
+    expect((err as Error).message).toContain("`ct get person-masterdata`");
+    expect((err as Error).message).not.toMatch(/group-statuss|get group-status/);
+  });
+
   it("treats a masterdata response without groupStatuses as an empty catalog", async () => {
     const client = fakeClient({ "/person/masterdata": {} });
     const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED, host: "hostA" });

@@ -115,6 +115,13 @@ describe("config context", () => {
       expect(resources[0]?.fields).toEqual({ name: "G", groupStatusId: ref.status("archived") });
     });
 
+    it("does not sugar `status` on non-group types (regression: campus got groupStatusId)", () => {
+      const { ct, resources } = createContext();
+      ct.campus({ key: "c", name: "C", status: "active" } as never);
+      expect(resources[0]?.fields).not.toHaveProperty("groupStatusId");
+      expect(resources[0]?.fields).toHaveProperty("status", "active");
+    });
+
     it("rejects declaring both `status` and a numeric groupStatusId", () => {
       const { ct } = createContext();
       expect(() => ct.group({ key: "g", name: "G", status: "active", groupStatusId: 1 })).toThrow(

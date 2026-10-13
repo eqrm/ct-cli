@@ -648,10 +648,17 @@ export class Resolver {
     // it impossible: departments and security levels ARE writable through the legacy master-data
     // endpoint the admin UI uses, just not through anything `ct` drives today (#108/#109/#111).
     if (catalog && REF_KIND_TYPE[r.kind] === undefined) {
+      // Group statuses are nested in the person masterdata response, so there is no `ct get
+      // group-statuses`; point at the resource that exposes them (#157).
+      const plural = r.kind === "group-status" ? "group statuses" : `${r.kind}s`;
+      const listHint =
+        r.kind === "group-status"
+          ? "`ct get person-masterdata` (see `groupStatuses`)"
+          : `\`ct get ${r.kind}s\``;
       return new Error(
         `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: no live ${r.kind} at ` +
-          `${catalog} matches key "${r.key}". ct reads ${r.kind}s but does not manage them, so it cannot ` +
-          `create this one — fix the key/name (list them with \`ct get ${r.kind}s\`), create it in the ` +
+          `${catalog} matches key "${r.key}". ct reads ${plural} but does not manage them, so it cannot ` +
+          `create this one — fix the key/name (list them with ${listHint}), create it in the ` +
           `ChurchTools admin UI, or use a numeric id.`,
       );
     }

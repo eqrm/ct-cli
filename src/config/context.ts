@@ -199,10 +199,11 @@ export interface PermissionInput {
 /** Logical id-field sugar for declarations: a named string field → a Ref-valued numeric id field.
  *  `status` (→ `groupStatusId`) resolves by name against `GET /person/masterdata` → `groupStatuses`
  *  (#157) — not `/group/memberstatus`, which is a different dimension (member statuses). */
-const ID_SUGAR: Record<string, { idField: string; make: (key: string) => Ref }> = {
+const ID_SUGAR: Record<string, { idField: string; make: (key: string) => Ref; onlyFor?: string }> = {
   campus: { idField: "campusId", make: ref.campus },
   groupType: { idField: "groupTypeId", make: ref.groupType },
-  status: { idField: "groupStatusId", make: ref.status },
+  // `status` is a group-only dimension: on any other type it is not sugar and keeps its old behaviour.
+  status: { idField: "groupStatusId", make: ref.status, onlyFor: "group" },
 };
 
 /** The numeric id fields a declaration may carry — each accepts a number, `null`, or a {@link Ref}. */
@@ -589,7 +590,8 @@ function toDesired(type: string, input: ResourceInput, location?: string): Desir
   // a Ref-valued numeric id field (`campusId`/`groupTypeId`). The per-host resolver
   // turns the Ref into a real id at plan time. Declaring BOTH forms (`campus` + `campusId`) is a
   // conflict — reject it rather than silently pick one. Numeric ids still pass straight through.
-  for (const [logical, { idField, make }] of Object.entries(ID_SUGAR)) {
+  for (const [logical, { idField, make, onlyFor }] of Object.entries(ID_SUGAR)) {
+    if (onlyFor !== undefined && type !== onlyFor) continue;
     if (fields[logical] === undefined) continue;
     if (fields[idField] !== undefined) {
       throw new Error(

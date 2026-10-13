@@ -680,7 +680,7 @@ export interface SnippetOptions {
  * multi-line, 2-space indent, trailing commas, one field per line. The function name comes from the
  * registry entry's `dslName` (default: camelCase of the type), so the emitted snippet always names an
  * actual `ConfigContext` function — never a colliding one. `fields` should already be reverse-sugared
- * (numeric ids → logical `campus`/`groupType`/`status` keys); anything left numeric that the caller
+ * (numeric ids → logical `campus`/`groupType` keys; `groupStatusId` stays numeric on adopt, #157); anything left numeric that the caller
  * couldn't resolve is passed in `opts.todos` to earn a `// TODO: no logical match` marker. A `dynamic`
  * field is collapsed to its shortest sugar form (`true` / `"<path>"`) when it matches the convention.
  */
