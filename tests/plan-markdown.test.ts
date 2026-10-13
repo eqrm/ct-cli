@@ -297,4 +297,102 @@ describe("plain-language Markdown plan", () => {
     expect(english).toContain("# ChurchTools change plan");
     expect(english).toContain("No changes are required");
   });
+  it("shows only changed paths for a nested value and keeps math delimiters out of the output (#163)", () => {
+    const before = {
+      status: "active",
+      ruleset: { query: { a: [{ coalesce: [{ var: "x" }, 2] }], big: "same" } },
+    };
+    const after = {
+      status: "active",
+      ruleset: { query: { a: [{ coalesce: [{ var: "y" }, 2] }], big: "same" } },
+    };
+    const plan: Plan = {
+      items: [
+        {
+          type: "group",
+          key: "g",
+          displayName: "G",
+          id: 5,
+          action: "update",
+          changes: [{ field: "dynamic", from: before, to: after, source: "config" }],
+        },
+      ],
+    };
+    const output = renderPlanMarkdown(plan, [], context);
+    expect(output).toContain("```diff");
+    expect(output).toContain("- ruleset.query.a[0].coalesce[0].var = x");
+    expect(output).toContain("+ ruleset.query.a[0].coalesce[0].var = y");
+    expect(output).not.toContain("same");
+    expect(output).not.toContain("coalesce[1]");
+    // No escaped brackets or dollar signs in table cells (KaTeX/MathJax delimiters).
+    expect(output).not.toContain("\\[");
+    expect(output).not.toContain("\\]");
+    expect(escapeMarkdown("a[0] $x$")).toBe("a&#91;0&#93; &#36;x&#36;");
+  });
+
+  it("lengthens the fence when a changed value contains backticks (#163)", () => {
+    const plan: Plan = {
+      items: [
+        {
+          type: "group",
+          key: "g",
+          displayName: "G",
+          id: 5,
+          action: "update",
+          changes: [{ field: "dynamic", from: { t: "a" }, to: { t: "``` x" }, source: "config" }],
+        },
+      ],
+    };
+    expect(renderPlanMarkdown(plan, [], context)).toContain("````diff");
+  });
+
+  it("labels right parameters by their dimension and keeps unknown names unresolved (#170)", () => {
+    const plan: Plan = {
+      items: [{ type: "group", key: "g", displayName: "Jugend", id: 7, action: "no-op", changes: [] }],
+    };
+    const item = permission({
+      diff: {
+        toPut: [
+          { authId: 403, dataId: [31], type: "grant" },
+          { authId: 10101, dataId: [3, 1], type: "grant" },
+          { authId: 1113, dataId: [], type: "grant" },
+        ],
+        toDelete: [{ authId: 10102, dataId: [7], type: "grant" }],
+        preserved: [],
+        preservedUnknown: [],
+      },
+    });
+    const output = renderPlanMarkdown(plan, [item], context);
+    expect(output).toContain("| Recht | Parameter | Auswirkung |");
+    expect(output).toContain("Kalender: \\#31 (Name nicht aufgelöst)");
+    expect(output).toContain("Sicherheitsstufe: \\#1 (Name nicht aufgelöst); Sicherheitsstufe: \\#3");
+    expect(output).toContain("Keine Parameter");
+    expect(output).not.toContain("Geltungsbereich");
+    const english = renderPlanMarkdown(plan, [item], { ...context, locale: "en" });
+    expect(english).toContain("Calendar: \\#31 (name not resolved)");
+    expect(english).toContain("No parameters");
+  });
+
+  it("resolves group parameters by id from the plan and never reuses an id across dimensions (#170)", () => {
+    const plan: Plan = {
+      items: [
+        { type: "group", key: "g", displayName: "Jugend | Kreis", id: 7, action: "no-op", changes: [] },
+      ],
+    };
+    const item = permission({
+      diff: {
+        toPut: [
+          { authId: 10102, dataId: [7], type: "grant" },
+          { authId: 10101, dataId: [7], type: "grant" },
+        ],
+        toDelete: [],
+        preserved: [],
+        preservedUnknown: [],
+      },
+    });
+    const output = renderPlanMarkdown(plan, [item], context);
+    // authId 10102/10101 use the security-level dimension; id 7 is NOT the group with id 7.
+    expect(output).not.toContain("Jugend \\| Kreis (#7)");
+    expect(output).toContain("Sicherheitsstufe: \\#7 (Name nicht aufgelöst)");
+  });
 });
