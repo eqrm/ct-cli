@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createContext, evaluateConfig, type ConfigContext } from "../src/config/context.js";
+import { ref } from "../src/resolve/refs.js";
 import { isKnownType } from "../src/engine/graph.js";
 import { RESOURCES } from "../src/resources/registry.js";
 
@@ -107,20 +108,24 @@ describe("config context", () => {
     expect(() => ct.group({ key: "h", name: "H", parents: [1] as never })).toThrow(/array of string/);
   });
 
-  describe("group-status sugar removed (#67)", () => {
-    it("fails fast, with an actionable error, when `status` is declared", () => {
-      const { ct } = createContext();
-      expect(() => ct.group({ key: "g", name: "G", status: "active" })).toThrow(
-        'group "g": "status" cannot be resolved by name — group statuses have no REST catalog ' +
-          "(GET /group/memberstatus is a different dimension: member statuses, string ids — verified " +
-          '2026-07-10). Declare a numeric "groupStatusId" instead (e.g. "groupStatusId: 1").',
-      );
+  describe("group-status sugar (#157)", () => {
+    it("sugars `status` into a group-status Ref on groupStatusId", () => {
+      const { ct, resources } = createContext();
+      ct.group({ key: "g", name: "G", status: "archived" });
+      expect(resources[0]?.fields).toEqual({ name: "G", groupStatusId: ref.status("archived") });
     });
 
-    it("still fails fast even when a numeric groupStatusId is also given", () => {
+    it("does not sugar `status` on non-group types (regression: campus got groupStatusId)", () => {
+      const { ct, resources } = createContext();
+      ct.campus({ key: "c", name: "C", status: "active" } as never);
+      expect(resources[0]?.fields).not.toHaveProperty("groupStatusId");
+      expect(resources[0]?.fields).toHaveProperty("status", "active");
+    });
+
+    it("rejects declaring both `status` and a numeric groupStatusId", () => {
       const { ct } = createContext();
       expect(() => ct.group({ key: "g", name: "G", status: "active", groupStatusId: 1 })).toThrow(
-        /"status" cannot be resolved by name/,
+        /declare either "status" \(logical reference\) or "groupStatusId" \(numeric id\), not both/,
       );
     });
 

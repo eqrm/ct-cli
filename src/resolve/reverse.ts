@@ -3,9 +3,9 @@
  * fetched resource carries (`campusId`, `groupTypeId`) into the logical sugar the DSL already
  * accepts (`campus`/`groupType`), so an adopted snippet is portable and reads like something a
  * human would author — not a wall of instance-specific integers. `groupStatusId` is NOT reverse-
- * sugared (#67): group statuses have no REST catalog to look a name up against (`/group/memberstatus`
- * is a different dimension — member statuses, string ids — live-verified 2026-07-10), so adopt
- * always emits it as a plain numeric field, same as any other unmapped id.
+ * sugared yet: its catalog is the nested `GET /person/masterdata` → `groupStatuses` list (#157), not a
+ * flat list this reader can index (`/group/memberstatus` is a different dimension — member statuses,
+ * string ids), so adopt emits it as a plain numeric field, same as any other unmapped id.
  *
  * This is the mirror image of the forward {@link Resolver} (src/resolve/resolver.ts): it reads the
  * SAME master-data catalogs, matched here BY ID instead of by name, and emits `slug(name)` — exactly
@@ -22,7 +22,7 @@ import { slug } from "../resources/registry.js";
  * The numeric id fields adopt can reverse-sugar, each mapped to its catalog path and the logical DSL
  * field it sugars into. Mirrors context.ts `ID_SUGAR` (sugar → idField) and resolver.ts `CATALOG_PATH`
  * (kind → path); kept explicit (two entries) rather than derived, with this comment as the sync note.
- * `groupStatusId` is deliberately absent — see the file-level comment above (#67).
+ * `groupStatusId` is deliberately absent — see the file-level comment above (#157).
  */
 const REVERSE_ID_FIELDS: Record<string, { catalog: string; sugar: string }> = {
   campusId: { catalog: "/campuses", sugar: "campus" },
@@ -147,7 +147,7 @@ export class ReverseResolver {
    * Reverse-sugar a managed-field bag for emission (#52 item A): each numeric id field with a catalog
    * match becomes its logical `campus`/`groupType` key (dropping the numeric field); an id with NO
    * match stays numeric and is named in `todos` so the emitter can flag it. Every other field —
-   * including `groupStatusId`, which has no `REVERSE_ID_FIELDS` entry (#67) — passes through
+   * including `groupStatusId`, which has no `REVERSE_ID_FIELDS` entry (#157) — passes through
    * untouched in its original position (and a `null` id — "no campus" — is omitted by the emitter).
    */
   async sugarFields(
