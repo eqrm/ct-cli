@@ -496,6 +496,17 @@ export async function runAdoptGroups(
     };
     /** `ct adopt group` on a group the id map owns: capture only the ruleset, write no state entry (#202). */
     const adoptMappedGroup = async (id: number, key: string): Promise<string | null> => {
+      // The map's key and OpenTofu's ownership win: say so rather than drop the options silently.
+      const ignored = [
+        ...(opts.key && opts.key !== key ? [`--key (the id map names it "${key}")`] : []),
+        ...(opts.withMemberFields ? ["--with-member-fields (the group's owner declares those)"] : []),
+      ];
+      if (ignored.length > 0) {
+        addWarning({
+          code: "ADOPT_ID_MAP_OPTION_IGNORED",
+          message: `group #${id} ("${key}", id map): ignored ${ignored.join(" and ")}.`,
+        });
+      }
       if (!opts.withDynamic) {
         addWarning({
           code: "ADOPT_SKIPPED_ID_MAP",
@@ -521,10 +532,13 @@ export async function runAdoptGroups(
       ].join("\n");
     };
 
+    const stateGroupIds = new Set(
+      Object.values(state.resources)
+        .filter((r) => r.type === "group")
+        .map((r) => r.id),
+    );
     for (const id of resolvedIds) {
-      const mappedKey = !Object.values(state.resources).some((r) => r.type === "group" && r.id === id)
-        ? mappedGroupKeyById.get(id)
-        : undefined;
+      const mappedKey = stateGroupIds.has(id) ? undefined : mappedGroupKeyById.get(id);
       if (mappedKey !== undefined) {
         const snippet = await adoptMappedGroup(id, mappedKey);
         if (snippet !== null) results.push({ id, key: mappedKey, fields: {}, snippet });
@@ -600,7 +614,16 @@ export async function runAdoptGroups(
       };
     }
 
-    await saveState(project.statePath, state);
+    // Only id-map groups were selected and every one was skipped: nothing to save or paste.
+    if (results.length === 0) {
+      return {
+        operation: "adopt",
+        project,
+        warnings,
+        value: { groups: [], configBlock: null, noMatches: false, dryRun: false },
+      };
+    }
+    if (reports.length > 0) await saveState(project.statePath, state);
     if (reports.some((report) => report.action === "updated")) {
       addWarning({
         code: "ADOPT_ALREADY_MANAGED",

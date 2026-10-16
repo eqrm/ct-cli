@@ -6,7 +6,7 @@ sources:
   - src/engine/dynamic.ts
   - src/engine/synthetic.ts
   - src/application/operations/adopt-group.ts
-sources_hash: 11cdc86261ab9d0c
+sources_hash: 93139d34ad478e84
 reviewed: 2026-08-28
 ---
 
@@ -543,7 +543,9 @@ status-only flips skipping the ruleset PUT) apply unchanged. A key declared with
 `ct.dynamicGroup`, or with `ct.dynamicGroup` twice, is refused at config load: one owner per ruleset.
 
 `ct refresh --group <key>` and `ct adopt group <id> --with-dynamic` also accept an id-map group; the
-adopt output is then a `ct.dynamicGroup` snippet and no state entry is written.
+adopt output is then a `ct.dynamicGroup` snippet and no state entry is written. The id map's key
+wins over `--key`, and `--with-member-fields` does not apply (the group's owner declares those);
+adopt warns about either. Without `--with-dynamic`, an id-map group is skipped with a warning.
 
 ## Managed guard: undeclared groups stay invisible
 

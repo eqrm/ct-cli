@@ -6,7 +6,7 @@ import { assertNotPeople } from "../../engine/guard.js";
 import { join } from "node:path";
 import { CATALOG_DIR } from "../../permissions/catalog-store.js";
 import { loadIdMap, type IdMap } from "../../resolve/idMap.js";
-import { loadState, type ManagedResource, type State } from "../../state/state.js";
+import { loadState, virtualGroupEntry, type ManagedResource, type State } from "../../state/state.js";
 import type { CtWarning, OperationResult, ProjectRequest } from "../contracts.js";
 import { noopObserver, type OperationObserver } from "../ports.js";
 import { resolveProject, type ProjectResolutionDependencies } from "../project.js";
@@ -66,8 +66,7 @@ export async function selectRefreshTargets(
             `Adopt or declare it first.`,
         );
       }
-      const at = new Date(0).toISOString();
-      managed = { type: "group", id: mapped, key: groupKey, fields: {}, adoptedAt: at, updatedAt: at };
+      managed = virtualGroupEntry(groupKey, mapped);
     }
     if (!dynamicIds.has(managed.id)) {
       throw new Error(

@@ -149,6 +149,24 @@ describe("ct.dynamicGroup plan", () => {
     );
   });
 
+  it("refuses a key that ct's state holds as another resource type", async () => {
+    const { Resolver } = await import("../src/resolve/resolver.js");
+    const state = emptyState(HOST);
+    state.resources.example_auto = {
+      type: "campus",
+      id: 3,
+      key: "example_auto",
+      fields: {},
+      adoptedAt: "t",
+      updatedAt: "t",
+    };
+    const desired = await desiredFor(inline);
+    const resolver = new Resolver({ client: { get: async () => [] as never }, state, desired, idMap });
+    await expect(buildPlan(fakeClient({ ruleset: RULESET }), state, desired, { resolver })).rejects.toThrow(
+      /state holds "example_auto" as a campus/,
+    );
+  });
+
   it("fails (not a recreate) when the group is gone from ChurchTools", async () => {
     const { Resolver } = await import("../src/resolve/resolver.js");
     const state = emptyState(HOST);
@@ -300,6 +318,15 @@ describe("ct state rm guard", () => {
     await expect(removeStateEntry({ type: "group", key: "example_auto" }, d)).resolves.toBeDefined();
   });
 
+  it("fails closed, not open, when the id map is unreadable", async () => {
+    const d = await deps(true, true);
+    d.loadIdMap.mockRejectedValueOnce(new Error("Id map was generated for another host"));
+    await expect(removeStateEntry({ type: "group", key: "example_auto" }, d)).rejects.toThrow(
+      /only ct's state can resolve/,
+    );
+    expect(d.state.resources.example_auto).toBeDefined();
+  });
+
   it("still refuses when a ct.dynamicGroup names a group only ct's state can resolve", async () => {
     const d = await deps(false, true);
     await expect(removeStateEntry({ type: "group", key: "example_auto" }, d)).rejects.toThrow(
@@ -344,6 +371,7 @@ describe("ct coverage with the id map", () => {
     expect(report.groups.ownedElsewhere).toBe(1);
     expect(report.byType[0]).toMatchObject({ unmanagedWithGrants: 0, ownedElsewhere: 1 });
     expect(renderCoverage(report)).toContain("1 owned elsewhere (id map)");
+    expect(renderCoverage(report)).toMatch(/unmanaged\+grants\s+elsewhere/);
     for (const r of report.roleInstances) {
       expect(renderRoleInstances([r])).toContain('owned elsewhere (id map) as "example_auto"');
     }

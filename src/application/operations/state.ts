@@ -166,11 +166,20 @@ export async function removeStateEntry(
 
     const warnings: CtWarning[] = [];
     if (!request.force) {
+      // Read the id map SOFTLY and outside the catch below: a malformed or foreign-host map must make
+      // the guard stricter (no map → mapped groups count as state-only), never skip it.
+      let idMap: Awaited<ReturnType<typeof loadIdMap>> = null;
       try {
-        const idMap = await (dependencies.loadIdMap ?? loadIdMap)(
-          project.host,
-          join(project.cwd, CATALOG_DIR),
-        );
+        idMap = await (dependencies.loadIdMap ?? loadIdMap)(project.host, join(project.cwd, CATALOG_DIR));
+      } catch (caught) {
+        warnings.push({
+          code: "ID_MAP_UNREADABLE",
+          message:
+            `Could not read the OpenTofu id map (${caught instanceof Error ? caught.message : String(caught)}) — ` +
+            `checking references as if no group were in it.`,
+        });
+      }
+      try {
         const { declared, referenceCounts, stateOnlyRefs } = await configUsage(
           project.configPath,
           dependencies,

@@ -275,14 +275,15 @@ export async function executePreparedApply(
     });
     for (const key of resources.created) {
       const item = plan.items.find((candidate) => candidate.key === key);
-      const id = context.state.resources[key]?.id ?? item?.id ?? undefined;
+      const id = context.state.resources[key]?.id;
       if (item && id !== undefined) {
         observer.emit({ type: "resource-created", resourceType: item.type, key, id });
       }
     }
     for (const key of resources.updated) {
       const item = plan.items.find((candidate) => candidate.key === key);
-      const id = context.state.resources[key]?.id ?? item?.id ?? undefined;
+      // A ruleset-only item (#202) has no state entry by design; its id is on the plan item.
+      const id = item?.rulesetOnly ? (item.id ?? undefined) : context.state.resources[key]?.id;
       if (item && id !== undefined) {
         observer.emit({ type: "resource-updated", resourceType: item.type, key, id });
       }

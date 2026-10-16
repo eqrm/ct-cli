@@ -7,7 +7,7 @@
  */
 import type { CtClient } from "../api/ctClient.js";
 import { CtApiError } from "../api/ctClient.js";
-import type { ManagedResource, State } from "../state/state.js";
+import { virtualGroupEntry, type ManagedResource, type State } from "../state/state.js";
 import type { DesiredResource, Plan } from "./types.js";
 import { RESOURCES, type CtWriteClient } from "../resources/registry.js";
 import { computePlan } from "./plan.js";
@@ -132,17 +132,18 @@ export async function buildPlan(
   for (const d of desired) {
     if (!d.rulesetOnly) continue;
     rulesetOnlyKeys.add(d.key);
+    // Logical keys are unique across types, so a non-group entry under this key would be hidden
+    // from the plan (no fetch, no stale report) by the overlay below. Refuse rather than shadow it.
+    const held = state.resources[d.key];
+    if (held && held.type !== "group") {
+      throw new Error(
+        `dynamicGroup "${d.key}": ct's state holds "${d.key}" as a ${held.type} (#${held.id}). Logical keys ` +
+          `are unique across types — rename one of them.`,
+      );
+    }
     // Always virtual, even for a group in ct's state: an empty snapshot keeps the group's own fields
     // out of drift reporting, and the real entry (if any) is left exactly as it is.
-    const at = new Date(0).toISOString();
-    effective.resources[d.key] = {
-      type: "group",
-      id: resolver.groupIdForRuleset(d.key),
-      key: d.key,
-      fields: {},
-      adoptedAt: at,
-      updatedAt: at,
-    };
+    effective.resources[d.key] = virtualGroupEntry(d.key, resolver.groupIdForRuleset(d.key));
   }
 
   const {
