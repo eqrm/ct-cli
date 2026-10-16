@@ -106,6 +106,17 @@ export interface MemberFieldInput {
   [prop: string]: unknown;
 }
 
+/**
+ * A ruleset-only dynamic-group declaration (#202): names an existing group by key and manages
+ * nothing but its dynamic status and ruleset. See {@link ConfigContext.dynamicGroup}.
+ */
+export interface DynamicGroupInput {
+  /** Logical key of the group; resolved from ct's state first, then the OpenTofu id map. */
+  group: string;
+  /** The same three forms `ct.group({ dynamic })` takes. `true` means `./rulesets/<group>.json`. */
+  dynamic: DynamicInput;
+}
+
 export interface ResourceInput {
   key: string;
   /** Ordering hint: apply this resource after `parent`. A dependency edge only — NOT managed hierarchy. */
@@ -390,6 +401,21 @@ export interface ConfigContext {
    * someone had already created the Bereich by hand.
    */
   department(input: ResourceInput): void;
+  /**
+   * Ruleset-only declaration (#202) for a group ct does not own (typically one OpenTofu manages as
+   * `churchtools_group`). It names the group by key and manages nothing but its dynamic status and
+   * ruleset:
+   *
+   * ```ts
+   * ct.dynamicGroup({ group: "example_autogroup", dynamic: true });
+   * ```
+   *
+   * The id resolves from ct's state first, then the OpenTofu id map; a key found in neither is a
+   * plan-time error, never a create. It writes no ct-state entry and has no delete path: dropping the
+   * declaration just stops managing the ruleset (it never demotes the group or deletes the ruleset).
+   * A key may not also be declared with `ct.group`, nor twice with `ct.dynamicGroup`.
+   */
+  dynamicGroup(input: DynamicGroupInput): void;
   /** Master-data group role (`/group/roles`). Named `roleDefinition` to avoid colliding
    *  with the `groupRole` permission function below. */
   roleDefinition(input: ResourceInput): void;
@@ -783,6 +809,12 @@ export function createContext(): {
       try {
         const resource = toDesired(type, input, location);
         if (seen.has(resource.key)) {
+          if (resources.some((r) => r.key === resource.key && r.rulesetOnly)) {
+            throw new Error(
+              `${type} "${resource.key}": the key is also declared with ct.dynamicGroup. One owner per ` +
+                `ruleset — put "dynamic" on this declaration, or drop it and keep only ct.dynamicGroup.`,
+            );
+          }
           throw new Error(`Duplicate logical key "${resource.key}" in config.`);
         }
         seen.add(resource.key);
@@ -791,6 +823,48 @@ export function createContext(): {
         throw relocate(err, location);
       }
     };
+  const defineDynamicGroup = (input: DynamicGroupInput): void => {
+    const location = captureCallSite();
+    try {
+      const group = input?.group;
+      if (typeof group !== "string" || group.length === 0) {
+        throw new Error(`dynamicGroup declaration is missing a string "group" (the group's key).`);
+      }
+      if (input.dynamic === undefined) {
+        throw new Error(
+          `dynamicGroup "${group}": "dynamic" is required (true, a "<path>.json" string, or { status, ruleset }).`,
+        );
+      }
+      const extra = Object.keys(input).filter((k) => k !== "group" && k !== "dynamic");
+      if (extra.length > 0) {
+        throw new Error(
+          `dynamicGroup "${group}": unsupported field(s) ${extra.map((k) => `"${k}"`).join(", ")}. ` +
+            `ct.dynamicGroup manages only the ruleset; everything else about the group belongs to its owner.`,
+        );
+      }
+      const owner = resources.find((r) => r.key === group);
+      if (owner) {
+        throw new Error(
+          owner.rulesetOnly
+            ? `dynamicGroup "${group}" is declared twice. A group's ruleset has exactly one declaration.`
+            : `dynamicGroup "${group}": the key is also declared as ${owner.type} "${group}". One owner per ` +
+                `ruleset — put "dynamic" on that declaration, or drop it and keep only ct.dynamicGroup.`,
+        );
+      }
+      if (seen.has(group)) throw new Error(`Duplicate logical key "${group}" in config.`);
+      seen.add(group);
+      resources.push({
+        type: "group",
+        key: group,
+        fields: {},
+        dynamic: desugarDynamic("group", group, input.dynamic),
+        dependsOn: [],
+        rulesetOnly: true,
+      });
+    } catch (err) {
+      throw relocate(err, location);
+    }
+  };
   const definePermissionInner = (domainType: DomainType, input: PermissionInput): void => {
     if (typeof input.key !== "string" || !input.key)
       throw new Error(`${domainType} declaration missing a string "key".`);
@@ -846,6 +920,7 @@ export function createContext(): {
   const ct: ConfigContext = {
     campus: define("campus"),
     group: define("group"),
+    dynamicGroup: defineDynamicGroup,
     groupType: define("group-type"),
     ageGroup: define("age-group"),
     targetGroup: define("target-group"),

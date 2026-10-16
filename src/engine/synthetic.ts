@@ -744,7 +744,7 @@ export async function runPostApplyHooks(
     for (const change of item.changes) {
       const f = syntheticField(change.field);
       if (!f?.postApply) continue;
-      const id = state.resources[item.key]?.id;
+      const id = item.rulesetOnly ? (item.id ?? undefined) : state.resources[item.key]?.id;
       if (id === undefined) continue;
       await f.postApply({ client, state, id, item, change });
     }

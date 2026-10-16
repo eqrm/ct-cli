@@ -6,7 +6,7 @@ sources:
   - src/engine/dynamic.ts
   - src/engine/synthetic.ts
   - src/application/operations/adopt-group.ts
-sources_hash: 5d0be1f4c92a8efb
+sources_hash: 11cdc86261ab9d0c
 reviewed: 2026-08-28
 ---
 
@@ -511,6 +511,39 @@ This is pinned by a live-gated test in `tests/dynamic.integration.test.ts`
 (see `tests/fixtures/dynamic/README.md` for how to run it and what to do if
 it fails); it is skipped by default and requires an explicit opt-in against a
 dev instance.
+
+## Ruleset-only declaration: `ct.dynamicGroup` (#202)
+
+When another tool owns the group itself (typically OpenTofu's `churchtools_group`), the group
+leaves ct's config **and** state, but its ruleset can still be managed from here:
+
+```ts
+ct.dynamicGroup({ group: "example_autogroup", dynamic: true });
+ct.dynamicGroup({
+  group: "example_paused",
+  dynamic: { status: "manual", ruleset: { ref: "./rulesets/example_paused.json" } },
+});
+```
+
+`dynamic` takes exactly the three forms of `ct.group({ dynamic })`. The group is found by key:
+ct's state first, then the OpenTofu id map (`.ct/ids.<host>.json`). A key found in neither, or a
+group that no longer exists in ChurchTools, is a plan-time error, never a create.
+
+What it deliberately does **not** do:
+
+- It writes **no** `ct-state` entry and does not appear in `ct state list`.
+- It has **no** delete path. Dropping the declaration means "stop managing the ruleset" (the same
+  as dropping `dynamic` from a `ct.group`); it never demotes the group to `none`, never deletes the
+  ruleset, never touches the group row.
+- It manages no other group field, no `parents` and no member fields.
+
+Plan items render as an update (or no-op) on the group with only the `dynamic` field changing, and
+the safety rails above (fetch-failed degradation, unportable-id and `stereotype` warnings,
+status-only flips skipping the ruleset PUT) apply unchanged. A key declared with both `ct.group` and
+`ct.dynamicGroup`, or with `ct.dynamicGroup` twice, is refused at config load: one owner per ruleset.
+
+`ct refresh --group <key>` and `ct adopt group <id> --with-dynamic` also accept an id-map group; the
+adopt output is then a `ct.dynamicGroup` snippet and no state entry is written.
 
 ## Managed guard: undeclared groups stay invisible
 

@@ -5,6 +5,7 @@ import { authedSession, type AuthedSession } from "../../api/session.js";
 import { buildCoverageReport, decodeGroupsWithRoles, type CoverageReport } from "../../coverage/report.js";
 import { CATALOG_DIR, loadHostCatalog } from "../../permissions/catalog-store.js";
 import { fetchPermissionRows, type PermissionReader } from "../../permissions/fetch.js";
+import { loadIdMap, type IdMap } from "../../resolve/idMap.js";
 import { slug } from "../../resources/registry.js";
 import { loadState, type State } from "../../state/state.js";
 import type { OperationResult, ProjectRequest } from "../contracts.js";
@@ -31,6 +32,7 @@ export interface CoverageOperationDependencies {
   resolveProject?: typeof resolveProject;
   loadHostCatalog?: typeof loadHostCatalog;
   loadState?: typeof loadState;
+  loadIdMap?: typeof loadIdMap;
   authedSession?: () => Promise<AuthedSession>;
   collectCoverage?: typeof collectCoverage;
   observer?: OperationObserver;
@@ -41,6 +43,7 @@ export async function collectCoverage(
   client: PermissionReader & Pick<CtClient, "getAll">,
   host: string,
   state: State,
+  idMap: Pick<IdMap, "entries"> | null = null,
 ): Promise<CoverageReport> {
   const [groupRows, groupTypeRows, dynamicRows, roleDefRows] = await Promise.all([
     client.getAll<Record<string, unknown>>(GROUPS_WITH_ROLES),
@@ -68,6 +71,9 @@ export async function collectCoverage(
     groupTypeNames,
     dynamicGroupIds: parseDynamicGroupIds(dynamicRows.data),
     groupRolePermissions: Array.isArray(groupRolePermissions) ? groupRolePermissions : [],
+    idMapGroupKeys: new Map(
+      (idMap?.entries ?? []).filter((e) => e.type === "group").map((e) => [e.id, e.key] as const),
+    ),
   });
 }
 
@@ -85,9 +91,15 @@ export async function runCoverage(
     project.host,
     join(project.cwd, CATALOG_DIR),
   );
+  const idMap = await (dependencies.loadIdMap ?? loadIdMap)(project.host, join(project.cwd, CATALOG_DIR));
   const { client } = await (dependencies.authedSession ?? authedSession)();
   observer.emit({ type: "phase-started", phase: "build-coverage" });
-  const complete = await (dependencies.collectCoverage ?? collectCoverage)(client, project.host, state);
+  const complete = await (dependencies.collectCoverage ?? collectCoverage)(
+    client,
+    project.host,
+    state,
+    idMap,
+  );
 
   let roleInstances = complete.roleInstances;
   if (request.type) {

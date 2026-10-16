@@ -275,14 +275,14 @@ export async function executePreparedApply(
     });
     for (const key of resources.created) {
       const item = plan.items.find((candidate) => candidate.key === key);
-      const id = context.state.resources[key]?.id;
+      const id = context.state.resources[key]?.id ?? item?.id ?? undefined;
       if (item && id !== undefined) {
         observer.emit({ type: "resource-created", resourceType: item.type, key, id });
       }
     }
     for (const key of resources.updated) {
       const item = plan.items.find((candidate) => candidate.key === key);
-      const id = context.state.resources[key]?.id;
+      const id = context.state.resources[key]?.id ?? item?.id ?? undefined;
       if (item && id !== undefined) {
         observer.emit({ type: "resource-updated", resourceType: item.type, key, id });
       }

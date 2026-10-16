@@ -158,7 +158,12 @@ export async function executePlan(plan: Plan, deps: ExecuteDeps): Promise<Execut
       // other field changed. Only clean (note-less) no-ops are desired-side and safe to touch;
       // stale/unresolved/fetch-failed no-ops are delete-side or undiffable — leave them alone.
       const entry = state.resources[item.key];
-      if (!item.note && entry && entry.preventDestroy !== (item.preventDestroy || undefined)) {
+      if (
+        !item.rulesetOnly &&
+        !item.note &&
+        entry &&
+        entry.preventDestroy !== (item.preventDestroy || undefined)
+      ) {
         mirrorPreventDestroy(entry, item.preventDestroy);
         await save(statePath, state);
       }
@@ -172,6 +177,20 @@ export async function executePlan(plan: Plan, deps: ExecuteDeps): Promise<Execut
         skippedDeletes,
         failed: { key: item.key, message: `No write spec for type "${item.type}".` },
       };
+    }
+
+    // Ruleset-only (`ct.dynamicGroup`, #202): only the synthetic `dynamic` field is written, and ct's
+    // state is never touched — the group belongs to someone else. It is always an update (a missing
+    // group is a plan-time error), so there is no create path to guard.
+    if (item.rulesetOnly) {
+      try {
+        if (item.id === null) throw new Error("ruleset-only item has no id");
+        await applySyntheticFields(client, state, item.id, item.key, item.changes);
+        updated.push(item.key);
+      } catch (err) {
+        return { created, updated, skippedDeletes, failed: { key: item.key, message: formatError(err) } };
+      }
+      continue;
     }
 
     try {

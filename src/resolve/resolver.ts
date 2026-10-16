@@ -252,6 +252,9 @@ export class Resolver {
     this.host = deps.host ?? deps.state.host;
     this.idMap = deps.idMap ?? null;
     for (const d of deps.desired) {
+      // A ruleset-only declaration (#202) names a group someone else owns; it creates nothing, so it
+      // must not turn that key into a same-run "pending" target — it resolves from state / id map.
+      if (d.rulesetOnly) continue;
       let set = this.declaredByType.get(d.type);
       if (!set) {
         set = new Set();
@@ -505,6 +508,25 @@ export class Resolver {
       );
     }
     return resolved;
+  }
+
+  /**
+   * The id of the group a `ct.dynamicGroup` (#202) names: ct's state first, then the OpenTofu id
+   * map. Never a pending ref and never a create — a key found in neither is a plan-time error.
+   */
+  groupIdForRuleset(key: string): number {
+    const managed = this.state.resources[key];
+    if (managed && managed.type === "group") return managed.id;
+    const mapped = this.idMap?.ids.get(`group\u0000${key}`);
+    if (mapped !== undefined) return mapped;
+    const map = this.idMap
+      ? `, and ${this.idMap.path} has no group "${key}" either. If OpenTofu owns it now, refresh the ` +
+        `map (\`tofu state pull | ct ids sync --tofu-state -\`); otherwise adopt it or fix the key.`
+      : `. Adopt it, or add it to the OpenTofu id map (.ct/ids.<host>.json) if OpenTofu owns it.`;
+    throw new Error(
+      `dynamicGroup "${key}" on ${this.host}: no group with this key is in ct's state${map} ` +
+        `ct.dynamicGroup never creates a group.`,
+    );
   }
 
   /**

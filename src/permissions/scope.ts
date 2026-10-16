@@ -386,7 +386,8 @@ export function resolveScope(
       pending.push({ key, id: null, type: "group" });
     } else {
       throw new Error(
-        `Scope key "${key}" does not resolve to a managed group. Declare/adopt it, use a group already under management, or pass a raw numeric dataId if this right's scope is not a group (see the catalog's scopeField).`,
+        `Scope key "${key}" does not resolve to a managed group. Declare/adopt it, use a group already under management, or pass a raw numeric dataId if this right's scope is not a group (see the catalog's scopeField). ` +
+          `If "${key}" is a group OpenTofu owns (it is in the id map, not in ct's state), a bare string cannot reach it — write { group: "${key}" } instead.`,
       );
     }
   }

@@ -27,6 +27,8 @@ import { RESOURCES, configSnippet, fromInformation, slug } from "../../resources
 import { ReverseResolver, type RoleCatalogEntry } from "../../resolve/reverse.js";
 import type { RefKind } from "../../resolve/refs.js";
 import { formatPortablizeWarnings, portablizeRuleset, scanUnportablized } from "../../config/query-refs.js";
+import { CATALOG_DIR } from "../../permissions/catalog-store.js";
+import { loadIdMap } from "../../resolve/idMap.js";
 import { chooseAdoptKey, loadState, saveState, upsert, type State } from "../../state/state.js";
 import type { CtWarning, OperationResult, ProjectRequest } from "../contracts.js";
 import { InMemoryMutationLock } from "../prepared-operation-store.js";
@@ -357,6 +359,14 @@ export async function runAdoptGroups(
   const project = await resolveProject(opts);
   return mutationLock.runExclusive(project.statePath, async () => {
     const state = await loadState(project.statePath, project.host);
+    // Groups OpenTofu owns (#202): present in the id map by id, absent from ct's state. Adopting one
+    // would write a state entry that duplicates the map, so only its ruleset is captured, as a
+    // `ct.dynamicGroup` snippet.
+    const idMap = await loadIdMap(project.host, join(project.cwd, CATALOG_DIR));
+    const mappedGroupKeyById = new Map<number, string>();
+    for (const entry of idMap?.entries ?? []) {
+      if (entry.type === "group") mappedGroupKeyById.set(entry.id, entry.key);
+    }
     const { client } = await authedSession();
 
     let resolvedIds: number[];
@@ -409,7 +419,117 @@ export async function runAdoptGroups(
       roleCatalog = await reverse.roleGroupTypeCatalog();
     }
 
+    /** Capture a group's dynamic ruleset to `rulesets/<key>.json`; the `dynamic` value for the snippet, or undefined. */
+    const captureRulesetFile = async (
+      id: number,
+      key: string,
+    ): Promise<{ status: DynamicStatus; ruleset: { ref: string } } | undefined> => {
+      const captured = await captureDynamic(id, client);
+      if (captured) {
+        const relPath = `rulesets/${key}.json`;
+        let rulesetToWrite = captured.normalizedRuleset;
+        if (opts.portableRulesets !== false) {
+          // Managed group ids come from state (no catalog for `group`), including any group this
+          // same run already adopted; the master-data kinds come from the catalog maps above.
+          const groupMap = new Map<number, string>(mappedGroupKeyById);
+          // Managed role definitions, likewise from STATE rather than the live catalog (#125):
+          // state gives a per-host id under a shared logical key, which is what makes a
+          // duplicate role name fixable by adopting the role instead of renaming master data.
+          // (`ReverseResolver.idToKeyByKind("role-def")` keys by slug(name) off the catalog and
+          // is exactly the ambiguous mapping this replaces.)
+          const roleDefMap = new Map<number, string>();
+          for (const r of Object.values(state.resources)) {
+            if (r.type === "group") groupMap.set(r.id, r.key);
+            if (r.type === "group-role") roleDefMap.set(r.id, r.key);
+          }
+          const { ruleset, warnings: portableWarnings } = portablizeRuleset(captured.normalizedRuleset, {
+            idToKeyByKind: { ...portableCatalogMaps, group: groupMap, "role-def": roleDefMap },
+            roleCatalog,
+            groupTypeIdToKey,
+          });
+          rulesetToWrite = ruleset;
+          // Report every dimension left numeric, with its reason (#101). The old output said only
+          // "left N unmanaged id(s) numeric", which named neither the dimension nor the fix — so a
+          // capture that silently froze prod's ids into a cross-host file looked like a clean run.
+          if (portableWarnings.length > 0) {
+            const lines = formatPortablizeWarnings(portableWarnings);
+            if (opts.strictRulesets) {
+              throw new Error(
+                `--strict-rulesets: ${relPath} would contain ${portableWarnings.length} unportablized ` +
+                  `(host-specific) id(s), so nothing was written:\n` +
+                  lines.map((l) => `    ${l}`).join("\n"),
+              );
+            }
+            addWarning({
+              code: "RULESET_NOT_PORTABLE",
+              message:
+                `${relPath} keeps ${portableWarnings.length} host-specific id(s) — NOT portable to another host:\n` +
+                lines.map((line) => `    ${line}`).join("\n"),
+            });
+          }
+        } else {
+          // Verbatim capture (--no-portable-rulesets): every entity id in the file is this host's.
+          // Say so once per ruleset rather than let the opt-out quietly imply the ids are fine.
+          const left = scanUnportablized(captured.normalizedRuleset);
+          if (left.length > 0) {
+            if (opts.strictRulesets) {
+              throw new Error(
+                `--strict-rulesets with --no-portable-rulesets: ${relPath} would contain ` +
+                  `${left.length} host-specific id(s) and nothing would rewrite them.`,
+              );
+            }
+            addWarning({
+              code: "RULESET_NOT_PORTABLE",
+              message:
+                `${relPath} captured verbatim (--no-portable-rulesets): ${left.length} host-specific ` +
+                `id(s) kept as-is — NOT portable to another host.`,
+            });
+          }
+        }
+        if (!opts.dryRun) {
+          await mkdir(join(project.cwd, "rulesets"), { recursive: true });
+          await writeFile(join(project.cwd, relPath), `${JSON.stringify(rulesetToWrite, null, 2)}\n`, "utf8");
+        }
+        return { status: captured.status, ruleset: { ref: `./${relPath}` } };
+      }
+      return undefined;
+    };
+    /** `ct adopt group` on a group the id map owns: capture only the ruleset, write no state entry (#202). */
+    const adoptMappedGroup = async (id: number, key: string): Promise<string | null> => {
+      if (!opts.withDynamic) {
+        addWarning({
+          code: "ADOPT_SKIPPED_ID_MAP",
+          message:
+            `group #${id} is "${key}" in the OpenTofu id map, which owns it — nothing adopted. ` +
+            `Pass --with-dynamic to capture its ruleset as a ct.dynamicGroup declaration.`,
+        });
+        return null;
+      }
+      const dynamic = await captureRulesetFile(id, key);
+      if (!dynamic) {
+        addWarning({
+          code: "ADOPT_SKIPPED_ID_MAP",
+          message: `group #${id} ("${key}", id map) is not a dynamic group — nothing to capture.`,
+        });
+        return null;
+      }
+      return [
+        `ct.dynamicGroup({`,
+        `  group: ${JSON.stringify(key)},`,
+        `  dynamic: { status: ${JSON.stringify(dynamic.status)}, ruleset: { ref: ${JSON.stringify(dynamic.ruleset.ref)} } },`,
+        `});`,
+      ].join("\n");
+    };
+
     for (const id of resolvedIds) {
+      const mappedKey = !Object.values(state.resources).some((r) => r.type === "group" && r.id === id)
+        ? mappedGroupKeyById.get(id)
+        : undefined;
+      if (mappedKey !== undefined) {
+        const snippet = await adoptMappedGroup(id, mappedKey);
+        if (snippet !== null) results.push({ id, key: mappedKey, fields: {}, snippet });
+        continue;
+      }
       const resource = await client.get<Record<string, unknown>>(GROUP_SPEC.itemPath(id));
       // An already-managed group keeps its adopted key unless --rekey says otherwise (#123). This
       // is the mode that made the bug bite: the documented ruleset-refresh workflow passes a LIST
@@ -447,78 +567,8 @@ export async function runAdoptGroups(
         snippetFields.memberFields = memberFields.declarations;
       }
       if (opts.withDynamic) {
-        const captured = await captureDynamic(id, client);
-        if (captured) {
-          const relPath = `rulesets/${key}.json`;
-          let rulesetToWrite = captured.normalizedRuleset;
-          if (opts.portableRulesets !== false) {
-            // Managed group ids come from state (no catalog for `group`), including any group this
-            // same run already adopted; the master-data kinds come from the catalog maps above.
-            const groupMap = new Map<number, string>();
-            // Managed role definitions, likewise from STATE rather than the live catalog (#125):
-            // state gives a per-host id under a shared logical key, which is what makes a
-            // duplicate role name fixable by adopting the role instead of renaming master data.
-            // (`ReverseResolver.idToKeyByKind("role-def")` keys by slug(name) off the catalog and
-            // is exactly the ambiguous mapping this replaces.)
-            const roleDefMap = new Map<number, string>();
-            for (const r of Object.values(state.resources)) {
-              if (r.type === "group") groupMap.set(r.id, r.key);
-              if (r.type === "group-role") roleDefMap.set(r.id, r.key);
-            }
-            const { ruleset, warnings: portableWarnings } = portablizeRuleset(captured.normalizedRuleset, {
-              idToKeyByKind: { ...portableCatalogMaps, group: groupMap, "role-def": roleDefMap },
-              roleCatalog,
-              groupTypeIdToKey,
-            });
-            rulesetToWrite = ruleset;
-            // Report every dimension left numeric, with its reason (#101). The old output said only
-            // "left N unmanaged id(s) numeric", which named neither the dimension nor the fix — so a
-            // capture that silently froze prod's ids into a cross-host file looked like a clean run.
-            if (portableWarnings.length > 0) {
-              const lines = formatPortablizeWarnings(portableWarnings);
-              if (opts.strictRulesets) {
-                throw new Error(
-                  `--strict-rulesets: ${relPath} would contain ${portableWarnings.length} unportablized ` +
-                    `(host-specific) id(s), so nothing was written:\n` +
-                    lines.map((l) => `    ${l}`).join("\n"),
-                );
-              }
-              addWarning({
-                code: "RULESET_NOT_PORTABLE",
-                message:
-                  `${relPath} keeps ${portableWarnings.length} host-specific id(s) — NOT portable to another host:\n` +
-                  lines.map((line) => `    ${line}`).join("\n"),
-              });
-            }
-          } else {
-            // Verbatim capture (--no-portable-rulesets): every entity id in the file is this host's.
-            // Say so once per ruleset rather than let the opt-out quietly imply the ids are fine.
-            const left = scanUnportablized(captured.normalizedRuleset);
-            if (left.length > 0) {
-              if (opts.strictRulesets) {
-                throw new Error(
-                  `--strict-rulesets with --no-portable-rulesets: ${relPath} would contain ` +
-                    `${left.length} host-specific id(s) and nothing would rewrite them.`,
-                );
-              }
-              addWarning({
-                code: "RULESET_NOT_PORTABLE",
-                message:
-                  `${relPath} captured verbatim (--no-portable-rulesets): ${left.length} host-specific ` +
-                  `id(s) kept as-is — NOT portable to another host.`,
-              });
-            }
-          }
-          if (!opts.dryRun) {
-            await mkdir(join(project.cwd, "rulesets"), { recursive: true });
-            await writeFile(
-              join(project.cwd, relPath),
-              `${JSON.stringify(rulesetToWrite, null, 2)}\n`,
-              "utf8",
-            );
-          }
-          snippetFields.dynamic = { status: captured.status, ruleset: { ref: `./${relPath}` } };
-        }
+        const captured = await captureRulesetFile(id, key);
+        if (captured) snippetFields.dynamic = captured;
       }
       const snippet = configSnippet("group", key, snippetFields, { todos });
 

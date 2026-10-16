@@ -1,5 +1,8 @@
 import { loadConfig } from "../../config/load.js";
 import { resourceType } from "../../resources/registry.js";
+import { join } from "node:path";
+import { CATALOG_DIR } from "../../permissions/catalog-store.js";
+import { loadIdMap, type IdMap } from "../../resolve/idMap.js";
 import { collectRefs, isRef, type Ref } from "../../resolve/refs.js";
 import { refKindResolvesLive } from "../../resolve/resolver.js";
 import { loadState, saveState, type ManagedResource } from "../../state/state.js";
@@ -14,6 +17,7 @@ export interface StateOperationDependencies {
   loadState?: typeof loadState;
   saveState?: typeof saveState;
   loadConfig?: typeof loadConfig;
+  loadIdMap?: typeof loadIdMap;
   lock?: MutationLock;
 }
 
@@ -84,25 +88,37 @@ function declarationId(type: string, key: string): string {
 async function configUsage(
   configPath: string,
   dependencies: StateOperationDependencies,
+  idMap: Pick<IdMap, "ids"> | null,
 ): Promise<ConfigUsage> {
   const { resources, permissions } = await (dependencies.loadConfig ?? loadConfig)(configPath);
-  const declared = new Set(resources.map((resource) => declarationId(resource.type, resource.key)));
+  // A ruleset-only `ct.dynamicGroup` (#202) never creates its group, so it is not a declaration the
+  // guard has to protect — removing the state entry cannot make the next plan propose a create.
+  const declared = new Set(
+    resources
+      .filter((resource) => !resource.rulesetOnly)
+      .map((resource) => declarationId(resource.type, resource.key)),
+  );
   const referenceCounts = new Map<string, number>();
   const stateOnlyRefs = new Set<string>();
-  const countRef = (key: string, resolvesLive: boolean): void => {
+  // A group key the OpenTofu id map already resolves is NOT state-only (#202): the resolver falls
+  // back to the map, so dropping the state entry leaves the reference resolvable.
+  const mappedGroup = (key: string): boolean => idMap?.ids.has(`group\u0000${key}`) ?? false;
+  const countRef = (key: string, resolvesLive: boolean, isGroup = false): void => {
     referenceCounts.set(key, (referenceCounts.get(key) ?? 0) + 1);
-    if (!resolvesLive) stateOnlyRefs.add(key);
+    if (!resolvesLive && !(isGroup && mappedGroup(key))) stateOnlyRefs.add(key);
   };
   const addRef = (ref: Ref): void => {
     // The compound kinds address a permission DOMAIN, and the key they carry here is the GROUP or
     // GROUP TYPE the domain hangs off — so each is classified by the kind of that target, not by the
     // compound kind itself. A group_role domain needs its group in managed state; a group_type_role
     // domain resolves its type from `/group/grouptypes` like any other group-type ref.
-    if (ref.kind === "group-role") countRef(ref.group, refKindResolvesLive("group"));
-    else if (ref.kind === "group-member-field") countRef(ref.group, refKindResolvesLive("group"));
+    if (ref.kind === "group-role") countRef(ref.group, refKindResolvesLive("group"), true);
+    else if (ref.kind === "group-member-field") countRef(ref.group, refKindResolvesLive("group"), true);
     else if (ref.kind === "group-type-role") countRef(ref.groupType, refKindResolvesLive("group-type"));
-    else countRef(ref.key, refKindResolvesLive(ref.kind));
+    else countRef(ref.key, refKindResolvesLive(ref.kind), ref.kind === "group");
   };
+  // The group a `ct.dynamicGroup` names resolves from state or the id map and nothing else.
+  for (const resource of resources) if (resource.rulesetOnly) countRef(resource.key, false, true);
   // Refs reachable from the resources themselves (`campus: "mainz"` on a group) as well as from the
   // permission set — the old check only walked the latter, so the count it reported was partial too.
   for (const ref of collectRefs(resources)) addRef(ref);
@@ -151,9 +167,14 @@ export async function removeStateEntry(
     const warnings: CtWarning[] = [];
     if (!request.force) {
       try {
+        const idMap = await (dependencies.loadIdMap ?? loadIdMap)(
+          project.host,
+          join(project.cwd, CATALOG_DIR),
+        );
         const { declared, referenceCounts, stateOnlyRefs } = await configUsage(
           project.configPath,
           dependencies,
+          idMap,
         );
         // Declaredness is checked FIRST because it is the more specific verdict: it is matched on
         // type AND key, while the state-only reference check below can only match on key. A key that

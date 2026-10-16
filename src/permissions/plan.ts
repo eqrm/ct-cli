@@ -334,7 +334,9 @@ export async function buildPermissionPlan(
   // scopeField — in one async pass here, so the per-grant `resolveScope` below stays synchronous.
   const scopeRefs = await resolveScopeRefs(permissions, refResolver, state);
   // Keys declared as groups in the config — valid scope targets even before they are created.
-  const declaredGroupKeys = new Set(desired.filter((r) => r.type === "group").map((r) => r.key));
+  const declaredGroupKeys = new Set(
+    desired.filter((r) => r.type === "group" && !r.rulesetOnly).map((r) => r.key),
+  );
   // one bulk fetch per distinct domainType — but only for CONCRETE domains. A pending domain (#69)
   // is a group type created this run: it has no live grants, so nothing to fetch (and on a fresh
   // instance the fetch would be a pure waste, or a spurious fetchError).
