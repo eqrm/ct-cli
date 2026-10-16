@@ -392,3 +392,54 @@ describe("runExportTf — groups", () => {
     expect(map.group).toEqual({ jugend: { id: 99 } });
   });
 });
+
+/**
+ * A resource that keeps its id but gets a new key gets a new HCL address. Without a `moved` block,
+ * tofu plans to destroy the old address (#199).
+ */
+describe("runExportTf — re-keyed resources", () => {
+  it("writes a moved block from the label the id map recorded, and keeps the import", async () => {
+    await exportInto({ jugend: row("group", "jugend", 99, { groupStatusId: 1 }) });
+    const result = await exportInto({ jugend_nord: row("group", "jugend_nord", 99, { groupStatusId: 1 }) });
+
+    expect(result.value.moved).toEqual([{ type: "group", from: "jugend", to: "jugend_nord" }]);
+    const imports = await readFile(join(dir, "tofu", "imports.tf"), "utf8");
+    expect(imports).toBe(
+      [
+        "moved {",
+        "  from = churchtools_group.jugend",
+        "  to   = churchtools_group.jugend_nord",
+        "}",
+        "",
+        "import {",
+        "  to = churchtools_group.jugend_nord",
+        '  id = "99"',
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("moves from the recorded label, not one re-derived from the old key", async () => {
+    await writeIdMap(
+      HOST,
+      [{ type: "campus", key: "3_nord", id: 0, label: "standort_nord" }],
+      join(dir, ".ct"),
+    );
+    const result = await exportInto({ nord: row("campus", "nord", 0) });
+    expect(result.value.moved).toEqual([{ type: "campus", from: "standort_nord", to: "nord" }]);
+  });
+
+  it("writes no moved block when the label is unchanged or the id is new", async () => {
+    await exportInto({ a: row("campus", "a", 1) });
+    const result = await exportInto({ a: row("campus", "a", 1), b: row("campus", "b", 2) });
+    expect(result.value.moved).toEqual([]);
+    expect(await readFile(join(dir, "tofu", "imports.tf"), "utf8")).not.toContain("moved");
+  });
+
+  it("does not take an id of another type for a move", async () => {
+    await exportInto({ a: row("campus", "a", 7) });
+    const result = await exportInto({ a: row("campus", "a", 7), t: row("group-type", "t", 7) });
+    expect(result.value.moved).toEqual([]);
+  });
+});

@@ -21,3 +21,34 @@ export function renderImports(targets: readonly ImportTarget[]): string {
     )
     .join("\n");
 }
+
+export interface MovedTarget {
+  type: string;
+  /** The HCL label tofu has the resource under now. */
+  from: string;
+  /** The label this export writes it under. */
+  to: string;
+}
+
+/**
+ * A resource that kept its id but got a new ct key gets a new address. Without a `moved` block the
+ * old address loses its config and `tofu plan` proposes destroying it (#199).
+ *
+ * The import block for the new address stays: if the old address never reached tofu's state (an
+ * export that was never applied), the move is a no-op and the import is what brings the resource in.
+ * If it did, tofu moves first and the import of the same id is then a no-op. Both verified with
+ * OpenTofu 1.12.
+ */
+export function renderMoved(targets: readonly MovedTarget[]): string {
+  return targets
+    .map((t) =>
+      [
+        "moved {",
+        `  from = ${hclType(t.type)}.${t.from}`,
+        `  to   = ${hclType(t.type)}.${t.to}`,
+        "}",
+        "",
+      ].join("\n"),
+    )
+    .join("\n");
+}
