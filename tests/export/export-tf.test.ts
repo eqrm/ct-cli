@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runExportTf } from "../../src/application/operations/export-tf.js";
+import { writeIdMap } from "../../src/resolve/idMap.js";
 
 const HOST = "https://example.church.tools";
 
@@ -53,13 +54,13 @@ describe("runExportTf", () => {
   it("warns about managed types the provider cannot represent yet", async () => {
     const result = await exportInto({
       a: row("campus", "a", 1),
-      jugend: row("group", "jugend", 99),
+      jugend: row("age-group", "jugend", 99),
       leitung: row("group-role", "leitung", 5),
-      musik: row("group", "musik", 100),
+      musik: row("age-group", "musik", 100),
     });
 
     expect(result.value.skipped).toEqual([
-      { type: "group", count: 2 },
+      { type: "age-group", count: 2 },
       { type: "group-role", count: 1 },
     ]);
     const message = result.warnings.map((w) => w.message).join("\n");
@@ -67,7 +68,7 @@ describe("runExportTf", () => {
       "EXPORT_TYPE_UNSUPPORTED",
       "EXPORT_TYPE_UNSUPPORTED",
     ]);
-    expect(message).toContain("2 group resource(s) were NOT exported");
+    expect(message).toContain("2 age-group resource(s) were NOT exported");
     expect(message).toContain("1 group-role resource(s) were NOT exported");
     // The export still runs: the mapped types are exported, not held hostage.
     expect(result.value.imported).toBe(1);
@@ -115,15 +116,16 @@ describe("runExportTf", () => {
     expect(await readFile(join(dir, "tofu", "imports.tf"), "utf8")).toContain('id = "0"');
   });
 
-  it("prunes the files it owns but did not write this run", async () => {
+  it("leaves the file of a type it did not export alone", async () => {
     await exportInto({ a: row("campus", "a", 1), t: row("group-type", "t", 2) });
-    expect(await readdir(join(dir, "tofu"))).toContain("group-types.tf");
+    const before = await readFile(join(dir, "tofu", "group-types.tf"), "utf8");
 
+    // --only campus, and a type that has left ct's state entirely (tier 0 after its cutover): both
+    // mean "tofu owns this file now". Deleting it would plan the destroy of every group type (#109).
     const narrowed = await exportInto({ a: row("campus", "a", 1), t: row("group-type", "t", 2) }, ["campus"]);
-    const left = await readdir(join(dir, "tofu"));
-    expect(left).not.toContain("group-types.tf");
-    expect(left.sort()).toEqual(["campuses.tf", "imports.tf", "versions.tf"]);
     expect(narrowed.value.files).not.toContain("group-types.tf");
+    await exportInto({ a: row("campus", "a", 1) });
+    expect(await readFile(join(dir, "tofu", "group-types.tf"), "utf8")).toBe(before);
   });
 
   it("never touches a file it does not own", async () => {
@@ -194,9 +196,8 @@ describe("writeVersions: false", () => {
 
     await runExportTf({ cwd: dir, statePath: "ct-state.json", outDir: "tofu", writeVersions: false });
 
-    // Pruning deletes every OWNED file this run did not write. If versions.tf
-    // stayed owned while unwritten, the consumer's pin would be deleted — a
-    // worse outcome than overwriting it, because nothing would hint at why.
+    // The consumer's pin must survive: deleting it would be worse than
+    // overwriting it, because nothing would hint at why.
     expect(await readFile(join(outDir, "versions.tf"), "utf8")).toBe(pinned);
   });
 
@@ -222,13 +223,13 @@ describe("runExportTf — the id map", () => {
     const result = await exportInto({
       mainz: row("campus", "mainz", 0),
       struktur: row("group-type", "struktur", 9),
-      jugend: row("group", "jugend", 99), // not exportable → not in the map either
+      leitung: row("group-role", "leitung", 99), // not exportable → not in the map either
     });
     expect(result.value.idMapPath).toBe(join(dir, ".ct", "ids.example.church.tools.json"));
     const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
     expect(map.campus).toEqual({ mainz: { id: 0 } });
     expect(map["group-type"]).toEqual({ struktur: { id: 9 } });
-    expect(map.group).toBeUndefined();
+    expect(map["group-role"]).toBeUndefined();
     expect(map.$meta).toMatchObject({ host: HOST, source: "ct export tf", entries: 2 });
   });
 
@@ -255,9 +256,10 @@ describe("runExportTf — the id map", () => {
     expect(map.$meta).toMatchObject({ entries: 2 });
   });
 
-  // The other half of the same rule: a type the export DID cover is rewritten wholesale, because a
-  // resource that left ct's state has left ct's ownership and its id must go with it.
-  it("drops an entry whose resource left state, for a type the export covered", async () => {
+  // The export upserts and never drops: one campus back in ct's state after the cutover (an adopt,
+  // a straggler on one host) must not wipe the tofu-owned rest of the type. Pruning dead ids is
+  // `ct ids sync --tofu-state`'s job.
+  it("keeps the other entries of a type when only one of them is back in state", async () => {
     await exportInto({
       mainz: row("campus", "mainz", 4),
       horgen: row("campus", "horgen", 5),
@@ -265,8 +267,15 @@ describe("runExportTf — the id map", () => {
     });
     const result = await exportInto({ mainz: row("campus", "mainz", 4) }, ["campus"]);
     const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
-    expect(map.campus).toEqual({ mainz: { id: 4 } });
+    expect(map.campus).toEqual({ mainz: { id: 4 }, horgen: { id: 5 } });
     expect(map["person-status"]).toEqual({ status_unbekannt: { id: 9 } });
+  });
+
+  it("replaces an entry whose key now has another id, and an id now under another key", async () => {
+    await exportInto({ a: row("campus", "a", 4), b: row("campus", "b", 5) });
+    const result = await exportInto({ a: row("campus", "a", 6), c: row("campus", "c", 5) });
+    const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
+    expect(map.campus).toEqual({ a: { id: 6 }, c: { id: 5 } });
   });
 
   // The end state the map exists to serve: tier-0 has left ct.config.ts AND ct-state.<env>.json, so
@@ -302,5 +311,84 @@ describe("runExportTf — the id map", () => {
     });
     expect(result.value.idMapPath).toBeNull();
     await expect(readdir(join(dir, ".ct"))).rejects.toThrow(/ENOENT/);
+  });
+});
+
+/**
+ * Groups (tier 1) point at tier-0 resources by id. One `tofu/` directory serves both hosts and those
+ * ids differ between them, so the export writes a reference to the tofu address, never the number.
+ */
+describe("runExportTf — groups", () => {
+  function group(key: string, id: number, fields: Record<string, unknown>): Row {
+    return { type: "group", key, id, fields: { name: key, groupStatusId: 1, ...fields } };
+  }
+
+  async function seedIdMap(entries: { type: string; key: string; id: number; label?: string }[]) {
+    await writeIdMap(HOST, entries, join(dir, ".ct"));
+  }
+
+  it("resolves a reference through the id map once tier 0 has left ct's state", async () => {
+    await seedIdMap([
+      { type: "campus", key: "nord", id: 0 },
+      { type: "group-type", key: "3_dienst", id: 4 },
+    ]);
+    await exportInto({ jugend: group("jugend", 99, { groupTypeId: 4, campusId: 0 }) });
+    const groups = await readFile(join(dir, "tofu", "groups.tf"), "utf8");
+    expect(groups).toContain("campus_id       = churchtools_campus.nord.id");
+    // The address uses the exporter's label, which is what tier 0 was exported under.
+    expect(groups).toContain("group_type_id   = churchtools_group_type.g_3_dienst.id");
+  });
+
+  it("refuses an id it cannot place instead of writing the number", async () => {
+    await seedIdMap([{ type: "group-type", key: "dienst", id: 4 }]);
+    await expect(
+      exportInto({ jugend: group("jugend", 99, { groupTypeId: 4, campusId: 6 }) }),
+    ).rejects.toThrow(/group "jugend": campusId = 6 \(campus\)/);
+    await expect(readdir(join(dir, "tofu"))).rejects.toThrow(/ENOENT/);
+  });
+
+  it("uses the label the id map recorded as the address", async () => {
+    await seedIdMap([
+      { type: "campus", key: "nord", id: 0, label: "standort_nord" },
+      { type: "group-type", key: "dienst", id: 4 },
+    ]);
+    await exportInto({ jugend: group("jugend", 99, { groupTypeId: 4, campusId: 0 }) });
+    expect(await readFile(join(dir, "tofu", "groups.tf"), "utf8")).toContain(
+      "churchtools_campus.standort_nord.id",
+    );
+  });
+
+  it("refuses a reference that is not a number rather than writing it as a literal", async () => {
+    await seedIdMap([{ type: "group-type", key: "dienst", id: 4 }]);
+    await expect(exportInto({ jugend: group("jugend", 99, { groupTypeId: "4" }) })).rejects.toThrow(
+      /groupTypeId = "4" is not a numeric id/,
+    );
+  });
+
+  it("omits a campus that is null, and names the groups whose campus ct never recorded", async () => {
+    await seedIdMap([{ type: "group-type", key: "dienst", id: 4 }]);
+    const result = await exportInto({
+      ohne: group("ohne", 98, { groupTypeId: 4, campusId: null }),
+      alt: group("alt", 97, { groupTypeId: 4 }),
+    });
+    const groups = await readFile(join(dir, "tofu", "groups.tf"), "utf8");
+    expect(groups).not.toContain("campus_id");
+    const unknown = result.warnings.find((w) => w.code === "EXPORT_CAMPUS_UNKNOWN");
+    expect(unknown?.details).toEqual({ keys: ["alt"] });
+  });
+
+  // The regression the tier-1 cutover would have hit: a FULL export now finds groups, so it is no
+  // longer "empty" — and rewriting every selected type from this run's rows would drop every tier-0
+  // id from the map, the only thing still resolving `campus: "nord"` in ct.config.ts.
+  it("keeps the tier-0 ids in the map when a full export finds only groups", async () => {
+    await seedIdMap([
+      { type: "campus", key: "nord", id: 0 },
+      { type: "group-type", key: "dienst", id: 4 },
+    ]);
+    const result = await exportInto({ jugend: group("jugend", 99, { groupTypeId: 4, campusId: 0 }) });
+    const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
+    expect(map.campus).toEqual({ nord: { id: 0 } });
+    expect(map["group-type"]).toEqual({ dienst: { id: 4 } });
+    expect(map.group).toEqual({ jugend: { id: 99 } });
   });
 });

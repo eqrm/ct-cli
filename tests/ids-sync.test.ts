@@ -129,11 +129,16 @@ describe("runIdsSync", () => {
     const result = await sync(
       tfstate([
         CAMPUS_MAINZ,
-        { mode: "managed", type: "churchtools_group", name: "kids", instances: [{ attributes: { id: 7 } }] },
+        {
+          mode: "managed",
+          type: "churchtools_age_group",
+          name: "kids",
+          instances: [{ attributes: { id: 7 } }],
+        },
       ]),
     );
     const warning = result.warnings.find((w) => w.code === "IDS_TYPE_UNSUPPORTED");
-    expect(warning?.message).toContain("churchtools_group");
+    expect(warning?.message).toContain("churchtools_age_group");
   });
 
   it("writes nothing under --dry-run", async () => {

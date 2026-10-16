@@ -20,6 +20,7 @@ const HCL_TYPE: Record<string, string> = {
   department: "churchtools_department",
   "person-status": "churchtools_person_status",
   "comment-viewer": "churchtools_comment_viewer",
+  group: "churchtools_group",
 };
 
 export function hclType(ctType: string): string {
@@ -38,6 +39,23 @@ const HCL_ATTR: Record<string, string> = {
   isSearchable: "is_searchable",
   sortKey: "sort_key",
   securityLevelId: "security_level_id",
+  groupTypeId: "group_type_id",
+  groupStatusId: "group_status_id",
+  campusId: "campus_id",
+};
+
+/**
+ * Fields that hold the id of ANOTHER exported resource, per resource type, and the ct type they
+ * point at. These are rendered as a reference (`churchtools_campus.nord.id`), never as the
+ * number in state.
+ *
+ * Not a style choice: one `tofu/` directory serves both hosts, and tier-0 ids differ between them
+ * (39 of 43 on the eqrm estate). A literal `campus_id = 6` exported from prod would point a dev
+ * group at whatever campus has id 6 there — a real, wrong campus that no plan flags as an error.
+ * `group_status_id` is not here: group statuses are CT built-ins with no provider resource.
+ */
+export const REFERENCE_FIELDS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  group: { groupTypeId: "group-type", campusId: "campus" },
 };
 
 export function hclAttr(field: string): string {
@@ -113,6 +131,11 @@ export interface RenderOptions {
    * it, `tofu destroy` would not.
    */
   preventDestroy?: boolean;
+  /**
+   * Field → HCL expression, rendered verbatim (unquoted) in place of the field's value. Used for
+   * {@link REFERENCE_FIELDS}; the caller resolves the id to an address.
+   */
+  references?: Readonly<Record<string, string>>;
 }
 
 /** Render one resource block. Null/undefined fields are omitted, never emitted as `null`. */
@@ -125,9 +148,9 @@ export function renderResource(
   const type = hclType(ctType);
   const entries = Object.entries(fields)
     .filter(([, v]) => v !== null && v !== undefined)
-    .map(([k, v]) => [hclAttr(k), v] as const);
+    .map(([k, v]) => [hclAttr(k), options.references?.[k] ?? renderValue(v)] as const);
   const width = Math.max(0, ...entries.map(([k]) => k.length));
-  const lines = entries.map(([k, v]) => `  ${k.padEnd(width)} = ${renderValue(v)}`);
+  const lines = entries.map(([k, v]) => `  ${k.padEnd(width)} = ${v}`);
   const lifecycle = options.preventDestroy ? ["", "  lifecycle {", "    prevent_destroy = true", "  }"] : [];
   return [`resource "${type}" "${hclLabel(key)}" {`, ...lines, ...lifecycle, "}", ""].join("\n");
 }

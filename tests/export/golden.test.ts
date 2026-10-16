@@ -14,7 +14,8 @@ import type { ExportTfResult } from "../../src/application/operations/export-tf.
  * What the fixture does have to carry is every SHAPE the renderer can trip on:
  * id 0, a key that is not a valid HCL identifier, a name carrying an HCL
  * interpolation marker, a destroy-protected resource, a managed type the
- * provider cannot represent yet, all five exportable types, and every camelCase
+ * provider cannot represent yet, every exportable type, a group whose type and
+ * campus (id 0) render as references, one without a campus, and every camelCase
  * field that maps to a snake_case attribute.
  *
  * It snapshots the files `ct export tf` WRITES, via runExportTf, rather than
@@ -49,6 +50,7 @@ describe("golden export", () => {
       "comment-viewers.tf",
       "departments.tf",
       "group-types.tf",
+      "groups.tf",
       "imports.tf",
       "person-statuses.tf",
       "versions.tf",
@@ -66,8 +68,8 @@ describe("golden export", () => {
 
   it("reports the relabelled key and the type it cannot export", () => {
     expect(result.value.relabelled).toEqual([{ key: "3_aktiv", label: "g_3_aktiv" }]);
-    expect(result.value.skipped).toEqual([{ type: "group", count: 1 }]);
-    expect(result.value.imported).toBe(8);
+    expect(result.value.skipped).toEqual([{ type: "group-role", count: 1 }]);
+    expect(result.value.imported).toBe(10);
   });
 
   it("renders byte-stable campuses.tf", async () => {
@@ -88,6 +90,13 @@ describe("golden export", () => {
 
   it("renders byte-stable comment-viewers.tf", async () => {
     expect(await generated("comment-viewers.tf")).toMatchSnapshot();
+  });
+
+  it("renders byte-stable groups.tf, with type and campus as references", async () => {
+    const groups = await generated("groups.tf");
+    expect(groups).toContain("campus_id       = churchtools_campus.hauptstandort.id");
+    expect(groups).toContain("group_type_id   = churchtools_group_type.team.id");
+    expect(groups).toMatchSnapshot();
   });
 
   it("renders byte-stable imports.tf", async () => {

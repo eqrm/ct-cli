@@ -19,14 +19,14 @@ code, and reconcile it against the ChurchTools API with Terraform-style
 >
 > Migrating needs no re-adoption for the resource types the provider already
 > covers: `ct export tf` generates HCL plus `import` blocks from your existing
-> state, so campuses, group types, departments, person statuses and comment
-> viewers import at their current ids and plan clean. Your keys carry across
-> (keys that are not valid HCL identifiers are relabelled, and the command
-> reports every one). Config comments do not: the export reads state, and
-> comments live in the TypeScript source. Groups, group roles, security levels,
-> age groups, target groups and relationship types have no provider resource
-> yet — `ct export tf` names them and their counts, and they stay with ct until
-> the provider covers them.
+> state, so campuses, group types, departments, person statuses, comment
+> viewers and groups import at their current ids and plan clean (a group's type
+> and campus are written as references, so one HCL serves every host). Your keys
+> carry across (keys that are not valid HCL identifiers are relabelled, and the
+> command reports every one). Config comments do not: the export reads state,
+> and comments live in the TypeScript source. Group roles, security levels, age
+> groups, target groups and relationship types are not exported yet —
+> `ct export tf` names them and their counts, and they stay with ct until it does.
 
 ## Why
 

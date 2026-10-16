@@ -66,8 +66,8 @@ export function readTfState(
     if (typeof raw.type !== "string" || typeof raw.name !== "string") continue;
     const ctType = CT_TYPE_BY_HCL_TYPE.get(raw.type);
     if (!ctType) {
-      // Anything the provider manages that ct has no resource type for — a churchtools_group once
-      // the provider grows one, or another provider's resources in a shared state.
+      // Anything the provider manages that ct has no resource type for — a provider resource ct
+      // does not export (yet), or another provider's resources in a shared state.
       if (raw.type.startsWith("churchtools_")) unmapped.add(raw.type);
       continue;
     }

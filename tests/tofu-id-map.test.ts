@@ -174,7 +174,12 @@ describe("readTfState", () => {
       // Mid-create or tainted: no id to map.
       { mode: "managed", type: "churchtools_campus", name: "pending", instances: [{ attributes: {} }] },
       // A provider resource ct has no type for — reported, never fatal.
-      { mode: "managed", type: "churchtools_group", name: "kids", instances: [{ attributes: { id: 3 } }] },
+      {
+        mode: "managed",
+        type: "churchtools_age_group",
+        name: "kids",
+        instances: [{ attributes: { id: 3 } }],
+      },
       { mode: "managed", type: "aws_s3_bucket", name: "state", instances: [{ attributes: { id: "b" } }] },
     ],
   };
@@ -188,7 +193,7 @@ describe("readTfState", () => {
       { type: "person-status", key: "status_unbekannt", id: 0 },
       { type: "group-type", key: "3_groupactive", id: 9, label: "g_3_groupactive" },
     ]);
-    expect(unmapped).toEqual(["churchtools_group"]);
+    expect(unmapped).toEqual(["churchtools_age_group"]);
     expect(serial).toBe(12);
   });
 

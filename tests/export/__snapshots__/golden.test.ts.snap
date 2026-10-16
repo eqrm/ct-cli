@@ -52,6 +52,22 @@ resource "churchtools_group_type" "team" {
 "
 `;
 
+exports[`golden export > renders byte-stable groups.tf, with type and campus as references 1`] = `
+"resource "churchtools_group" "jugend" {
+  name            = "Jugend"
+  group_type_id   = churchtools_group_type.team.id
+  group_status_id = 1
+  campus_id       = churchtools_campus.hauptstandort.id
+}
+
+resource "churchtools_group" "ohne_standort" {
+  name            = "Ohne Standort"
+  group_type_id   = churchtools_group_type.team.id
+  group_status_id = 2
+}
+"
+`;
+
 exports[`golden export > renders byte-stable imports.tf 1`] = `
 "import {
   to = churchtools_campus.aussenstelle
@@ -76,6 +92,16 @@ import {
 import {
   to = churchtools_department.bereich_musik
   id = "3"
+}
+
+import {
+  to = churchtools_group.jugend
+  id = "42"
+}
+
+import {
+  to = churchtools_group.ohne_standort
+  id = "43"
 }
 
 import {
