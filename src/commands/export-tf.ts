@@ -21,7 +21,7 @@ export function exportCommand(): Command {
     .option("-o, --out <dir>", "output directory", "tofu")
     .option(
       "--no-versions",
-      "do not write or prune versions.tf — use when your repo owns it (e.g. to pin a provider version)",
+      "do not write versions.tf — use when your repo owns it (e.g. to pin a provider version)",
     )
     .option(
       "--no-ids",

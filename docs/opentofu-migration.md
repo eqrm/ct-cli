@@ -3,9 +3,10 @@
 The TypeScript DSL is frozen and the tier-0 resources — campuses, group types,
 Bereiche, person statuses, comment viewers — are moving to
 [`terraform-provider-churchtools`](https://github.com/eqrm/terraform-provider-churchtools).
-`ct export tf` produces the HCL and the import blocks for that move. This page
-covers the two things needed to live in the in-between state, where OpenTofu owns
-tier-0 and `ct` still owns everything above it.
+`ct export tf` produces the HCL and the import blocks for that move, and since
+tier 1 also for groups. This page covers what is needed to live in the in-between
+state, where OpenTofu owns the exported tiers and `ct` still owns everything above
+them.
 
 ## The id map: references that outlive their declarations (#181)
 
@@ -78,11 +79,13 @@ ct export tf --env prod --no-ids   # …without the map, if your repo generates 
 The map is written under `.ct/`, not into the tofu output directory: it is `ct`'s
 input, not part of the root module tofu reads.
 
-A partial export (`--only campus`) rewrites only the types it was asked for and
-carries the rest of the map over untouched — otherwise a type-at-a-time cutover
-would drop the ids of every type it had not reached yet. Within a type the
-rewrite is wholesale: a resource that has left `ct`'s state has left `ct`'s
-ownership, and its id goes with it.
+An export rewrites only the types it actually exported resources of, and carries
+the rest of the map over untouched — otherwise a type-at-a-time cutover would drop
+the ids of every type it had not reached yet, or (once tier 0 has left `ct`'s
+state) of every type it had already handed to tofu. A type that was selected but
+has no resources in state counts as not exported. Within an exported type the
+rewrite is wholesale: a resource that has left `ct`'s state while others of its
+type stayed has left `ct`'s ownership, and its id goes with it.
 
 An export that maps **nothing** leaves an existing map alone and says so, rather
 than emptying it. That is not an edge case but the end state: once tier-0 is gone
@@ -107,9 +110,8 @@ ct ids list --env prod                                    # what ct would resolv
 `sync` reports every id it adds, changes or drops, and **refuses to replace a
 populated map with an empty one** — the likeliest cause of an empty read is the
 wrong workspace, and overwriting 50 working ids with nothing would break every
-reference at once. Provider resource types `ct` has no mapping for (a
-`churchtools_group`, another provider's resources in a shared state) are reported
-and skipped.
+reference at once. Provider resource types `ct` has no mapping for (say, another
+provider's resources in a shared state) are reported and skipped.
 
 One subtlety: `ct export tf` relabels keys that are not valid HCL identifiers
 (`3_groupactive` → `g_3_groupactive`), and that mapping is many-to-one, so it
@@ -121,6 +123,43 @@ key that needed no relabelling.
 Reading tofu's **remote** state directly was considered and rejected: it would put
 an S3 backend, its credentials and an AWS SDK inside a CLI whose every other read
 is ChurchTools. Piping `tofu state pull` keeps the backend tofu's problem.
+
+## Groups (tier 1)
+
+`ct export tf` exports groups as `churchtools_group` into `groups.tf`. A group's
+group type and campus are written as **references**, not as the ids in state:
+
+```hcl
+resource "churchtools_group" "jugend" {
+  name            = "Jugend"
+  group_type_id   = churchtools_group_type.dienst.id
+  group_status_id = 1
+  campus_id       = churchtools_campus.nord.id
+}
+```
+
+One `tofu/` directory serves both hosts and tier-0 ids differ between them, so a
+literal `campus_id = 6` would be right on one host and point at a real, wrong
+campus on the other. The export finds the address in `ct`'s state first and then
+in the id map. An id it finds in neither fails the export, listing every such
+reference, rather than falling back to the number: refresh the map from tofu
+(`ct ids sync`) and run it again. `group_status_id` stays a number, because group
+statuses are ChurchTools built-ins with no provider resource.
+
+A group without a campus gets no `campus_id`. A group whose state entry has **no
+`campusId` at all** (adopted before campus was a managed field) is exported the
+same way, and the export names those groups in a warning: if one has a campus in
+ChurchTools, `tofu plan` will propose clearing it, which is what the zero-change
+gate is there to catch.
+
+### The export never deletes a file
+
+A `.tf` file for a type this run did not export is left as it is, whether the
+type was filtered out with `--only` or has no resources left in `ct`'s state. Once
+a tier has moved to tofu, "not in ct's state" means "owned by tofu", not "stale",
+and deleting `campuses.tf` would plan the destroy of every campus. So
+`ct export tf --env prod --only group --no-versions` can run against the real
+`tofu/` directory: it writes `groups.tf` and `imports.tf` and touches nothing else.
 
 ## `ct auth token`: a credential helper (#179)
 

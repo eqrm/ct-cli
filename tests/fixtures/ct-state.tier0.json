@@ -108,6 +108,29 @@
       },
       "adoptedAt": "2026-01-01T00:00:00.000Z",
       "updatedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "rolle_leitung": {
+      "type": "group-role",
+      "id": 5,
+      "key": "rolle_leitung",
+      "fields": {
+        "name": "Leitung"
+      },
+      "adoptedAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "ohne_standort": {
+      "type": "group",
+      "id": 43,
+      "key": "ohne_standort",
+      "fields": {
+        "name": "Ohne Standort",
+        "groupTypeId": 11,
+        "groupStatusId": 2,
+        "campusId": null
+      },
+      "adoptedAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
     }
   }
 }

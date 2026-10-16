@@ -1,13 +1,13 @@
 /** Orchestration for `ct export tf`: state in, .tf files out. */
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { assertLabelsUnique, hclLabel, hclType, renderResource } from "../../export/hcl.js";
+import { assertLabelsUnique, hclLabel, hclType, REFERENCE_FIELDS, renderResource } from "../../export/hcl.js";
 import { renderImports, type ImportTarget } from "../../export/imports.js";
-import { EXPORTABLE_TYPES, fileForType, OWNED_FILES } from "../../export/layout.js";
+import { EXPORTABLE_TYPES, fileForType } from "../../export/layout.js";
 import { renderVersions } from "../../export/provider.js";
 import { CATALOG_DIR } from "../../permissions/catalog-store.js";
-import { loadIdMap, writeIdMap, type IdMapEntry } from "../../resolve/idMap.js";
-import { loadState } from "../../state/state.js";
+import { loadIdMap, writeIdMap, type IdMap, type IdMapEntry } from "../../resolve/idMap.js";
+import { loadState, type ManagedResource } from "../../state/state.js";
 import type { CtWarning, OperationResult, ProjectRequest } from "../contracts.js";
 import { resolveProject } from "../project.js";
 
@@ -23,9 +23,7 @@ export interface ExportTfRequest extends ProjectRequest {
    * the file unconditionally makes pinning impossible — and a consumer who
    * puts a backend there loses it silently on the next export.
    *
-   * When false, `versions.tf` also leaves the owned set: pruning deletes owned
-   * files this run did not write, which would otherwise delete the consumer's
-   * file outright — worse than overwriting it, because nothing hints at why.
+   * When false, `versions.tf` is neither written nor touched.
    */
   writeVersions?: boolean;
   /**
@@ -75,22 +73,52 @@ function address(type: string, key: string): string {
  * `personStatus: "status_unbekannt"` resolving once tier-0 leaves ct's state, and their keys are not
  * name-derived, so the live-name fallback cannot cover for them: the next `ct plan` hard-errors.
  *
- * So a type this run COVERED is rewritten wholesale (a resource that left state has left ct's
- * ownership, and its id must go with it), while a type it never selected is carried over untouched.
- * A full export covers every exportable type, so it carries nothing and never reads the old map —
- * which is also why a corrupt or foreign map can only fail the partial case, the one that cannot do
- * its job without reading it.
+ * So a type this run EXPORTED (at least one resource of it) is rewritten wholesale — a resource that
+ * left state while others of its type stayed has left ct's ownership, and its id goes with it —
+ * while every other type is carried over untouched. "Selected but empty" counts as not exported, not
+ * as "now has no ids": after a tier's cutover, a full export selects campuses and finds none in
+ * state, because tofu owns them, and those are exactly the ids the map must keep. A run that exports
+ * every exportable type carries nothing and never reads the old map, which is also why a corrupt or
+ * foreign map can only fail the runs that cannot do their job without reading it.
  */
 async function carryOverUncoveredIds(
   host: string,
   dir: string,
-  covered: readonly string[],
   fresh: readonly IdMapEntry[],
 ): Promise<IdMapEntry[]> {
-  if (EXPORTABLE_TYPES.every((type) => covered.includes(type))) return [...fresh];
+  const covered = new Set(fresh.map((entry) => entry.type));
+  if (EXPORTABLE_TYPES.every((type) => covered.has(type))) return [...fresh];
   const previous = await loadIdMap(host, dir);
   if (!previous) return [...fresh];
-  return [...previous.entries.filter((entry) => !covered.includes(entry.type)), ...fresh];
+  return [...previous.entries.filter((entry) => !covered.has(entry.type)), ...fresh];
+}
+
+/**
+ * Resolves the id in a reference field ({@link REFERENCE_FIELDS}) to the tofu address of the
+ * resource it points at.
+ *
+ * ct's own state first, then the committed id map — which, after a tier's cutover, is the only
+ * place ct can still learn that campus 6 is `churchtools_campus.nord` on this host. The map is
+ * loaded only when state cannot answer, so an export that needs no reference never reads it (and a
+ * corrupt map fails only the export that depends on it).
+ *
+ * A miss is collected, not guessed at: falling back to the number would export an HCL file that is
+ * right on this host and silently wrong on the other one.
+ */
+function referenceResolver(rows: readonly ManagedResource[], loadMap: () => Promise<IdMap | null>) {
+  const fromState = new Map<string, string>();
+  for (const r of rows) fromState.set(`${r.type}\u0000${r.id}`, r.key);
+  let map: Promise<Map<string, string>> | null = null;
+  const fromMap = () =>
+    (map ??= loadMap().then((loaded) => {
+      const byId = new Map<string, string>();
+      for (const e of loaded?.entries ?? []) byId.set(`${e.type}\u0000${e.id}`, e.key);
+      return byId;
+    }));
+  return async (type: string, id: number): Promise<string | null> => {
+    const key = fromState.get(`${type}\u0000${id}`) ?? (await fromMap()).get(`${type}\u0000${id}`);
+    return key === undefined ? null : `${hclType(type)}.${hclLabel(key)}.id`;
+  };
 }
 
 export async function runExportTf(request: ExportTfRequest): Promise<ExportTfResult> {
@@ -127,6 +155,16 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([type, count]) => ({ type, count }));
 
+  const catalogDir = join(project.cwd, CATALOG_DIR);
+  const resolveReference = referenceResolver(rows, () => loadIdMap(project.host, catalogDir));
+  const unresolved: string[] = [];
+  // A group adopted before campus was a managed field has no `campusId` in state at all. The export
+  // can only write "no campus" for it, and if the live group HAS a campus, `tofu plan` then proposes
+  // clearing it — exactly what the zero-change gate is there to catch, so say so up front.
+  const campusUnknown = selected
+    .filter((r) => r.type === "group" && !("campusId" in r.fields))
+    .map((r) => r.key);
+
   const byFile = new Map<string, string[]>();
   const imports: ImportTarget[] = [];
   const relabelled: { key: string; label: string }[] = [];
@@ -137,8 +175,17 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     const right = address(b.type, b.key);
     return left < right ? -1 : left > right ? 1 : 0;
   })) {
+    const references: Record<string, string> = {};
+    for (const [field, target] of Object.entries(REFERENCE_FIELDS[resource.type] ?? {})) {
+      const id = resource.fields[field];
+      if (typeof id !== "number") continue; // null/absent: omitted by the renderer, nothing to point at
+      const expr = await resolveReference(target, id);
+      if (expr === null) unresolved.push(`${resource.type} "${resource.key}": ${field} = ${id} (${target})`);
+      else references[field] = expr;
+    }
     const block = renderResource(resource.type, resource.key, resource.fields, {
       preventDestroy: resource.preventDestroy,
+      references,
     });
     const file = fileForType(resource.type);
     byFile.set(file, [...(byFile.get(file) ?? []), block]);
@@ -159,6 +206,15 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     });
   }
 
+  if (unresolved.length > 0) {
+    throw new Error(
+      `export: ${unresolved.length} reference(s) point at an id that is neither in ct's state nor in ` +
+        `the id map for ${project.host}:\n  ${unresolved.join("\n  ")}\n` +
+        `Refresh the map from tofu first (\`tofu state pull | ct ids sync --tofu-state -\`). A literal id ` +
+        `would be right on this host and wrong on the other one, so the export does not fall back to it.`,
+    );
+  }
+
   const outDir = isAbsolute(request.outDir) ? request.outDir : join(project.cwd, request.outDir);
   await mkdir(outDir, { recursive: true });
 
@@ -175,21 +231,16 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     written.push("versions.tf");
   }
 
-  // Prune only what this command owns, and only what it did not just write.
-  // `versions.tf` drops out of the owned set entirely when the consumer owns
-  // it — pruning it would delete their file rather than leave it alone.
-  const owned = writeVersions ? OWNED_FILES : OWNED_FILES.filter((f) => f !== "versions.tf");
-  for (const file of owned) {
-    if (written.includes(file)) continue;
-    await rm(join(outDir, file), { force: true });
-  }
+  // No pruning. A type's file that this run did not write is left alone: once a tier has moved to
+  // OpenTofu its resources are no longer in ct's state, so "not exported this run" means "owned by
+  // tofu now", not "stale". Deleting `campuses.tf` because tier 0 left ct's state would ask tofu to
+  // destroy every campus (#109) — the same reason the id map below is never emptied.
 
-  const catalogDir = join(project.cwd, CATALOG_DIR);
   let idMapPath: string | null = null;
   let idMapKept = false;
   if (request.writeIds ?? true) {
-    const entries = await carryOverUncoveredIds(project.host, catalogDir, types, idEntries);
-    const existing = entries.length === 0 ? await loadIdMap(project.host, catalogDir) : null;
+    const entries = await carryOverUncoveredIds(project.host, catalogDir, idEntries);
+    const existing = idEntries.length === 0 ? await loadIdMap(project.host, catalogDir) : null;
     // Never replace a POPULATED map with an empty one — the same guard `ct ids sync` has, for the
     // same reason, and the case is not exotic here: it is the END STATE. Once tier-0 has left
     // `ct.config.ts` and the state file, ct holds none of these resources, so a re-run of
@@ -212,6 +263,17 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
       `${type} resource yet. \`tofu plan\` will propose creating them — keep managing them with ct until then.`,
     details: { type, count },
   }));
+
+  if (campusUnknown.length > 0) {
+    warnings.push({
+      code: "EXPORT_CAMPUS_UNKNOWN",
+      message:
+        `${campusUnknown.length} group(s) have no campusId in ct's state and were exported without a ` +
+        `campus: ${campusUnknown.join(", ")}. If one has a campus in ChurchTools, \`tofu plan\` will ` +
+        `propose clearing it — check those groups in the plan before applying.`,
+      details: { keys: campusUnknown },
+    });
+  }
 
   if (idMapKept) {
     warnings.push({
