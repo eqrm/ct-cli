@@ -7,7 +7,7 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: 27a36214a25c7ac8
+sources_hash: 066465b31f159b1a
 reviewed: 2026-08-28
 ---
 
@@ -118,11 +118,14 @@ reference or a numeric `id`:
     (#182): the domain is a role, not a type.
   - `ct.groupRole` — `group: "<key>", role: "<name>"` resolves the (group,
     role) pair to its pairing domainId per host (#25), or `id: <domainId>`
-    targets one directly. The group must be **managed** (declared via `ct.group`
-    or adopted into state); it need not exist on the host yet — a group declared
-    in the same config plans as a pending domain and is granted later in that same
-    `ct apply`, once it exists (#106). Declaring both a logical form and a numeric
-    `id` is a conflict and throws.
+    targets one directly. The group comes from one of three places: declared via
+    `ct.group`, adopted into state, or, once OpenTofu owns it, the id map
+    (`.ct/ids.<host>.json`). A declared group need not exist on the host yet: it
+    plans as a pending domain and is granted later in that same `ct apply`, once
+    it exists (#106). A group from the id map cannot defer, so a grant naming a
+    role this config only now declares fails at plan time; apply the role first,
+    then the grant. Declaring both a logical form and a numeric `id` is a
+    conflict and throws.
     See "domainId semantics" for how the pairing id is resolved.
   - `ct.status` — `personStatus: "<name>"` resolves against the live
     `/statuses` catalog per host, or `id: <statusId>` targets one directly.

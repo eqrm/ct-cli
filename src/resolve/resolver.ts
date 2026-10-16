@@ -387,7 +387,10 @@ export class Resolver {
     // role-def create (tier 3) has run, which is before permissions — so the same post-apply
     // completion that finishes a pending group finishes this too.
     if ((await this.declaresRoleForGroup(r, site)) && !hasRoleNamed(rows, r.role)) {
-      if (opts.pendingGroupRole) return pendingRef(r);
+      // A pending ref is finished at apply from ct's state, which a group tofu owns is not in, so a
+      // group that resolved through the id map cannot defer: it fails here, before anything writes.
+      const tofuOwned = this.state.resources[r.group]?.type !== "group";
+      if (opts.pendingGroupRole && !tofuOwned) return pendingRef(r);
       throw new Error(
         `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: "${r.role}" is declared ` +
           `as a roleDefinition in this config but does not exist on this host yet. Apply the master ` +
@@ -505,9 +508,10 @@ export class Resolver {
   }
 
   /**
-   * Resolve the group half of a group_role ref to a managed group id (state ∪ declared). A group
-   * declared in this run resolves to a {@link PendingRef} when the call site can finish it later
-   * (#106) and stays a hard error otherwise.
+   * Resolve the group half of a group_role ref to a managed group id (state ∪ declared ∪ id map). A
+   * group declared in this run resolves to a {@link PendingRef} when the call site can finish it
+   * later (#106) and stays a hard error otherwise. A group tofu owns is in neither state nor config,
+   * so the id map is what keeps its grants resolvable, exactly as for a plain group ref.
    */
   private groupIdForRole(r: GroupRoleRef, site: string, opts: ResolveOptions): number | PendingRef {
     const managed = this.state.resources[r.group];
@@ -520,9 +524,18 @@ export class Resolver {
           `the group does. Apply the group first, then re-run, or pass a numeric id.`,
       );
     }
+    const mapped = this.idMap?.ids.get(`group\u0000${r.group}`);
+    if (mapped !== undefined) return mapped;
+    // Mid-cutover the likeliest reason is a map that predates the group's export (#181), the one
+    // remedy the generic advice does not name — same hint as a plain ref's notFound.
+    const map = this.idMap
+      ? `, and ${this.idMap.path} has no group "${r.group}" either. If OpenTofu owns it now, refresh the ` +
+        `map (\`tofu state pull | ct ids sync --tofu-state -\`); otherwise declare/adopt it, fix the key, ` +
+        `or pass a numeric id.`
+      : `. Declare/adopt it, fix the key, or pass a numeric id.`;
     throw new Error(
       `Cannot resolve ${refLabel(r)} referenced at ${site} on ${this.host}: no managed group named ` +
-        `"${r.group}" is declared or adopted. Declare/adopt it, fix the key, or pass a numeric id.`,
+        `"${r.group}" is declared or adopted${map}`,
     );
   }
 
