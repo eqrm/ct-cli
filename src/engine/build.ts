@@ -7,7 +7,7 @@
  */
 import type { CtClient } from "../api/ctClient.js";
 import { CtApiError } from "../api/ctClient.js";
-import type { ManagedResource, State } from "../state/state.js";
+import { virtualGroupEntry, type ManagedResource, type State } from "../state/state.js";
 import type { DesiredResource, Plan } from "./types.js";
 import { RESOURCES, type CtWriteClient } from "../resources/registry.js";
 import { computePlan } from "./plan.js";
@@ -121,16 +121,57 @@ export async function buildPlan(
   opts: BuildOptions = {},
 ): Promise<BuildResult> {
   // Keyed by logical key (globally unique), not CT id (unique only within a type — the Mainz campus is id 0).
+  const resolver = opts.resolver ?? new Resolver({ client, state, desired });
+
+  // Ruleset-only declarations (`ct.dynamicGroup`, #202) name groups ct may not own. Give each a
+  // VIRTUAL state entry (id from state or the id map) so the ordinary fetch / fold / diff machinery
+  // sees it, without ever touching the real state: nothing here is saved, and a virtual entry has no
+  // delete path because the key is desired.
+  const rulesetOnlyKeys = new Set<string>();
+  const effective: State = { ...state, resources: { ...state.resources } };
+  for (const d of desired) {
+    if (!d.rulesetOnly) continue;
+    rulesetOnlyKeys.add(d.key);
+    // Logical keys are unique across types, so a non-group entry under this key would be hidden
+    // from the plan (no fetch, no stale report) by the overlay below. Refuse rather than shadow it.
+    const held = state.resources[d.key];
+    if (held && held.type !== "group") {
+      throw new Error(
+        `dynamicGroup "${d.key}": ct's state holds "${d.key}" as a ${held.type} (#${held.id}). Logical keys ` +
+          `are unique across types — rename one of them.`,
+      );
+    }
+    // Always virtual, even for a group in ct's state: an empty snapshot keeps the group's own fields
+    // out of drift reporting, and the real entry (if any) is left exactly as it is.
+    effective.resources[d.key] = virtualGroupEntry(d.key, resolver.groupIdForRuleset(d.key));
+  }
+
   const {
     actual,
     unresolved,
     fetchFailed,
     fetchErrors,
     warnings: fetchWarnings = [],
-  } = await fetchActual(client, Object.values(state.resources));
+  } = await fetchActual(client, Object.values(effective.resources));
+
+  // A ruleset-only target that is gone from ChurchTools is an error, never a recreate.
+  for (const key of rulesetOnlyKeys) {
+    if (!actual.has(key) && !fetchFailed.has(key) && !unresolved.has(key)) {
+      throw new Error(
+        `dynamicGroup "${key}": group #${effective.resources[key]!.id} does not exist in ChurchTools. ` +
+          `ct.dynamicGroup never creates a group — fix the id map / state or drop the declaration.`,
+      );
+    }
+  }
 
   // Synthetic sub-resource fields (parents, dynamic, …) fold into the diff on both sides.
-  const folded = await foldSynthetic({ client, state, desired, actual, configDir: opts.configDir });
+  const folded = await foldSynthetic({
+    client,
+    state: effective,
+    desired,
+    actual,
+    configDir: opts.configDir,
+  });
   fetchErrors.push(...folded.errors);
   // A synthetic field whose ACTUAL side could not be read makes its resource undiffable, exactly
   // like a failed top-level GET. Marking it fetch-failed is what stops a transient 429 on
@@ -142,7 +183,6 @@ export async function buildPlan(
   // Resolution pass (#20): rewrite Ref-valued fields (and the dynamic ruleset, walked deeply) to
   // numbers / pending markers AFTER folding, BEFORE computePlan — so the diff stays number↔number.
   // Unknown/ambiguous refs THROW here (a config error, not a degrade-and-continue fetch error).
-  const resolver = opts.resolver ?? new Resolver({ client, state, desired });
   const resolved = await Promise.all(
     folded.desired.map(async (d) => {
       const fields = await resolver.resolveValue(d.fields, `${d.type} "${d.key}"`);
@@ -162,7 +202,8 @@ export async function buildPlan(
     return targets.length === 0 ? d : { ...d, dependsOn: [...d.dependsOn, ...targets] };
   });
 
-  const plan = computePlan(ordered, state, actual, { unresolved, fetchFailed });
+  const plan = computePlan(ordered, effective, actual, { unresolved, fetchFailed });
+  for (const item of plan.items) if (rulesetOnlyKeys.has(item.key)) item.rulesetOnly = true;
 
   // A `groupTypeId` change is a MIGRATION, not a field update (#171): CT refuses the field on the
   // ordinary update and wants `POST /groups/{id}/grouptype` with a role mapping. Resolved here, while

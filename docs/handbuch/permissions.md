@@ -7,7 +7,7 @@ sources:
   - src/resolve/resolver.ts
   - src/resolve/refs.ts
   - src/config/context.ts
-sources_hash: 066465b31f159b1a
+sources_hash: 7974aecfe2a96172
 reviewed: 2026-08-28
 ---
 
@@ -543,7 +543,7 @@ the rest of the DSL uses — so both spellings are interchangeable.
 
 | `scopeField`         | Reference form                            | Resolved against                                                  |
 | -------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
-| `cdb_gruppe`         | `{ group: "<key>" }` (or the bare string) | managed groups                                                    |
+| `cdb_gruppe`         | `{ group: "<key>" }` (or the bare string) | managed groups; `{ group }` also the id map                       |
 | `cdb_station`        | `{ campus: "<key>" }`                     | managed campuses, then `GET /campuses`                            |
 | `cdb_gruppentyp`     | `{ groupType: "<key>" }`                  | managed group types, then `GET /group/grouptypes`                 |
 | `cdb_bereich`        | `{ department: "<name-slug>" }`           | managed Bereiche, then `GET /departments` (#108)                  |
@@ -595,6 +595,10 @@ Three things are hard errors at **plan** time, never a guessed `dataId`:
 - a **bare string** on a non-group dimension. A string always means "managed
   group", so on e.g. a `cdb_station` right it would either fail confusingly or —
   worse — match an unrelated group that happens to carry that key.
+
+A **bare string** group scope resolves from ct's state (or a group declared in the same config)
+only. Once a group leaves ct's state because OpenTofu owns it, the bare string fails at plan time
+with a hint to write `{ group: "<key>" }`, which resolves through the id map (#202).
 
 ### Comment viewers: from catalog-only to declarable (#151)
 

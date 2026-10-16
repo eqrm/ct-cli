@@ -1,5 +1,5 @@
 ---
-sources_hash: 6809989e79b1fa43
+sources_hash: 50621f5e4d9e5064
 title: Group member fields
 sources:
   - src/engine/member-fields.ts
@@ -144,6 +144,10 @@ leaves an existing map untouched.
 Rows the group's member form shows but that are not group-scoped (person master
 data, group-type defaults) are not emitted: only `/memberfields/group` rows can
 be created or updated.
+
+A group the OpenTofu id map owns (see `ct.dynamicGroup` in
+[Dynamic groups](dynamic-groups.md)) is not adopted with its member fields: its
+owner declares them, so adopt ignores the flag for that group and warns.
 
 !!! note "Why opt-in, and not the default — and why that is temporary"
 Whether an owned child resource is adopted automatically is a project-wide

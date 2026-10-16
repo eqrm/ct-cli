@@ -70,6 +70,16 @@ export function emptyState(host: string): State {
 }
 
 /**
+ * An in-memory stand-in for a group ct reaches but does not own (#202, a `ct.dynamicGroup` or an
+ * id-map group): enough for the fetch / fold / refresh machinery, never saved, and with an empty
+ * snapshot so the owner's fields never surface as drift.
+ */
+export function virtualGroupEntry(key: string, id: number): ManagedResource {
+  const at = new Date(0).toISOString();
+  return { type: "group", id, key, fields: {}, adoptedAt: at, updatedAt: at };
+}
+
+/**
  * Load the state file at `path`, validating its shape and asserting it belongs
  * to `host`. A missing file yields an empty state for `host`. `host` is the
  * instance the caller intends to operate on: a file recorded against a

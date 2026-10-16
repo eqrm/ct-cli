@@ -745,3 +745,62 @@ describe("ct adopt group --with-member-fields (#135)", () => {
     expect(state.resources.area_a!.memberFields).toBeUndefined();
   });
 });
+
+describe("ct adopt group — a group the OpenTofu id map owns (#202)", () => {
+  async function mapGroups(entries: Array<{ key: string; id: number }>): Promise<void> {
+    const { writeIdMap } = await import("../src/resolve/idMap.js");
+    await writeIdMap(
+      HOST,
+      entries.map((e) => ({ type: "group", ...e })),
+      join(workDir, ".ct"),
+    );
+  }
+
+  async function captureStdout(fn: () => Promise<void>): Promise<string> {
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s) => {
+      writes.push(String(s));
+      return true;
+    });
+    try {
+      await fn();
+    } finally {
+      spy.mockRestore();
+    }
+    return writes.join("");
+  }
+
+  it("--with-dynamic emits a ct.dynamicGroup snippet and writes no state entry", async () => {
+    await mapGroups([{ key: "tofu_auto", id: 30 }]);
+    const out = await captureStdout(() => run(["group", "30", "--with-dynamic", "--state", statePath]));
+    expect(out).toContain("ct.dynamicGroup({");
+    expect(out).toContain('group: "tofu_auto"');
+    expect(out).not.toContain("→ ");
+    await expect(readFile(statePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("prints no empty block and saves nothing when every selected group is skipped", async () => {
+    await mapGroups([
+      { key: "tofu_auto", id: 30 },
+      { key: "tofu_static", id: 31 },
+    ]);
+    const out = await captureStdout(() => run(["group", "30", "31", "--state", statePath]));
+    expect(out).not.toContain("// group");
+    expect(out).not.toContain("null");
+    await expect(readFile(statePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("warns that --key and --with-member-fields do not apply to it", async () => {
+    await mapGroups([{ key: "tofu_auto", id: 30 }]);
+    const { runAdoptGroups } = await import("../src/application/operations/adopt-group.js");
+    const result = await runAdoptGroups({
+      ids: ["30"],
+      key: "other",
+      statePath,
+      withDynamic: true,
+      withMemberFields: true,
+    });
+    expect(result.warnings.map((w) => w.code)).toContain("ADOPT_ID_MAP_OPTION_IGNORED");
+    expect(result.value.groups).toEqual([expect.objectContaining({ key: "tofu_auto", action: null })]);
+  });
+});

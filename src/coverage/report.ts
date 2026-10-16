@@ -61,6 +61,8 @@ export interface DeclarabilityVerdict {
 
 export interface RoleInstanceCoverage extends RoleInstance {
   managedGroupKey: string | null;
+  /** The key the OpenTofu id map knows this group by (#202): owned elsewhere, so neither managed nor "unmanaged". */
+  ownedElsewhereKey?: string;
   verdict: DeclarabilityVerdict;
 }
 
@@ -72,11 +74,20 @@ export interface TypeCoverage {
   dynamic: number;
   /** Unmanaged groups that nevertheless carry authored grants — the real "you are missing this" number. */
   unmanagedWithGrants: number;
+  /** Groups the OpenTofu id map owns (#202); left out of `unmanagedWithGrants`. Present only when non-zero. */
+  ownedElsewhere?: number;
 }
 
 export interface CoverageReport {
   host: string;
-  groups: { total: number; managed: number; dynamic: number; managedDynamic: number };
+  groups: {
+    total: number;
+    managed: number;
+    dynamic: number;
+    managedDynamic: number;
+    /** Groups in the OpenTofu id map that ct's state does not hold (#202). Present only when non-zero. */
+    ownedElsewhere?: number;
+  };
   grants: {
     authored: number;
     roleInstances: number;
@@ -98,6 +109,8 @@ export interface CoverageInput {
   dynamicGroupIds: Set<number>;
   /** Every row of `/permissions/group_role`, unfiltered (inherited rows are dropped here). */
   groupRolePermissions: RawPermission[];
+  /** Group id → key for groups the OpenTofu id map owns (#202). Optional: no map, no such groups. */
+  idMapGroupKeys?: ReadonlyMap<number, string>;
 }
 
 /**
@@ -165,6 +178,12 @@ export function buildCoverageReport(input: CoverageInput): CoverageReport {
     if (r.type === "group") managedGroupKeyById.set(r.id, r.key);
   }
 
+  // A group the id map owns and ct's state does not (#202) is "owned elsewhere", not "unmanaged".
+  const ownedElsewhereKeyById = new Map<number, string>();
+  for (const [id, key] of input.idMapGroupKeys ?? []) {
+    if (!managedGroupKeyById.has(id)) ownedElsewhereKeyById.set(id, key);
+  }
+
   const rowsByDomainId = new Map<number, RawPermission[]>();
   for (const row of groupRolePermissions) {
     const list = rowsByDomainId.get(row.domainId);
@@ -183,6 +202,9 @@ export function buildCoverageReport(input: CoverageInput): CoverageReport {
       roleInstances.push({
         ...role,
         managedGroupKey: managedGroupKeyById.get(group.id) ?? null,
+        ...(ownedElsewhereKeyById.has(group.id)
+          ? { ownedElsewhereKey: ownedElsewhereKeyById.get(group.id)! }
+          : {}),
         verdict,
       });
     }
@@ -207,9 +229,12 @@ export function buildCoverageReport(input: CoverageInput): CoverageReport {
     const managed = managedGroupKeyById.has(group.id);
     if (managed) t.managed += 1;
     if (dynamicGroupIds.has(group.id)) t.dynamic += 1;
-    if (!managed && groupsWithGrants.has(group.id)) t.unmanagedWithGrants += 1;
+    // ownedElsewhereKeyById already excludes managed ids, so the two branches are disjoint.
+    if (ownedElsewhereKeyById.has(group.id)) t.ownedElsewhere = (t.ownedElsewhere ?? 0) + 1;
+    else if (!managed && groupsWithGrants.has(group.id)) t.unmanagedWithGrants += 1;
   }
 
+  const ownedElsewhere = groups.filter((g) => ownedElsewhereKeyById.has(g.id)).length;
   const blockingDimensions = new Set<string>();
   for (const r of roleInstances) for (const d of r.verdict.blockedBy) blockingDimensions.add(d);
 
@@ -220,6 +245,7 @@ export function buildCoverageReport(input: CoverageInput): CoverageReport {
       managed: groups.filter((g) => managedGroupKeyById.has(g.id)).length,
       dynamic: groups.filter((g) => dynamicGroupIds.has(g.id)).length,
       managedDynamic: groups.filter((g) => dynamicGroupIds.has(g.id) && managedGroupKeyById.has(g.id)).length,
+      ...(ownedElsewhere > 0 ? { ownedElsewhere } : {}),
     },
     grants: {
       authored: roleInstances.reduce((n, r) => n + r.verdict.grantCount, 0),
@@ -285,19 +311,23 @@ export function renderCoverage(report: CoverageReport): string {
   const lines: string[] = [];
   const g = report.groups;
   lines.push(
-    `${g.total} groups · ${g.managed} managed · ${report.grants.authored} authored grants over ` +
+    `${g.total} groups · ${g.managed} managed${g.ownedElsewhere ? ` · ${g.ownedElsewhere} owned elsewhere (id map)` : ""} · ${report.grants.authored} authored grants over ` +
       `${report.grants.roleInstances} role instances`,
   );
   lines.push("");
   const nameWidth = Math.max(12, ...report.byType.map((t) => t.name.length));
+  // The "elsewhere" column appears only when the id map owns any group (#202), so a host without
+  // OpenTofu keeps the table it always had.
+  const elsewhere = g.ownedElsewhere !== undefined;
   lines.push(
     `${"by type".padEnd(nameWidth)}  ${"total".padStart(5)}  ${"managed".padStart(7)}  ` +
-      `${"dynamic".padStart(7)}  unmanaged+grants`,
+      `${"dynamic".padStart(7)}  unmanaged+grants${elsewhere ? "  elsewhere" : ""}`,
   );
   for (const t of report.byType) {
     lines.push(
       `  ${t.name.padEnd(nameWidth - 2)}  ${String(t.total).padStart(5)}  ${String(t.managed).padStart(7)}  ` +
-        `${String(t.dynamic).padStart(7)}  ${String(t.unmanagedWithGrants).padStart(16)}`,
+        `${String(t.dynamic).padStart(7)}  ${String(t.unmanagedWithGrants).padStart(16)}` +
+        (elsewhere ? `  ${String(t.ownedElsewhere ?? 0).padStart(9)}` : ""),
     );
   }
   lines.push("");
@@ -317,7 +347,11 @@ export function renderCoverage(report: CoverageReport): string {
 export function renderRoleInstances(instances: readonly RoleInstanceCoverage[]): string {
   return instances
     .map((r) => {
-      const managed = r.managedGroupKey ? `managed as "${r.managedGroupKey}"` : "unmanaged";
+      const managed = r.managedGroupKey
+        ? `managed as "${r.managedGroupKey}"`
+        : r.ownedElsewhereKey
+          ? `owned elsewhere (id map) as "${r.ownedElsewhereKey}"`
+          : "unmanaged";
       const verdict = r.verdict.declarable
         ? "declarable"
         : `blocked by ${[...r.verdict.blockedBy, ...r.verdict.unknownAuthIds.map((a) => `authId ${a}`)].join(", ")}`;

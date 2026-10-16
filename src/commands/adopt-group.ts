@@ -78,10 +78,16 @@ export function adoptGroupCommand(): Command {
         return;
       }
       for (const group of result.value.groups) {
+        // action null: an id-map group (#202) — only its ruleset was captured, no state was written.
+        if (group.action === null) {
+          success(`Captured the ruleset of group #${group.id} ("${group.key}", id map) — no state written`);
+          continue;
+        }
         success(
           `${group.action === "created" ? "Adopted" : "Updated"} group #${group.id} as "${group.key}" → ${result.project.stateDisplayPath}`,
         );
       }
+      if (result.value.configBlock === null) return;
       info(result.value.groups.length === 1 ? "Config entry:" : "Config entries (paste into your config):");
       process.stdout.write(`${result.value.configBlock}\n`);
     });

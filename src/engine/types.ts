@@ -52,6 +52,12 @@ export interface DesiredResource {
    * field. Names, not ids, so one config stays portable across hosts.
    */
   roleMapping?: Record<string, string>;
+  /**
+   * Set by `ct.dynamicGroup` (#202): this declaration manages ONLY the group's dynamic status and
+   * ruleset, on a group ct does not own (its id comes from ct's state or the OpenTofu id map). It
+   * never creates, never deletes, and never writes a state entry. Only valid on a group.
+   */
+  rulesetOnly?: boolean;
 }
 
 export type PlanAction = "create" | "update" | "delete" | "no-op";
@@ -130,6 +136,8 @@ export interface PlanItem {
    * catalog), so the plan renders the same mapping the apply will send.
    */
   groupTypeMigration?: GroupTypeMigration;
+  /** Carried from {@link DesiredResource.rulesetOnly} (#202): apply writes the ruleset and nothing to ct's state. */
+  rulesetOnly?: boolean;
 }
 
 /** Pick a stable human-facing label without coupling renderers to resource-specific branches. */
