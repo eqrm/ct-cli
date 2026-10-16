@@ -187,6 +187,16 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
   const byFile = new Map<string, string[]>();
   const imports: ImportTarget[] = [];
   const moved: MovedTarget[] = [];
+  const writtenLabels = new Set<string>();
+  // The moves only ever add a block, so a map that does not load costs the moves and a warning, not
+  // the export: `--no-ids` is how a broken map gets rebuilt. A reference that needs the map still
+  // fails on it, as it always did.
+  let mapUnreadable: string | null = null;
+  const previousLabels = () =>
+    labelsFromMap().catch((err: unknown) => {
+      mapUnreadable = (err as Error).message;
+      return new Map<string, string>();
+    });
   const relabelled: { key: string; label: string }[] = [];
   const idEntries: IdMapEntry[] = [];
 
@@ -223,10 +233,11 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     // the report cannot drift from what was written.
     const label = block.split('"')[3];
     if (label !== undefined && label !== resource.key) relabelled.push({ key: resource.key, label });
+    if (label !== undefined) writtenLabels.add(`${resource.type}\u0000${label}`);
     // Same id under another label in the map: the key changed since the last export, and tofu still
     // has the resource at the old address. Selected resources only ever load the map here, so an
     // export with nothing selected still never reads it.
-    const previous = (await labelsFromMap()).get(`${resource.type}\u0000${resource.id}`);
+    const previous = (await previousLabels()).get(`${resource.type}\u0000${resource.id}`);
     if (label !== undefined && previous !== undefined && previous !== label) {
       moved.push({ type: resource.type, from: previous, to: label });
     }
@@ -239,6 +250,21 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
       id: resource.id,
       ...(label !== undefined && label !== resource.key ? { label } : {}),
     });
+  }
+
+  // A move whose old address this export still writes, because two keys swapped or a new resource
+  // took over the old key, is one tofu refuses ("Moved object still exists"), and so is a source two
+  // moves share. Leaving the move out instead would let tofu update the wrong object in place, so
+  // neither is written and the user is told to move the state by hand.
+  const sources = new Map<string, number>();
+  for (const m of moved)
+    sources.set(`${m.type}\u0000${m.from}`, (sources.get(`${m.type}\u0000${m.from}`) ?? 0) + 1);
+  const blockedMoves = moved.filter(
+    (m) => writtenLabels.has(`${m.type}\u0000${m.from}`) || sources.get(`${m.type}\u0000${m.from}`)! > 1,
+  );
+  if (blockedMoves.length > 0) {
+    const blocked = new Set(blockedMoves);
+    moved.splice(0, moved.length, ...moved.filter((m) => !blocked.has(m)));
   }
 
   if (unresolved.length > 0) {
@@ -313,6 +339,28 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
         `campus: ${campusUnknown.join(", ")}. If one has a campus in ChurchTools, \`tofu plan\` will ` +
         `propose clearing it — check those groups in the plan before applying.`,
       details: { keys: campusUnknown },
+    });
+  }
+
+  if (blockedMoves.length > 0) {
+    const pairs = blockedMoves.map((m) => `${hclType(m.type)}.${m.from} -> ${m.to}`);
+    warnings.push({
+      code: "EXPORT_MOVE_CONFLICT",
+      message:
+        `${blockedMoves.length} re-keyed resource(s) got no moved block, because the old address is still in ` +
+        `use in this export: ${pairs.join(", ")}. On a host whose tofu state has the old address, move it by ` +
+        `hand (\`tofu state mv\`) before applying, or the plan updates the wrong object in place.`,
+      details: { moves: blockedMoves.map((m) => ({ type: m.type, from: m.from, to: m.to })) },
+    });
+  }
+
+  if (mapUnreadable !== null) {
+    warnings.push({
+      code: "EXPORT_MOVES_SKIPPED",
+      message:
+        `The id map could not be read, so re-keyed resources got no moved block: ${mapUnreadable} ` +
+        `Refresh it from tofu (\`tofu state pull | ct ids sync --tofu-state -\`) and export again.`,
+      details: {},
     });
   }
 

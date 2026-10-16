@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runExportTf } from "../../src/application/operations/export-tf.js";
-import { writeIdMap } from "../../src/resolve/idMap.js";
+import { idMapPath, writeIdMap } from "../../src/resolve/idMap.js";
 
 const HOST = "https://example.church.tools";
 
@@ -441,5 +441,36 @@ describe("runExportTf — re-keyed resources", () => {
     await exportInto({ a: row("campus", "a", 7) });
     const result = await exportInto({ a: row("campus", "a", 7), t: row("group-type", "t", 7) });
     expect(result.value.moved).toEqual([]);
+  });
+
+  it("writes no moved block when two keys swapped, and warns instead", async () => {
+    await exportInto({ x: row("campus", "x", 1), y: row("campus", "y", 2) });
+    const result = await exportInto({ y: row("campus", "y", 1), x: row("campus", "x", 2) });
+    expect(result.value.moved).toEqual([]);
+    expect(await readFile(join(dir, "tofu", "imports.tf"), "utf8")).not.toContain("moved");
+    expect(result.warnings.map((w) => w.code)).toContain("EXPORT_MOVE_CONFLICT");
+  });
+
+  it("writes no moved block when a new resource took over the old key", async () => {
+    await exportInto({ a: row("campus", "a", 1) });
+    const result = await exportInto({ c: row("campus", "c", 1), a: row("campus", "a", 3) });
+    expect(result.value.moved).toEqual([]);
+    expect(result.warnings.find((w) => w.code === "EXPORT_MOVE_CONFLICT")?.message).toContain(
+      "churchtools_campus.a -> c",
+    );
+  });
+
+  it("keeps a --no-ids export working on an unreadable id map, and says the moves were skipped", async () => {
+    await mkdir(join(dir, ".ct"), { recursive: true });
+    await writeFile(idMapPath(HOST, join(dir, ".ct")), "{ not json", "utf8");
+    await stateWith({ a: row("campus", "a", 1) });
+    const result = await runExportTf({
+      cwd: dir,
+      statePath: "ct-state.json",
+      outDir: "tofu",
+      writeIds: false,
+    });
+    expect(result.value.imported).toBe(1);
+    expect(result.warnings.map((w) => w.code)).toContain("EXPORT_MOVES_SKIPPED");
   });
 });

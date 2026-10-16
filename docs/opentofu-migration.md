@@ -177,6 +177,12 @@ The id map is the only record of the old label. An export that writes the map
 block. Apply `imports.tf` on each host before re-exporting, or export with
 `--no-ids` and refresh the map from tofu afterwards (`ct ids sync`).
 
+No `moved` block is written when the old address is still in use in the same
+export, because two keys swapped or a new resource took over the old key. tofu
+rejects such a move, and leaving it out would update the wrong object in place.
+The export warns instead (`EXPORT_MOVE_CONFLICT`). Move the state by hand with
+`tofu state mv` before applying.
+
 ## `ct auth token`: a credential helper (#179)
 
 The provider needs credentials, and its `token` attribute wants a ChurchTools
