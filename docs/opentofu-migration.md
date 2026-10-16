@@ -79,13 +79,14 @@ ct export tf --env prod --no-ids   # …without the map, if your repo generates 
 The map is written under `.ct/`, not into the tofu output directory: it is `ct`'s
 input, not part of the root module tofu reads.
 
-An export rewrites only the types it actually exported resources of, and carries
-the rest of the map over untouched — otherwise a type-at-a-time cutover would drop
-the ids of every type it had not reached yet, or (once tier 0 has left `ct`'s
-state) of every type it had already handed to tofu. A type that was selected but
-has no resources in state counts as not exported. Within an exported type the
-rewrite is wholesale: a resource that has left `ct`'s state while others of its
-type stayed has left `ct`'s ownership, and its id goes with it.
+An export **upserts** into the map and never drops an id on its own: an entry it
+exported replaces the previous entry with the same key or the same id, and every
+other entry is carried over. Otherwise a type-at-a-time cutover would drop the ids
+of every type it had not reached yet, and once tier 0 has left `ct`'s state, a
+single campus coming back into it (an adopt, a straggler on one host) would wipe
+the tofu-owned rest of the type. Ids that are really gone are pruned by
+`ct ids sync`, which reads tofu's state. Until that sync, a reference to an id
+`ct` deleted outright fails at plan time instead of at export.
 
 An export that maps **nothing** leaves an existing map alone and says so, rather
 than emptying it. That is not an edge case but the end state: once tier-0 is gone

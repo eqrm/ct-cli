@@ -73,24 +73,28 @@ function address(type: string, key: string): string {
  * `personStatus: "status_unbekannt"` resolving once tier-0 leaves ct's state, and their keys are not
  * name-derived, so the live-name fallback cannot cover for them: the next `ct plan` hard-errors.
  *
- * So a type this run EXPORTED (at least one resource of it) is rewritten wholesale — a resource that
- * left state while others of its type stayed has left ct's ownership, and its id goes with it —
- * while every other type is carried over untouched. "Selected but empty" counts as not exported, not
- * as "now has no ids": after a tier's cutover, a full export selects campuses and finds none in
- * state, because tofu owns them, and those are exactly the ids the map must keep. A run that exports
- * every exportable type carries nothing and never reads the old map, which is also why a corrupt or
- * foreign map can only fail the runs that cannot do their job without reading it.
+ * So the export UPSERTS: an entry this run exported replaces the previous entry with the same key or
+ * the same id, and every other previous entry is carried over untouched. It never drops an id on its
+ * own. Neither "selected but absent from state" nor "absent while others of its type are present"
+ * means the id is dead: after a tier's cutover tofu owns those rows, and a single row of the type
+ * coming back into ct's state (an adopt, a straggler on one host) must not wipe the rest of the type.
+ * Pruning ids that really are gone is `ct ids sync --tofu-state`'s job, which reads the authoritative
+ * source. The cost is that an id ct deleted outright lingers until that sync, and a reference to it
+ * then fails at plan time rather than at export.
  */
 async function carryOverUncoveredIds(
   host: string,
   dir: string,
   fresh: readonly IdMapEntry[],
 ): Promise<IdMapEntry[]> {
-  const covered = new Set(fresh.map((entry) => entry.type));
-  if (EXPORTABLE_TYPES.every((type) => covered.has(type))) return [...fresh];
   const previous = await loadIdMap(host, dir);
   if (!previous) return [...fresh];
-  return [...previous.entries.filter((entry) => !covered.has(entry.type)), ...fresh];
+  const keys = new Set(fresh.map((e) => `${e.type}\u0000${e.key}`));
+  const ids = new Set(fresh.map((e) => `${e.type}\u0000${e.id}`));
+  const kept = previous.entries.filter(
+    (e) => !keys.has(`${e.type}\u0000${e.key}`) && !ids.has(`${e.type}\u0000${e.id}`),
+  );
+  return [...kept, ...fresh];
 }
 
 /**
@@ -112,12 +116,16 @@ function referenceResolver(rows: readonly ManagedResource[], loadMap: () => Prom
   const fromMap = () =>
     (map ??= loadMap().then((loaded) => {
       const byId = new Map<string, string>();
-      for (const e of loaded?.entries ?? []) byId.set(`${e.type}\u0000${e.id}`, e.key);
+      // The label the map recorded is the address tofu actually has; re-deriving it from the key
+      // would agree today, but only for as long as hclLabel never changes.
+      for (const e of loaded?.entries ?? []) byId.set(`${e.type}\u0000${e.id}`, e.label ?? hclLabel(e.key));
       return byId;
     }));
   return async (type: string, id: number): Promise<string | null> => {
-    const key = fromState.get(`${type}\u0000${id}`) ?? (await fromMap()).get(`${type}\u0000${id}`);
-    return key === undefined ? null : `${hclType(type)}.${hclLabel(key)}.id`;
+    const fromStateKey = fromState.get(`${type}\u0000${id}`);
+    const label =
+      fromStateKey !== undefined ? hclLabel(fromStateKey) : (await fromMap()).get(`${type}\u0000${id}`);
+    return label === undefined ? null : `${hclType(type)}.${label}.id`;
   };
 }
 
@@ -178,7 +186,15 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     const references: Record<string, string> = {};
     for (const [field, target] of Object.entries(REFERENCE_FIELDS[resource.type] ?? {})) {
       const id = resource.fields[field];
-      if (typeof id !== "number") continue; // null/absent: omitted by the renderer, nothing to point at
+      if (id === null || id === undefined) continue; // omitted by the renderer, nothing to point at
+      // Anything else that is not a number would be written as a literal by the renderer — the
+      // cross-host bug references exist to prevent — so it is an error, not a skip.
+      if (typeof id !== "number") {
+        unresolved.push(
+          `${resource.type} "${resource.key}": ${field} = ${JSON.stringify(id)} is not a numeric id`,
+        );
+        continue;
+      }
       const expr = await resolveReference(target, id);
       if (expr === null) unresolved.push(`${resource.type} "${resource.key}": ${field} = ${id} (${target})`);
       else references[field] = expr;
@@ -208,7 +224,7 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
 
   if (unresolved.length > 0) {
     throw new Error(
-      `export: ${unresolved.length} reference(s) point at an id that is neither in ct's state nor in ` +
+      `export: ${unresolved.length} reference(s) cannot be written: the id is not numeric, or is neither in ct's state nor in ` +
         `the id map for ${project.host}:\n  ${unresolved.join("\n  ")}\n` +
         `Refresh the map from tofu first (\`tofu state pull | ct ids sync --tofu-state -\`). A literal id ` +
         `would be right on this host and wrong on the other one, so the export does not fall back to it.`,

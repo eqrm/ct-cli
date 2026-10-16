@@ -256,9 +256,10 @@ describe("runExportTf — the id map", () => {
     expect(map.$meta).toMatchObject({ entries: 2 });
   });
 
-  // The other half of the same rule: a type the export DID cover is rewritten wholesale, because a
-  // resource that left ct's state has left ct's ownership and its id must go with it.
-  it("drops an entry whose resource left state, for a type the export covered", async () => {
+  // The export upserts and never drops: one campus back in ct's state after the cutover (an adopt,
+  // a straggler on one host) must not wipe the tofu-owned rest of the type. Pruning dead ids is
+  // `ct ids sync --tofu-state`'s job.
+  it("keeps the other entries of a type when only one of them is back in state", async () => {
     await exportInto({
       mainz: row("campus", "mainz", 4),
       horgen: row("campus", "horgen", 5),
@@ -266,8 +267,15 @@ describe("runExportTf — the id map", () => {
     });
     const result = await exportInto({ mainz: row("campus", "mainz", 4) }, ["campus"]);
     const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
-    expect(map.campus).toEqual({ mainz: { id: 4 } });
+    expect(map.campus).toEqual({ mainz: { id: 4 }, horgen: { id: 5 } });
     expect(map["person-status"]).toEqual({ status_unbekannt: { id: 9 } });
+  });
+
+  it("replaces an entry whose key now has another id, and an id now under another key", async () => {
+    await exportInto({ a: row("campus", "a", 4), b: row("campus", "b", 5) });
+    const result = await exportInto({ a: row("campus", "a", 6), c: row("campus", "c", 5) });
+    const map = JSON.parse(await readFile(result.value.idMapPath!, "utf8"));
+    expect(map.campus).toEqual({ a: { id: 6 }, c: { id: 5 } });
   });
 
   // The end state the map exists to serve: tier-0 has left ct.config.ts AND ct-state.<env>.json, so
@@ -315,7 +323,7 @@ describe("runExportTf — groups", () => {
     return { type: "group", key, id, fields: { name: key, groupStatusId: 1, ...fields } };
   }
 
-  async function seedIdMap(entries: { type: string; key: string; id: number }[]) {
+  async function seedIdMap(entries: { type: string; key: string; id: number; label?: string }[]) {
     await writeIdMap(HOST, entries, join(dir, ".ct"));
   }
 
@@ -337,6 +345,24 @@ describe("runExportTf — groups", () => {
       exportInto({ jugend: group("jugend", 99, { groupTypeId: 4, campusId: 6 }) }),
     ).rejects.toThrow(/group "jugend": campusId = 6 \(campus\)/);
     await expect(readdir(join(dir, "tofu"))).rejects.toThrow(/ENOENT/);
+  });
+
+  it("uses the label the id map recorded as the address", async () => {
+    await seedIdMap([
+      { type: "campus", key: "nord", id: 0, label: "standort_nord" },
+      { type: "group-type", key: "dienst", id: 4 },
+    ]);
+    await exportInto({ jugend: group("jugend", 99, { groupTypeId: 4, campusId: 0 }) });
+    expect(await readFile(join(dir, "tofu", "groups.tf"), "utf8")).toContain(
+      "churchtools_campus.standort_nord.id",
+    );
+  });
+
+  it("refuses a reference that is not a number rather than writing it as a literal", async () => {
+    await seedIdMap([{ type: "group-type", key: "dienst", id: 4 }]);
+    await expect(exportInto({ jugend: group("jugend", 99, { groupTypeId: "4" }) })).rejects.toThrow(
+      /groupTypeId = "4" is not a numeric id/,
+    );
   });
 
   it("omits a campus that is null, and names the groups whose campus ct never recorded", async () => {
