@@ -162,6 +162,27 @@ and deleting `campuses.tf` would plan the destroy of every campus. So
 `ct export tf --env prod --only group --no-versions` can run against the real
 `tofu/` directory: it writes `groups.tf` and `imports.tf` and touches nothing else.
 
+### A re-keyed resource gets a `moved` block
+
+When a resource keeps its id but gets a new key, its HCL address changes. The
+export compares each id with the label the id map recorded for it, and when they
+differ it writes a `moved` block at the top of `imports.tf`, next to the import
+for the new address. Without it, `tofu plan` would propose destroying the old
+address, or fail on `prevent_destroy`. tofu moves the resource first, and the
+import of the same id then does nothing. If the old address never reached tofu's
+state, the move does nothing and the import brings the resource in.
+
+The id map is the only record of the old label. An export that writes the map
+(the default) records the new label, so a **second** export loses the `moved`
+block. Apply `imports.tf` on each host before re-exporting, or export with
+`--no-ids` and refresh the map from tofu afterwards (`ct ids sync`).
+
+No `moved` block is written when the old address is still in use in the same
+export, because two keys swapped or a new resource took over the old key. tofu
+rejects such a move, and leaving it out would update the wrong object in place.
+The export warns instead (`EXPORT_MOVE_CONFLICT`). Move the state by hand with
+`tofu state mv` before applying.
+
 ## `ct auth token`: a credential helper (#179)
 
 The provider needs credentials, and its `token` attribute wants a ChurchTools

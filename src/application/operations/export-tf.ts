@@ -2,7 +2,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { assertLabelsUnique, hclLabel, hclType, REFERENCE_FIELDS, renderResource } from "../../export/hcl.js";
-import { renderImports, type ImportTarget } from "../../export/imports.js";
+import { renderImports, renderMoved, type ImportTarget, type MovedTarget } from "../../export/imports.js";
 import { EXPORTABLE_TYPES, fileForType } from "../../export/layout.js";
 import { renderVersions } from "../../export/provider.js";
 import { CATALOG_DIR } from "../../permissions/catalog-store.js";
@@ -40,6 +40,8 @@ export interface ExportTfRequest extends ProjectRequest {
 export interface ExportTfValue {
   files: string[];
   imported: number;
+  /** Resources whose id the id map knows under another label, written as `moved` blocks (#199). */
+  moved: MovedTarget[];
   /** Keys that could not be used verbatim as an HCL identifier. */
   relabelled: { key: string; label: string }[];
   /** Managed types the provider has no mapping for yet, with how many were skipped. */
@@ -102,31 +104,39 @@ async function carryOverUncoveredIds(
  * resource it points at.
  *
  * ct's own state first, then the committed id map — which, after a tier's cutover, is the only
- * place ct can still learn that campus 6 is `churchtools_campus.nord` on this host. The map is
- * loaded only when state cannot answer, so an export that needs no reference never reads it (and a
- * corrupt map fails only the export that depends on it).
+ * place ct can still learn that campus 6 is `churchtools_campus.nord` on this host.
  *
  * A miss is collected, not guessed at: falling back to the number would export an HCL file that is
  * right on this host and silently wrong on the other one.
  */
-function referenceResolver(rows: readonly ManagedResource[], loadMap: () => Promise<IdMap | null>) {
+function referenceResolver(
+  rows: readonly ManagedResource[],
+  labelsFromMap: () => Promise<Map<string, string>>,
+) {
   const fromState = new Map<string, string>();
   for (const r of rows) fromState.set(`${r.type}\u0000${r.id}`, r.key);
-  let map: Promise<Map<string, string>> | null = null;
-  const fromMap = () =>
-    (map ??= loadMap().then((loaded) => {
-      const byId = new Map<string, string>();
-      // The label the map recorded is the address tofu actually has; re-deriving it from the key
-      // would agree today, but only for as long as hclLabel never changes.
-      for (const e of loaded?.entries ?? []) byId.set(`${e.type}\u0000${e.id}`, e.label ?? hclLabel(e.key));
-      return byId;
-    }));
   return async (type: string, id: number): Promise<string | null> => {
     const fromStateKey = fromState.get(`${type}\u0000${id}`);
     const label =
-      fromStateKey !== undefined ? hclLabel(fromStateKey) : (await fromMap()).get(`${type}\u0000${id}`);
+      fromStateKey !== undefined ? hclLabel(fromStateKey) : (await labelsFromMap()).get(`${type}\u0000${id}`);
     return label === undefined ? null : `${hclType(type)}.${label}.id`;
   };
+}
+
+/**
+ * `type\0id` → the HCL label the id map recorded, loaded once and only when asked for.
+ *
+ * The label the map recorded is the address tofu actually has; re-deriving it from the key would
+ * agree today, but only for as long as hclLabel never changes.
+ */
+function mapLabels(loadMap: () => Promise<IdMap | null>): () => Promise<Map<string, string>> {
+  let labels: Promise<Map<string, string>> | null = null;
+  return () =>
+    (labels ??= loadMap().then((loaded) => {
+      const byId = new Map<string, string>();
+      for (const e of loaded?.entries ?? []) byId.set(`${e.type}\u0000${e.id}`, e.label ?? hclLabel(e.key));
+      return byId;
+    }));
 }
 
 export async function runExportTf(request: ExportTfRequest): Promise<ExportTfResult> {
@@ -164,7 +174,8 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     .map(([type, count]) => ({ type, count }));
 
   const catalogDir = join(project.cwd, CATALOG_DIR);
-  const resolveReference = referenceResolver(rows, () => loadIdMap(project.host, catalogDir));
+  const labelsFromMap = mapLabels(() => loadIdMap(project.host, catalogDir));
+  const resolveReference = referenceResolver(rows, labelsFromMap);
   const unresolved: string[] = [];
   // A group adopted before campus was a managed field has no `campusId` in state at all. The export
   // can only write "no campus" for it, and if the live group HAS a campus, `tofu plan` then proposes
@@ -175,6 +186,17 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
 
   const byFile = new Map<string, string[]>();
   const imports: ImportTarget[] = [];
+  const moved: MovedTarget[] = [];
+  const writtenLabels = new Set<string>();
+  // The moves only ever add a block, so a map that does not load costs the moves and a warning, not
+  // the export: `--no-ids` is how a broken map gets rebuilt. A reference that needs the map still
+  // fails on it, as it always did.
+  let mapUnreadable: string | null = null;
+  const previousLabels = () =>
+    labelsFromMap().catch((err: unknown) => {
+      mapUnreadable = (err as Error).message;
+      return new Map<string, string>();
+    });
   const relabelled: { key: string; label: string }[] = [];
   const idEntries: IdMapEntry[] = [];
 
@@ -211,6 +233,14 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     // the report cannot drift from what was written.
     const label = block.split('"')[3];
     if (label !== undefined && label !== resource.key) relabelled.push({ key: resource.key, label });
+    if (label !== undefined) writtenLabels.add(`${resource.type}\u0000${label}`);
+    // Same id under another label in the map: the key changed since the last export, and tofu still
+    // has the resource at the old address. Selected resources only ever load the map here, so an
+    // export with nothing selected still never reads it.
+    const previous = (await previousLabels()).get(`${resource.type}\u0000${resource.id}`);
+    if (label !== undefined && previous !== undefined && previous !== label) {
+      moved.push({ type: resource.type, from: previous, to: label });
+    }
     // The id map is built from the same loop, so it cannot describe a different set of resources
     // than the HCL and the import blocks do. The label rides along so a later `ct ids sync` can map
     // a tofu address back to the ct key (the relabelling is many-to-one, #181).
@@ -220,6 +250,21 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
       id: resource.id,
       ...(label !== undefined && label !== resource.key ? { label } : {}),
     });
+  }
+
+  // A move whose old address this export still writes, because two keys swapped or a new resource
+  // took over the old key, is one tofu refuses ("Moved object still exists"), and so is a source two
+  // moves share. Leaving the move out instead would let tofu update the wrong object in place, so
+  // neither is written and the user is told to move the state by hand.
+  const sources = new Map<string, number>();
+  for (const m of moved)
+    sources.set(`${m.type}\u0000${m.from}`, (sources.get(`${m.type}\u0000${m.from}`) ?? 0) + 1);
+  const blockedMoves = moved.filter(
+    (m) => writtenLabels.has(`${m.type}\u0000${m.from}`) || sources.get(`${m.type}\u0000${m.from}`)! > 1,
+  );
+  if (blockedMoves.length > 0) {
+    const blocked = new Set(blockedMoves);
+    moved.splice(0, moved.length, ...moved.filter((m) => !blocked.has(m)));
   }
 
   if (unresolved.length > 0) {
@@ -239,7 +284,13 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     await writeFile(join(outDir, file), blocks.join("\n"), "utf8");
     written.push(file);
   }
-  await writeFile(join(outDir, "imports.tf"), renderImports(imports), "utf8");
+  // The moved blocks sit with the imports: both describe how THIS host's state reaches the config,
+  // and both are needed only until that state has been applied once.
+  await writeFile(
+    join(outDir, "imports.tf"),
+    [renderMoved(moved), renderImports(imports)].filter((part) => part !== "").join("\n"),
+    "utf8",
+  );
   written.push("imports.tf");
   const writeVersions = request.writeVersions ?? true;
   if (writeVersions) {
@@ -291,6 +342,28 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
     });
   }
 
+  if (blockedMoves.length > 0) {
+    const pairs = blockedMoves.map((m) => `${hclType(m.type)}.${m.from} -> ${m.to}`);
+    warnings.push({
+      code: "EXPORT_MOVE_CONFLICT",
+      message:
+        `${blockedMoves.length} re-keyed resource(s) got no moved block, because the old address is still in ` +
+        `use in this export: ${pairs.join(", ")}. On a host whose tofu state has the old address, move it by ` +
+        `hand (\`tofu state mv\`) before applying, or the plan updates the wrong object in place.`,
+      details: { moves: blockedMoves.map((m) => ({ type: m.type, from: m.from, to: m.to })) },
+    });
+  }
+
+  if (mapUnreadable !== null) {
+    warnings.push({
+      code: "EXPORT_MOVES_SKIPPED",
+      message:
+        `The id map could not be read, so re-keyed resources got no moved block: ${mapUnreadable} ` +
+        `Refresh it from tofu (\`tofu state pull | ct ids sync --tofu-state -\`) and export again.`,
+      details: {},
+    });
+  }
+
   if (idMapKept) {
     warnings.push({
       code: "IDS_KEPT",
@@ -305,7 +378,7 @@ export async function runExportTf(request: ExportTfRequest): Promise<ExportTfRes
   return {
     operation: "export-tf",
     project,
-    value: { files: written, imported: imports.length, relabelled, skipped, idMapPath },
+    value: { files: written, imported: imports.length, moved, relabelled, skipped, idMapPath },
     warnings,
   };
 }

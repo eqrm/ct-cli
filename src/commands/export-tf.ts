@@ -40,6 +40,9 @@ export function exportCommand(): Command {
       for (const r of value.relabelled) {
         info(`relabelled "${r.key}" -> "${r.label}" (HCL references must be identifiers)`);
       }
+      for (const m of value.moved) {
+        info(`moved "${m.from}" -> "${m.to}" (${m.type} re-keyed; see imports.tf)`);
+      }
       if (value.idMapPath) info(`wrote ${relative(process.cwd(), value.idMapPath)}`);
       info(`${value.imported} resources exported`);
       // Printed last, after the success line, so the gap is the final thing on
