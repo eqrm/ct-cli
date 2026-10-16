@@ -184,6 +184,23 @@ describe("Resolver.resolve", () => {
     expect(await r.resolve(ref.groupRole("kids", "Leiter"), 'perm "p"')).toBe(2882);
   });
 
+  it("prefers a same-run-declared group over a stale id-map entry for a group_role", async () => {
+    const desired: DesiredResource[] = [{ type: "group", key: "kids", fields: {}, dependsOn: [] }];
+    const idMap = { path: ".ct/ids.h.json", ids: new Map([["group\u0000kids", 42]]) };
+    const r = new Resolver({ client: fakeClient({}), state: emptyState("h"), desired, idMap });
+    await expect(r.resolve(ref.groupRole("kids", "Leiter"), 'perm "p"')).rejects.toThrow(
+      /declared in this config but not yet created/,
+    );
+  });
+
+  it("names the id map when a group_role's group is in neither state nor the map", async () => {
+    const idMap = { path: ".ct/ids.h.json", ids: new Map<string, number>() };
+    const r = new Resolver({ client: fakeClient({}), state: emptyState("h"), desired: NO_DESIRED, idMap });
+    await expect(r.resolve(ref.groupRole("ghost", "Leiter"), 'perm "p"')).rejects.toThrow(
+      /\.ct\/ids\.h\.json has no group "ghost".*ct ids sync/s,
+    );
+  });
+
   it("errors when a group_role names a group that isn't managed", async () => {
     const client = fakeClient({});
     const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });

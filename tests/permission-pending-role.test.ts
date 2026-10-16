@@ -193,4 +193,17 @@ describe("pending role definition in a group_role domain (#120)", () => {
       resolver.resolve(ref.groupRole("amflowsequip", "Admin"), 'group_role "x".domainId'),
     ).rejects.toThrow(/declared as a roleDefinition in this config but does not exist on this host yet/);
   });
+
+  it("fails at plan time instead of deferring when the group is only in the id map", async () => {
+    // A group tofu owns is in neither ct's state nor its config. A pending domain is finished at apply
+    // from state, so deferring would only fail after the resource tier had written.
+    const state = emptyState(HOST);
+    const client = mockClient(STOCK_ROLES);
+    const idMap = { path: ".ct/ids.h.json", ids: new Map([["group\u0000amflowsequip", GROUP_ID]]) };
+    const resolver = new Resolver({ client, state, desired, host: HOST, idMap });
+    const plan = buildPermissionPlan(client, state, [grantBlock], desired, resolver);
+    await expect(plan).rejects.toThrow(
+      /"Admin" is declared as a roleDefinition.*Apply the master data first/is,
+    );
+  });
 });
