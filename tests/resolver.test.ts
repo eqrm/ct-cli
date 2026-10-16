@@ -177,6 +177,13 @@ describe("Resolver.resolve", () => {
     );
   });
 
+  it("resolves a group_role on a group tofu owns through the id map", async () => {
+    const client = fakeClient({ "/groups/42/roles": [{ id: 2882, name: "Leiter" }] });
+    const idMap = { path: ".ct/ids.h.json", ids: new Map([["group\u0000kids", 42]]) };
+    const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED, idMap });
+    expect(await r.resolve(ref.groupRole("kids", "Leiter"), 'perm "p"')).toBe(2882);
+  });
+
   it("errors when a group_role names a group that isn't managed", async () => {
     const client = fakeClient({});
     const r = new Resolver({ client, state: emptyState("h"), desired: NO_DESIRED });

@@ -505,13 +505,16 @@ export class Resolver {
   }
 
   /**
-   * Resolve the group half of a group_role ref to a managed group id (state ∪ declared). A group
-   * declared in this run resolves to a {@link PendingRef} when the call site can finish it later
-   * (#106) and stays a hard error otherwise.
+   * Resolve the group half of a group_role ref to a managed group id (state ∪ declared ∪ id map). A
+   * group declared in this run resolves to a {@link PendingRef} when the call site can finish it
+   * later (#106) and stays a hard error otherwise. A group tofu owns is in neither state nor config,
+   * so the id map is what keeps its grants resolvable, exactly as for a plain group ref.
    */
   private groupIdForRole(r: GroupRoleRef, site: string, opts: ResolveOptions): number | PendingRef {
     const managed = this.state.resources[r.group];
     if (managed && managed.type === "group") return managed.id;
+    const mapped = this.idMap?.ids.get(`group\u0000${r.group}`);
+    if (mapped !== undefined && !this.declaredByType.get("group")?.has(r.group)) return mapped;
     if (this.declaredByType.get("group")?.has(r.group)) {
       if (opts.pendingGroupRole) return pendingRef(r);
       throw new Error(
