@@ -108,12 +108,12 @@ describe("Resolver", () => {
   it("resolves a role definition once it left ct's state (tier 3)", async () => {
     // `roleDef` reads type "group-role"; after `ct state rm group-role <key>` only the map knows it.
     const map = parseIdMap(
-      renderIdMap(HOST, [{ type: "group-role", key: "flow_mitglied", id: 49 }], "ct ids sync"),
+      renderIdMap(HOST, [{ type: "group-role", key: "team_member", id: 7 }], "ct ids sync"),
       ".ct/ids.json",
       HOST,
     );
     const resolver = new Resolver({ client: client as never, state, desired: [], host: HOST, idMap: map });
-    expect(await resolver.resolve(ref.roleDef("flow_mitglied"), "site")).toBe(49);
+    expect(await resolver.resolve(ref.roleDef("team_member"), "site")).toBe(7);
   });
 
   it("still prefers ct's own state over the map", async () => {
@@ -214,8 +214,8 @@ describe("readTfState", () => {
         {
           mode: "managed",
           type: "churchtools_group_role_definition",
-          name: "flow_mitglied",
-          instances: [{ attributes: { id: "49" } }],
+          name: "team_member",
+          instances: [{ attributes: { id: "7" } }],
         },
         // for_each blocks stay unmapped, as for every other type.
         {
@@ -229,7 +229,7 @@ describe("readTfState", () => {
         },
       ],
     });
-    expect(entries).toEqual([{ type: "group-role", key: "flow_mitglied", id: 49 }]);
+    expect(entries).toEqual([{ type: "group-role", key: "team_member", id: 7 }]);
     expect(unmapped).toEqual([]);
   });
 
