@@ -16,9 +16,13 @@ import type { IdMapEntry } from "./idMap.js";
 
 /** Terraform resource type → ct resource type, derived from the exporter's own table so the two
  *  directions cannot drift. */
-const CT_TYPE_BY_HCL_TYPE: ReadonlyMap<string, string> = new Map(
-  EXPORTABLE_TYPES.map((ctType) => [hclType(ctType), ctType] as const),
-);
+const CT_TYPE_BY_HCL_TYPE: ReadonlyMap<string, string> = new Map([
+  ...EXPORTABLE_TYPES.map((ctType) => [hclType(ctType), ctType] as const),
+  // Role definitions (`/group/roles`) are hand-written in HCL once tofu owns them, so ct never
+  // EXPORTS them (they are not in EXPORTABLE_TYPES); but a `role-def` reference still has to resolve
+  // to their ids after the entries leave ct's state. Read-only mapping: state → id map.
+  ["churchtools_group_role_definition", "group-role"] as const,
+]);
 
 export interface TfStateReadResult {
   entries: IdMapEntry[];

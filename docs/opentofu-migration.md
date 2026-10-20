@@ -108,6 +108,10 @@ ct ids sync --env prod --tofu-state terraform.tfstate --dry-run
 ct ids list --env prod                                    # what ct would resolve through
 ```
 
+Role definitions (`churchtools_group_role_definition`, tier 3) are read too, into
+the `group-role` section, so `{ roleDef: "…" }` references keep resolving once the
+roles leave ct's state. They are read-only here: `ct export tf` does not write them.
+
 `sync` reports every id it adds, changes or drops, and **refuses to replace a
 populated map with an empty one** — the likeliest cause of an empty read is the
 wrong workspace, and overwriting 50 working ids with nothing would break every
