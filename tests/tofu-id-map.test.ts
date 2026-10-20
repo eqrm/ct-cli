@@ -105,6 +105,17 @@ describe("Resolver", () => {
     expect(await resolver.resolve(ref.campus("mainz"), "site")).toBe(0);
   });
 
+  it("resolves a role definition once it left ct's state (tier 3)", async () => {
+    // `roleDef` reads type "group-role"; after `ct state rm group-role <key>` only the map knows it.
+    const map = parseIdMap(
+      renderIdMap(HOST, [{ type: "group-role", key: "team_member", id: 7 }], "ct ids sync"),
+      ".ct/ids.json",
+      HOST,
+    );
+    const resolver = new Resolver({ client: client as never, state, desired: [], host: HOST, idMap: map });
+    expect(await resolver.resolve(ref.roleDef("team_member"), "site")).toBe(7);
+  });
+
   it("still prefers ct's own state over the map", async () => {
     // ct never stops trusting what it owns: a resource still in ct's state is ct's, and a stale map
     // entry must not overrule it.
@@ -195,6 +206,31 @@ describe("readTfState", () => {
     ]);
     expect(unmapped).toEqual(["churchtools_age_group"]);
     expect(serial).toBe(12);
+  });
+
+  it("maps churchtools_group_role_definition to the group-role type", () => {
+    const { entries, unmapped } = readTfState({
+      resources: [
+        {
+          mode: "managed",
+          type: "churchtools_group_role_definition",
+          name: "team_member",
+          instances: [{ attributes: { id: "7" } }],
+        },
+        // for_each blocks stay unmapped, as for every other type.
+        {
+          mode: "managed",
+          type: "churchtools_group_role_definition",
+          name: "bulk",
+          instances: [
+            { index_key: "a", attributes: { id: "1" } },
+            { index_key: "b", attributes: { id: "2" } },
+          ],
+        },
+      ],
+    });
+    expect(entries).toEqual([{ type: "group-role", key: "team_member", id: 7 }]);
+    expect(unmapped).toEqual([]);
   });
 
   it("takes the label as the key when no previous map recorded a relabelling", () => {
