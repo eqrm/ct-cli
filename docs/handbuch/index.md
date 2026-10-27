@@ -44,6 +44,9 @@ each page marks explicitly what was **verified** and what is still an
   deleted just because it left the config.
 - **[Blueprints](blueprints.md)** — describing a repeated structure (e.g. one
   campus's area scaffold) once and instantiating it per campus.
+- **[API behaviour](api-behaviour.md)** — what ChurchTools does that its API
+  documentation does not say: the session cookie rename, login tokens, OAuth
+  clients, error bodies, and the traps in group membership reads and writes.
 
 !!! note "Language"
 These pages are English while the rest of the Handbuch is German. That is a
