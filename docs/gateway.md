@@ -7,7 +7,7 @@ server that signs your requests with AWS SigV4 (service `execute-api`) and forwa
 
 ```text
 ct get raw / tofu plan  ->  http://127.0.0.1:8766  ->  (SigV4)  ->  gateway  ->  ChurchTools
-   no credential            ct gateway proxy            MFA role       holds the session
+   no credential            ct gateway proxy            reader role    holds the session
 ```
 
 ## Configure
@@ -24,27 +24,34 @@ proxy forwards to:
       "gateway": {
         "url": "https://<id>.execute-api.eu-central-1.amazonaws.com",
         "region": "eu-central-1",
-        "profile": "my-ct-reader"
+        "profile": "eqrm-ct-reader"
       }
     }
   }
 }
 ```
 
-The AWS profile assumes the reader role with MFA (`~/.aws/config`):
+The AWS profile assumes the reader role (`~/.aws/config`). The reader role needs no MFA, so
+the default profile has no `mfa_serial` and `ct gateway proxy` never prompts:
 
 ```ini
-[profile my-ct-reader]
-role_arn = arn:aws:iam::<account>:role/<gateway-reader-role>
+[profile eqrm-ct-reader]
+role_arn = arn:aws:iam::600627318234:role/eqrm-ct-gateway-reader
 source_profile = default
-mfa_serial = arn:aws:iam::<account>:mfa/<user>
 region = eu-central-1
 ```
+
+Role sessions last one hour. The proxy re-assumes the role shortly before expiry, silently.
+
+Optional: if a role does require MFA, add `mfa_serial = arn:aws:iam::<account>:mfa/<user>` to
+the profile. The proxy then asks for the code on the terminal at start and at every refresh.
+Without a terminal (a Claude Code session, a background job) it does not wait for input: it
+fails at once with "requires MFA; start `ct gateway proxy` in your own terminal".
 
 ## Use
 
 ```bash
-ct gateway proxy --env prod-ro        # asks for the MFA code, then listens; Ctrl-C stops it
+ct gateway proxy --env prod-ro        # listens; Ctrl-C stops it (asks for a code only if the profile has mfa_serial)
 # in another shell:
 ct get raw /groups/123 --env prod-ro
 ct auth token --env prod-ro --raw     # placeholder "via-gateway" for tofu's ct_auth=session
@@ -65,4 +72,9 @@ discards it and the gateway uses its own session.
 - `ct` itself refuses writes for a gateway env ("`prod-ro` is read-only; writes happen in
   CI") before any request is made.
 - One log line per request on stderr: method, path without query, status. Never bodies.
-- Credentials are re-requested (new MFA prompt) shortly before the assumed role expires.
+- Credentials are re-requested shortly before the assumed role expires (a new MFA prompt only
+  if the profile has `mfa_serial`).
+- A `403` with a `blocked` body is the gateway's allowlist deciding. The proxy passes it to the
+  client unchanged and logs that the path is not on the gateway allowlist; `ct` reports the same.
+  Widening the allowlist is a PR in eqrm-infra `ct-read-gateway` (handler allowlist). There is
+  no automatic retry and no switching to another tier.

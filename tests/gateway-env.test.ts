@@ -99,6 +99,25 @@ describe("CtClient in gateway mode", () => {
     await c.legacyPostForm("churchauth/ajax", { func: "getMasterData" });
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+
+  it("explains a gateway 403 `blocked` as an allowlist decision and does not retry", async () => {
+    const { c, fetchMock } = client();
+    await c.authenticateViaGateway();
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async () => new Response('{"blocked":"GET /api/secret"}', { status: 403 }));
+    await expect(c.get("/secret")).rejects.toThrow(/not on the gateway allowlist.*ct-read-gateway/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the proxy's own read-only hint for locally refused requests", async () => {
+    const { c, fetchMock } = client();
+    await c.authenticateViaGateway();
+    fetchMock.mockImplementation(
+      async () =>
+        new Response('{"blocked":"X","hint":"ct gateway proxy is read-only: nope"}', { status: 403 }),
+    );
+    await expect(c.get("/x")).rejects.toThrow(/ct gateway proxy is read-only: nope/);
+  });
 });
 
 describe("ct auth token for a gateway env", () => {

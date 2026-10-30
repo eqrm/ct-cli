@@ -13,7 +13,7 @@ export function gatewayCommand(): Command {
   cmd
     .command("proxy")
     .description(
-      "Run a local SigV4-signing proxy (127.0.0.1) for a gateway env; asks for an MFA code on the terminal",
+      "Run a local SigV4-signing proxy (127.0.0.1) for a gateway env (asks for an MFA code only if the AWS profile has mfa_serial)",
     )
     .requiredOption("-e, --env <name>", "environment with a `gateway` block in ct.envs.json")
     .action(async (opts: { env: string }) => {

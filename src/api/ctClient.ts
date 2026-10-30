@@ -200,6 +200,21 @@ export class CtClient {
     }
   }
 
+  /**
+   * A gateway 403 with a `blocked` body is the allowlist deciding. Say so, so nobody retries or hunts
+   * for a credential problem. (The proxy's own refusals carry a `hint` naming the local rule instead.)
+   */
+  private failureMessage(base: string, status: number, body: unknown): string {
+    if (this.options.gatewayEnv === undefined || status !== 403) return base;
+    if (typeof body !== "object" || body === null || !("blocked" in body)) return base;
+    const hint = (body as { hint?: unknown }).hint;
+    if (typeof hint === "string" && hint.startsWith("ct gateway proxy")) return `${base}: ${hint}`;
+    return (
+      `${base}: this path is not on the gateway allowlist. Widening it goes through a PR in ` +
+      "eqrm-infra `ct-read-gateway` (handler allowlist); there is no retry or other tier."
+    );
+  }
+
   private assertWritable(what: string): void {
     if (this.options.gatewayEnv !== undefined) {
       throw new Error(
@@ -472,7 +487,12 @@ export class CtClient {
     );
     this.captureCookie(res);
     if (!res.ok) {
-      throw new CtApiError(`${label} failed`, res.status, await safeBody(res));
+      const failBody = await safeBody(res);
+      throw new CtApiError(
+        this.failureMessage(`${label} failed`, res.status, failBody),
+        res.status,
+        failBody,
+      );
     }
     const text = await res.text();
     let envelope: { status?: string; message?: string; data?: T };
@@ -607,7 +627,12 @@ export class CtClient {
       }
     }
     if (!res.ok) {
-      throw new CtApiError(`${method} ${path} failed`, res.status, await safeBody(res));
+      const failBody = await safeBody(res);
+      throw new CtApiError(
+        this.failureMessage(`${method} ${path} failed`, res.status, failBody),
+        res.status,
+        failBody,
+      );
     }
     if (res.status === 204) {
       return undefined;
