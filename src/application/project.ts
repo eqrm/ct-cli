@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { resolveConfig } from "../config.js";
 import { resolveConfigPath } from "../config/load.js";
-import { loadEnvProfile, resolveEnvsPath, type EnvProfile } from "../env/envs.js";
+import { loadEnvProfile, resolveEnvsPath, setGatewayFlag, type EnvProfile } from "../env/envs.js";
 import { resolveStatePath } from "../state/state.js";
 import type { ProjectRequest, ResolvedProjectInfo } from "./contracts.js";
 
@@ -21,6 +21,7 @@ function absoluteFrom(cwd: string, path: string): string {
 function wireProfile(profile: EnvProfile, env: NodeJS.ProcessEnv): void {
   // A selected profile is authoritative and deliberately overrides ambient CT_HOST.
   env.CT_HOST = profile.host;
+  setGatewayFlag(env, profile);
   if (profile.tokenEnv) {
     const token = env[profile.tokenEnv]?.trim();
     if (token) env.CT_LOGINTOKEN = token;

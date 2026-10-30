@@ -12,7 +12,7 @@
  * when set and present we copy it into `CT_LOGINTOKEN` so the standard order holds.
  */
 import { resolveStatePath } from "../state/state.js";
-import { loadEnvProfile, resolveEnvsPath, type EnvProfile } from "./envs.js";
+import { loadEnvProfile, resolveEnvsPath, setGatewayFlag, type EnvProfile } from "./envs.js";
 
 export interface CommandEnv {
   /** The selected env name, or null when no `--env` was passed (single-host default). */
@@ -40,6 +40,7 @@ async function wireEnv(opts: EnvOpts, env: NodeJS.ProcessEnv): Promise<EnvProfil
   const profile = await loadEnvProfile(opts.env, resolveEnvsPath(undefined, env));
   // The profile is the source of truth for this env's host — it overrides any ambient CT_HOST.
   env.CT_HOST = profile.host;
+  setGatewayFlag(env, profile);
   if (profile.tokenEnv) {
     const token = env[profile.tokenEnv]?.trim();
     if (token) {

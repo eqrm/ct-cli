@@ -7,6 +7,8 @@ import { readCredentials } from "../auth/tokenStore.js";
 import { keychainSessionCache } from "../auth/sessionStore.js";
 import { fileLoginThrottle } from "../auth/loginThrottle.js";
 import { normalizeHost, resolveConfig } from "../config.js";
+import { GATEWAY_FLAG } from "../env/envs.js";
+import { CtApiError } from "./ctClient.js";
 
 export interface AuthedSession {
   client: CtClient;
@@ -28,6 +30,19 @@ export interface AuthedSession {
  */
 export async function authedSession(): Promise<AuthedSession> {
   const config = await resolveConfig();
+  // Gateway env (#228): no token, no handshake. The local signing proxy holds the real session.
+  const gatewayEnv = process.env[GATEWAY_FLAG]?.trim();
+  if (gatewayEnv) {
+    const client = new CtClient(config, { gatewayEnv });
+    const me = await client.authenticateViaGateway();
+    try {
+      await client.assertMinVersion();
+    } catch (err) {
+      // The gateway's allowlist may not cover /info; a 403 there must not make the env unusable.
+      if (!(err instanceof CtApiError && err.status === 403)) throw err;
+    }
+    return { client, me };
+  }
   const envToken = process.env.CT_LOGINTOKEN?.trim();
   // Resolve the stored token for the host we intend to hit (multi-host, #22): with several logins on
   // one machine, the per-host account is picked by host, keeping the token↔host binding below intact.

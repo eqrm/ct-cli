@@ -36,6 +36,10 @@
     "regenerate:permission-catalog": "tsx scripts/regenerate-permission-catalog.ts"
   },
   "dependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/credential-providers": "^3.1160.0",
+    "@smithy/protocol-http": "^5.6.2",
+    "@smithy/signature-v4": "^5.7.5",
     "commander": "^12.1.0",
     "jiti": "^2.4.0",
     "omelette": "^0.4.17",

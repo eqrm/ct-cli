@@ -139,6 +139,11 @@ ct apply --env prod --auto-approve --confirm-env prod   # CI: applies (flag matc
 ct destroy --env prod --target old --confirm-env prod   # --force alone is NOT enough on a protected env
 ```
 
+## Read-only gateway envs
+
+An env with a `gateway` block reads through a local signing proxy instead of logging in,
+and refuses every write. See [Read-only gateway](gateway.md).
+
 ## Promotion workflow
 
 Promote a change dev → prod, verifying against the rehearsal env before the real

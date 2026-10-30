@@ -21,7 +21,8 @@ import type { EnvProfile } from "../env/envs.js";
 import { formatError } from "../ui.js";
 
 /** Where an env's token came from — `null` when there is none to try. */
-export type TokenSource = { kind: "env"; variable: string } | { kind: "stored" } | { kind: "none" };
+export type TokenSource =
+  { kind: "env"; variable: string } | { kind: "stored" } | { kind: "gateway" } | { kind: "none" };
 
 export interface EnvAuthStatus {
   name: string;
@@ -39,6 +40,8 @@ export interface StatusDeps {
   /** The host the *default* (unqualified) login points at — see {@link ambientTokenHost}. */
   readDefaultHost?: () => Promise<string | null>;
   whoami?: (host: string, token: string) => Promise<WhoAmI>;
+  /** Identity through a running gateway proxy (#228) — a gateway env has no token to resolve. */
+  gatewayWhoami?: (profile: EnvProfile) => Promise<WhoAmI>;
 }
 
 /**
@@ -53,6 +56,11 @@ async function defaultWhoami(host: string, token: string): Promise<WhoAmI> {
   const me = await client.authenticate(token);
   await client.assertMinVersion();
   return me;
+}
+
+/** A gateway env: whoever the gateway's ChurchTools session belongs to, via the local proxy. */
+async function defaultGatewayWhoami(profile: EnvProfile): Promise<WhoAmI> {
+  return new CtClient({ host: profile.host }, { gatewayEnv: profile.name }).authenticateViaGateway();
 }
 
 /**
@@ -112,6 +120,16 @@ export async function checkEnvAuth(profile: EnvProfile, deps: StatusDeps = {}): 
   const readDefaultHost = deps.readDefaultHost ?? readStoredHost;
   const whoami = deps.whoami ?? defaultWhoami;
 
+  if (profile.gateway) {
+    const source: TokenSource = { kind: "gateway" };
+    try {
+      const identity = await (deps.gatewayWhoami ?? defaultGatewayWhoami)(profile);
+      return { name: profile.name, host: profile.host, source, identity };
+    } catch (err) {
+      return { name: profile.name, host: profile.host, source, error: formatError(err) };
+    }
+  }
+
   // Resolution happens INSIDE the try: it touches the credential store, and a
   // store that throws must not abort the whole `--all` sweep.
   let source: TokenSource = { kind: "none" };
@@ -159,6 +177,8 @@ function describeSource(source: TokenSource): string {
       return `via $${source.variable}`;
     case "stored":
       return "via Keychain";
+    case "gateway":
+      return "via gateway proxy";
     case "none":
       return "";
   }
