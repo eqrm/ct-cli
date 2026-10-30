@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { authedSession, type AuthedSession } from "../../api/session.js";
-import { CtClient, type WhoAmI } from "../../api/ctClient.js";
+import { CtClient, GATEWAY_PLACEHOLDER, type WhoAmI } from "../../api/ctClient.js";
 import { formatError } from "../../api/format.js";
 import { meetsMinVersion, MIN_CT_VERSION, type CtInfo } from "../../api/version.js";
 import { checkAllEnvAuth, type EnvAuthStatus } from "../../auth/status.js";
@@ -12,7 +12,7 @@ import {
   type ClearCredentialsResult,
 } from "../../auth/tokenStore.js";
 import { MissingHostError, normalizeHost } from "../../config.js";
-import { loadEnvProfile, loadEnvProfiles, resolveEnvsPath } from "../../env/envs.js";
+import { GATEWAY_FLAG, loadEnvProfile, loadEnvProfiles, resolveEnvsPath } from "../../env/envs.js";
 import { CtApplicationError } from "../errors.js";
 import { resolveProject, type ProjectResolutionDependencies } from "../project.js";
 
@@ -192,7 +192,7 @@ export interface AuthTokenResult {
    */
   expiresAt: string;
   /** `cache` — reused an existing session; `handshake` — one login handshake was spent to buy it. */
-  source: "cache" | "handshake";
+  source: "cache" | "handshake" | "gateway";
 }
 
 export interface AuthTokenDependencies {
@@ -229,6 +229,21 @@ export async function runAuthToken(
       "No host resolved. Pass --env <name>, or run `ct auth login --host <url> --token <token>`.",
       { cause },
     );
+  }
+  // Gateway env (#228): the real credential lives in the gateway, so there is nothing to hand over.
+  // Print a placeholder in the same shape; tofu's `ct_auth=session` data source only needs it to be
+  // non-empty, and the proxy strips Cookie/CSRF headers before they reach the gateway.
+  if (project.environment && env[GATEWAY_FLAG]) {
+    return {
+      operation: "auth",
+      action: "token",
+      environment: project.environment,
+      host: project.host,
+      cookie: GATEWAY_PLACEHOLDER,
+      csrfToken: GATEWAY_PLACEHOLDER,
+      expiresAt: new Date(Date.now() + SESSION_MAX_AGE_MS).toISOString(),
+      source: "gateway",
+    };
   }
   // Checked before the network: "no credential for this host" is the case a credential helper hits
   // most often, and it must fail with the remedy rather than with a login error.

@@ -316,6 +316,8 @@ ct apply --env prod    # protected env: type the env name to confirm
 
 - [**Environments**](docs/environments.md) — `ct.envs.json`, per-env state files,
   protected environments, the dev → prod promotion workflow.
+- [**Read-only gateway**](docs/gateway.md) — `ct gateway proxy`: debug a protected
+  instance through a SigV4-signing local proxy, with no ChurchTools credential on the laptop.
 - [**CI usage**](docs/ci.md) — the auth model and token-from-secret setup,
   `--detailed-exitcode`, Markdown/JSON plan projections, deterministic sidecar
   names, drift-vs-config attribution, and copy-pasteable PR artifacts.

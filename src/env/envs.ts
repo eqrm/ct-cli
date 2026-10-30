@@ -41,6 +41,34 @@ export interface EnvProfile {
   tokenEnv?: string;
   /** Protected env: apply/destroy ALWAYS require typed confirmation (even with --auto-approve/--force). */
   protected: boolean;
+  /** Present for a read-only gateway env (#228): no CT credential, all traffic via the local signing proxy. */
+  gateway?: GatewayConfig;
+}
+
+/**
+ * A read-only AWS gateway in front of ChurchTools. `host` of the env is the LOCAL proxy
+ * (`http://127.0.0.1:<port>`, started by `ct gateway proxy`); this block says where the proxy forwards to.
+ */
+export interface GatewayConfig {
+  /** The gateway's https base URL (API Gateway, SigV4/AWS_IAM). */
+  url: string;
+  region: string;
+  /** AWS profile (in ~/.aws/config) that assumes the reader role, with MFA. */
+  profile: string;
+}
+
+/** Env var through which wiring tells `authedSession` that the selected env is a read-only gateway env. */
+export const GATEWAY_FLAG = "CT_GATEWAY_ENV";
+
+/** Record (or clear) the gateway marker for the selected profile; wiring is process.env-based by design. */
+export function setGatewayFlag(env: NodeJS.ProcessEnv, profile: EnvProfile): void {
+  if (profile.gateway) env[GATEWAY_FLAG] = profile.name;
+  else delete env[GATEWAY_FLAG];
+}
+
+/** Local port of a gateway env's proxy, parsed from its `host`. */
+export function gatewayPort(profile: EnvProfile): number {
+  return Number(new URL(profile.host).port);
 }
 
 /** Path precedence for the profile file: explicit → `CT_ENVS` → `ct.envs.json`. */
@@ -92,6 +120,39 @@ async function loadEnvsFile(path: string): Promise<Record<string, RawProfile>> {
   return validateEnvsFile(parsed, path);
 }
 
+function parseGateway(name: string, raw: unknown, host: string): GatewayConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error(`Environment "${name}": "gateway" must be an object {url, region, profile}.`);
+  }
+  const g = raw as Record<string, unknown>;
+  const str = (key: string): string => {
+    const v = g[key];
+    if (typeof v !== "string" || v.trim() === "") {
+      throw new Error(`Environment "${name}": gateway.${key} must be a non-empty string.`);
+    }
+    return v.trim();
+  };
+  const url = str("url");
+  if (!/^https:\/\//.test(url)) {
+    throw new Error(`Environment "${name}": gateway.url must be an https:// URL.`);
+  }
+  // The proxy is the only thing that may sit behind a gateway env's host, and it binds loopback only.
+  let local: URL;
+  try {
+    local = new URL(host);
+  } catch {
+    throw new Error(`Environment "${name}": host "${host}" is not a URL.`);
+  }
+  if (local.protocol !== "http:" || local.hostname !== "127.0.0.1" || !/^\d+$/.test(local.port)) {
+    throw new Error(
+      `Environment "${name}": a gateway env's host must be the local proxy, http://127.0.0.1:<port> ` +
+        `(got "${host}").`,
+    );
+  }
+  return { url: normalizeHost(url), region: str("region"), profile: str("profile") };
+}
+
 /** Resolve one named profile from an already-loaded environments map. */
 function resolveProfile(name: string, raw: RawProfile): EnvProfile {
   const host = raw.host;
@@ -107,9 +168,11 @@ function resolveProfile(name: string, raw: RawProfile): EnvProfile {
   if (raw.protected !== undefined && typeof raw.protected !== "boolean") {
     throw new Error(`Environment "${name}": "protected" must be a boolean.`);
   }
+  const gateway = parseGateway(name, raw.gateway, host.trim());
   return {
     name,
     host: normalizeHost(host.trim()),
+    ...(gateway ? { gateway } : {}),
     statePath: (raw.state as string | undefined) ?? defaultEnvStatePath(name),
     tokenEnv: raw.tokenEnv as string | undefined,
     protected: raw.protected === true,

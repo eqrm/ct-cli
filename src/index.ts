@@ -13,6 +13,7 @@ import { refreshCommand } from "./commands/refresh.js";
 import { planCommand } from "./commands/plan.js";
 import { applyCommand } from "./commands/apply.js";
 import { destroyCommand } from "./commands/destroy.js";
+import { gatewayCommand } from "./commands/gateway.js";
 import { initCommand } from "./commands/init.js";
 import { completionCommand } from "./commands/completion.js";
 import { plannedCommands } from "./commands/placeholders.js";
@@ -33,6 +34,7 @@ export function buildProgram(): Command {
 
   program.addCommand(initCommand());
   program.addCommand(authCommand());
+  program.addCommand(gatewayCommand());
   program.addCommand(getCommand());
   program.addCommand(adoptCommand());
   program.addCommand(stateCommand());

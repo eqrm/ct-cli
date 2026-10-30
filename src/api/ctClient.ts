@@ -103,7 +103,20 @@ export interface LoginThrottleGate {
 export interface CtClientOptions {
   sessionCache?: SessionCache;
   loginThrottle?: LoginThrottleGate;
+  /**
+   * Read-only gateway mode (#228): the client talks to the local signing proxy, which holds the real
+   * session. No login handshake, no token; every write (and every legacy POST except the two
+   * `getMasterData` reads) is refused here before it leaves the process. The value is the env name,
+   * used in the error message.
+   */
+  gatewayEnv?: string;
 }
+
+/** The only legacy `index.php` POSTs a gateway env may issue: the two master-data reads. */
+const GATEWAY_LEGACY_MODULES = new Set(["churchauth/ajax", "churchdb/ajax"]);
+
+/** Placeholder credential for a gateway env: the proxy strips it, the gateway holds the real session. */
+export const GATEWAY_PLACEHOLDER = "via-gateway";
 
 /** Human-readable "wait this long" for a 429, from `Retry-After` when the server sent one. */
 function describeRetryAfter(res: Response): string {
@@ -185,6 +198,35 @@ export class CtClient {
           `Upgrade ChurchTools before running plan/apply/destroy.`,
       );
     }
+  }
+
+  private assertWritable(what: string): void {
+    if (this.options.gatewayEnv !== undefined) {
+      throw new Error(
+        `${this.options.gatewayEnv} is read-only (gateway); writes happen in CI. Refused: ${what}.`,
+      );
+    }
+  }
+
+  private assertGatewayLegacyRead(module: string, params: Record<string, string>): void {
+    if (this.options.gatewayEnv === undefined) return;
+    const keys = Object.keys(params);
+    if (!GATEWAY_LEGACY_MODULES.has(module) || keys.length !== 1 || params.func !== "getMasterData") {
+      this.assertWritable(`POST ${module} ${params.func ?? ""}`.trim());
+    }
+  }
+
+  /**
+   * Gateway env: there is no login. The proxy owns the ChurchTools session and answers
+   * `/whoami` and `/csrftoken` itself, so the client just adopts a placeholder credential (which the
+   * proxy strips) and reads the identity with a plain GET.
+   */
+  async authenticateViaGateway(): Promise<WhoAmI> {
+    this.cookie = GATEWAY_PLACEHOLDER;
+    this.csrfToken = GATEWAY_PLACEHOLDER;
+    this.sessionObtainedAt = Date.now();
+    this.sessionSource = "handshake";
+    return this.get<WhoAmI>("/whoami");
   }
 
   /**
@@ -392,6 +434,7 @@ export class CtClient {
    * made-up `delMasterData` came back "was not defined as Function!".)
    */
   async ajax<T = unknown>(module: string, params: Record<string, string>): Promise<T> {
+    this.assertGatewayLegacyRead(`${module}/ajax`, params);
     if (!this.cookie) {
       throw new CtApiError("Not authenticated — run `ct auth login` first", 401, null);
     }
@@ -511,6 +554,7 @@ export class CtClient {
    * callers (plan/apply/adopt) while `getAll()` gets at `meta` too.
    */
   private async requestEnvelope(method: string, path: string, body?: Json): Promise<unknown> {
+    if (method !== "GET" && method !== "HEAD") this.assertWritable(`${method} ${path}`);
     if (!this.cookie) {
       throw new CtApiError("Not authenticated — run `ct auth login` first", 401, null);
     }
@@ -583,6 +627,7 @@ export class CtClient {
    * `getMasterData`). The CSRF header is sent because this is a POST, exactly as the browser does.
    */
   async legacyPostForm<T = unknown>(query: string, form: Record<string, string>): Promise<T> {
+    this.assertGatewayLegacyRead(query, form);
     if (!this.cookie) {
       throw new CtApiError("Not authenticated — run `ct auth login` first", 401, null);
     }

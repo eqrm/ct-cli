@@ -145,8 +145,10 @@ export function authCommand(): Command {
         process.stdout.write(opts.raw ? `${result.cookie}\n` : `${JSON.stringify(result)}\n`);
         info(
           `${result.host}${result.environment ? ` (env ${result.environment})` : ""} — session from ` +
-            `${result.source === "cache" ? "the keychain cache" : "a fresh login handshake"}, ` +
-            `reusable until ${result.expiresAt}.`,
+            (result.source === "gateway"
+              ? "a placeholder (the read-only gateway holds the real session)."
+              : `${result.source === "cache" ? "the keychain cache" : "a fresh login handshake"}, ` +
+                `reusable until ${result.expiresAt}.`),
         );
       } catch (caught) {
         // Nothing is written to stdout on failure: a consumer that reads stdout for a credential
