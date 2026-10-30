@@ -24,7 +24,7 @@ proxy forwards to:
       "gateway": {
         "url": "https://<id>.execute-api.eu-central-1.amazonaws.com",
         "region": "eu-central-1",
-        "profile": "eqrm-ct-reader"
+        "profile": "my-ct-reader"
       }
     }
   }
@@ -34,7 +34,7 @@ proxy forwards to:
 The AWS profile assumes the reader role with MFA (`~/.aws/config`):
 
 ```ini
-[profile eqrm-ct-reader]
+[profile my-ct-reader]
 role_arn = arn:aws:iam::<account>:role/<gateway-reader-role>
 source_profile = default
 mfa_serial = arn:aws:iam::<account>:mfa/<user>
@@ -46,7 +46,7 @@ region = eu-central-1
 ```bash
 ct gateway proxy --env prod-ro        # asks for the MFA code, then listens; Ctrl-C stops it
 # in another shell:
-ct get raw /groups/864 --env prod-ro
+ct get raw /groups/123 --env prod-ro
 ct auth token --env prod-ro --raw     # placeholder "via-gateway" for tofu's ct_auth=session
 ```
 

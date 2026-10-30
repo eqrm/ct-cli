@@ -3,10 +3,10 @@ import { checkRequest } from "../src/gateway/filter.js";
 
 describe("gateway request filter", () => {
   it("allows a GET under /api and keeps the query", () => {
-    expect(checkRequest("GET", "/api/groups/864?page=2", "")).toEqual({
+    expect(checkRequest("GET", "/api/groups/123?page=2", "")).toEqual({
       ok: true,
       method: "GET",
-      path: "/api/groups/864",
+      path: "/api/groups/123",
       query: [["page", "2"]],
     });
   });

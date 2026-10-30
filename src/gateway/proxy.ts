@@ -98,6 +98,18 @@ export function createProxyServer(options: ProxyOptions): Server {
       res.end(JSON.stringify(body));
     };
 
+    // DNS rebinding: a web page whose hostname resolves to 127.0.0.1 is "same-origin" with the proxy and
+    // could read prod data through it. Only a client that addresses the proxy as loopback gets through.
+    const port = req.socket.localPort;
+    if (req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`) {
+      finish(
+        403,
+        { blocked: `${method} ${logPath}`, hint: "ct gateway proxy only answers http://127.0.0.1:<port>" },
+        " (foreign Host header)",
+      );
+      return;
+    }
+
     const body = method === "POST" ? await readBody(req) : "";
     const verdict = checkRequest(method, rawUrl, body);
     if (!verdict.ok) {
@@ -155,9 +167,13 @@ export function createProxyServer(options: ProxyOptions): Server {
     }
     const payload = Buffer.from(await upstream.arrayBuffer());
     log(`${method} ${logPath} ${upstream.status}`);
-    res.writeHead(upstream.status, {
+    const responseHeaders: Record<string, string> = {
       "content-type": upstream.headers.get("content-type") ?? "application/json",
-    });
+    };
+    // The client's 429 backoff reads Retry-After; everything else (Set-Cookie above all) stays behind.
+    const retryAfter = upstream.headers.get("retry-after");
+    if (retryAfter !== null) responseHeaders["retry-after"] = retryAfter;
+    res.writeHead(upstream.status, responseHeaders);
     res.end(payload);
   }
 

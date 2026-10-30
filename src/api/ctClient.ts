@@ -217,16 +217,25 @@ export class CtClient {
   }
 
   /**
-   * Gateway env: there is no login. The proxy owns the ChurchTools session and answers
-   * `/whoami` and `/csrftoken` itself, so the client just adopts a placeholder credential (which the
-   * proxy strips) and reads the identity with a plain GET.
+   * Gateway env: there is no login. The gateway owns the ChurchTools session, so the client just
+   * adopts a placeholder credential (which the local proxy strips) and reads the identity with a
+   * plain GET through the proxy.
    */
   async authenticateViaGateway(): Promise<WhoAmI> {
     this.cookie = GATEWAY_PLACEHOLDER;
     this.csrfToken = GATEWAY_PLACEHOLDER;
     this.sessionObtainedAt = Date.now();
     this.sessionSource = "handshake";
-    return this.get<WhoAmI>("/whoami");
+    try {
+      return await this.get<WhoAmI>("/whoami");
+    } catch (err) {
+      if (err instanceof CtApiError) throw err;
+      // Connection refused and friends: almost always the proxy simply isn't running.
+      throw new Error(
+        `Could not reach the gateway proxy at ${this.config.host}. Is \`ct gateway proxy --env ${this.options.gatewayEnv}\` running?`,
+        { cause: err },
+      );
+    }
   }
 
   /**

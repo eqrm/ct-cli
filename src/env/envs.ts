@@ -137,6 +137,10 @@ function parseGateway(name: string, raw: unknown, host: string): GatewayConfig |
   if (!/^https:\/\//.test(url)) {
     throw new Error(`Environment "${name}": gateway.url must be an https:// URL.`);
   }
+  // The proxy forwards to the URL's origin, so a base path (a REST API stage) would be dropped silently.
+  if (new URL(url).pathname.replace(/\/+$/, "") !== "") {
+    throw new Error(`Environment "${name}": gateway.url must not have a path (got "${url}").`);
+  }
   // The proxy is the only thing that may sit behind a gateway env's host, and it binds loopback only.
   let local: URL;
   try {

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { createServer, type Server } from "node:http";
+import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { cachingCredentials, createProxyServer, listenLoopback } from "../src/gateway/proxy.js";
 
@@ -32,8 +32,13 @@ async function start(): Promise<{ proxy: string; seen: Seen[]; logs: string[] }>
         headers: req.headers,
         body: Buffer.concat(chunks).toString(),
       });
+      if (req.url === "/api/busy") {
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "7", "set-cookie": "s=1" });
+        res.end("{}");
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end('{"data":{"id":864}}');
+      res.end('{"data":{"id":123}}');
     });
   });
   servers.push(upstream);
@@ -56,6 +61,32 @@ async function start(): Promise<{ proxy: string; seen: Seen[]; logs: string[] }>
 }
 
 describe("gateway proxy", () => {
+  it("refuses a foreign Host header (DNS rebinding) without forwarding", async () => {
+    const { proxy, seen } = await start();
+    const { port } = new URL(proxy);
+    const status = await new Promise<number>((done, fail) => {
+      request(
+        { host: "127.0.0.1", port, path: "/api/persons", headers: { host: `attacker.example:${port}` } },
+        (r) => {
+          r.resume();
+          done(r.statusCode!);
+        },
+      )
+        .on("error", fail)
+        .end();
+    });
+    expect(status).toBe(403);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("passes Retry-After through, and nothing else but content-type", async () => {
+    const { proxy } = await start();
+    const res = await fetch(`${proxy}/api/busy`);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("7");
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
   it("binds loopback only", async () => {
     const { proxy } = await start();
     expect(proxy).toMatch(/^http:\/\/127\.0\.0\.1:/);
@@ -64,14 +95,14 @@ describe("gateway proxy", () => {
 
   it("signs forwarded requests (SigV4, execute-api) and strips cookie/auth/csrf/login_token", async () => {
     const { proxy, seen, logs } = await start();
-    const res = await fetch(`${proxy}/api/groups/864?login_token=SECRET&page=1`, {
+    const res = await fetch(`${proxy}/api/groups/123?login_token=SECRET&page=1`, {
       headers: { Cookie: "ChurchTools_x=abc", Authorization: "Login SECRET", "CSRF-Token": "csrf" },
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ data: { id: 864 } });
+    expect(await res.json()).toEqual({ data: { id: 123 } });
     expect(seen).toHaveLength(1);
     const s = seen[0]!;
-    expect(s.url).toBe("/api/groups/864?page=1");
+    expect(s.url).toBe("/api/groups/123?page=1");
     expect(s.headers.authorization).toMatch(
       /^AWS4-HMAC-SHA256 Credential=AKIATEST\/\d{8}\/eu-central-1\/execute-api\/aws4_request, SignedHeaders=.*Signature=[0-9a-f]{64}$/,
     );
@@ -81,7 +112,7 @@ describe("gateway proxy", () => {
     expect(s.headers["csrf-token"]).toBeUndefined();
     expect(JSON.stringify(s)).not.toContain("SECRET");
     // One line, method + path, no query.
-    expect(logs).toEqual(["GET /api/groups/864 200"]);
+    expect(logs).toEqual(["GET /api/groups/123 200"]);
   });
 
   it("forwards the getMasterData POST, signed", async () => {

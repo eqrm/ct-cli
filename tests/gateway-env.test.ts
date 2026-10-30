@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { loadEnvProfile, gatewayPort, GATEWAY_FLAG } from "../src/env/envs.js";
 import { CtClient } from "../src/api/ctClient.js";
 import { runAuthToken } from "../src/application/operations/auth.js";
+import { checkEnvAuth, renderEnvAuth } from "../src/auth/status.js";
 
 let dir: string;
 async function envsFile(environments: unknown): Promise<string> {
@@ -41,6 +42,10 @@ describe("gateway env profile", () => {
     await expect(loadEnvProfile("x", p3)).rejects.toThrow(/https/);
     const p4 = await envsFile({ x: { host: "http://127.0.0.1:1", gateway: { url: GW.url } } });
     await expect(loadEnvProfile("x", p4)).rejects.toThrow(/gateway\.region/);
+    const p5 = await envsFile({
+      x: { host: "http://127.0.0.1:1", gateway: { ...GW, url: `${GW.url}prod` } },
+    });
+    await expect(loadEnvProfile("x", p5)).rejects.toThrow(/must not have a path/);
   });
 });
 
@@ -56,6 +61,17 @@ describe("CtClient in gateway mode", () => {
     await c.authenticateViaGateway();
     const url = String((fetchMock.mock.calls[0] as unknown[])[0]);
     expect(url).toBe("http://127.0.0.1:8766/api/whoami");
+  });
+
+  it("names the proxy command when the proxy is not running", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    const c = new CtClient({ host: "http://127.0.0.1:8766" }, { gatewayEnv: "prod-ro" });
+    await expect(c.authenticateViaGateway()).rejects.toThrow(/ct gateway proxy --env prod-ro/);
   });
 
   it("refuses writes before any request leaves", async () => {
@@ -108,5 +124,21 @@ describe("ct auth token for a gateway env", () => {
     expect(readToken).not.toHaveBeenCalled();
     expect(authedSession).not.toHaveBeenCalled();
     expect(env[GATEWAY_FLAG]).toBe("prod-ro");
+  });
+});
+
+describe("ct auth status for a gateway env", () => {
+  it("asks the proxy for the identity instead of looking for a token", async () => {
+    const p = await envsFile({ "prod-ro": { host: "http://127.0.0.1:8766", gateway: GW } });
+    const profile = await loadEnvProfile("prod-ro", p);
+    const readStored = vi.fn(async () => null);
+    const status = await checkEnvAuth(profile, {
+      env: {},
+      readStored,
+      gatewayWhoami: async () => ({ id: 1, firstName: "Test", lastName: "Reader" }),
+    });
+    expect(readStored).not.toHaveBeenCalled();
+    expect(status.source).toEqual({ kind: "gateway" });
+    expect(renderEnvAuth([status])[0]).toMatch(/✓ Test Reader \(#1\) via gateway proxy$/);
   });
 });
