@@ -1,6 +1,7 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { profileCredentials } from "../src/gateway/credentials.js";
 import { cachingCredentials, createProxyServer, listenLoopback } from "../src/gateway/proxy.js";
 
 const CREDS = { accessKeyId: "AKIATEST", secretAccessKey: "secret", sessionToken: "tok-session" };
@@ -32,6 +33,11 @@ async function start(): Promise<{ proxy: string; seen: Seen[]; logs: string[] }>
         headers: req.headers,
         body: Buffer.concat(chunks).toString(),
       });
+      if (req.url === "/api/not-allowed") {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end('{"blocked":"GET /api/not-allowed"}');
+        return;
+      }
       if (req.url === "/api/busy") {
         res.writeHead(429, { "content-type": "application/json", "retry-after": "7", "set-cookie": "s=1" });
         res.end("{}");
@@ -143,6 +149,71 @@ describe("gateway proxy", () => {
     expect(seen).toHaveLength(0);
     expect(logs.every((l) => l.includes("403"))).toBe(true);
     expect(logs.join("\n")).not.toContain("deleteMasterData");
+  });
+});
+
+describe("allowlist 403", () => {
+  it("passes the gateway's blocked body through and logs where to widen the allowlist", async () => {
+    const { proxy, logs } = await start();
+    const res = await fetch(`${proxy}/api/not-allowed`);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ blocked: "GET /api/not-allowed" });
+    expect(logs.join("\n")).toMatch(/not on the gateway allowlist.*eqrm-infra ct-read-gateway/);
+  });
+});
+
+describe("profileCredentials", () => {
+  const exp = (ms: number): Date => new Date(ms);
+
+  it("never prompts for a profile without MFA and refreshes silently after expiry", async () => {
+    let now = 0;
+    let calls = 0;
+    const ask = vi.fn(async () => "123456");
+    const get = cachingCredentials(
+      profileCredentials("p", {
+        isTTY: false,
+        ask,
+        // A profile without mfa_serial: the SDK never calls mfaCodeProvider.
+        fromIni: () => async () => ({ ...CREDS, expiration: exp(now + 3600_000), n: ++calls }),
+      }),
+      () => now,
+    );
+    const first = await get();
+    now = 3600_000 - 30_000; // role session about to expire
+    const second = await get();
+    expect(calls).toBe(2);
+    expect(second).not.toBe(first);
+    expect(second.expiration?.getTime()).toBe(now + 3600_000);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("fails at once with a clear message when MFA is needed and there is no TTY", async () => {
+    const ask = vi.fn(async () => "123456");
+    const get = profileCredentials("rd", {
+      isTTY: false,
+      ask,
+      fromIni: (init) => async () => {
+        await init.mfaCodeProvider("arn:aws:iam::1:mfa/u");
+        return CREDS;
+      },
+    });
+    await expect(get()).rejects.toThrow(/profile "rd" requires MFA.*in your own terminal/);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("still asks on a TTY when the profile has MFA", async () => {
+    const ask = vi.fn(async () => " 654321 ");
+    let code = "";
+    const get = profileCredentials("rd", {
+      isTTY: true,
+      ask,
+      fromIni: (init) => async () => {
+        code = await init.mfaCodeProvider("arn:aws:iam::1:mfa/u");
+        return CREDS;
+      },
+    });
+    await get();
+    expect(code).toBe("654321");
   });
 });
 

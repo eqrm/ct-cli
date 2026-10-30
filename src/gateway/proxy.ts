@@ -48,9 +48,10 @@ async function readBody(req: IncomingMessage): Promise<string> {
 }
 
 /**
- * Wrap a credential provider so the (MFA-prompting) provider runs only when there is nothing cached or
- * the cached credentials expire within a minute. Concurrent requests share one in-flight refresh, so
- * the terminal is never asked for two codes at once.
+ * Wrap a credential provider so the provider runs only when there is nothing cached or the cached
+ * credentials expire within a minute (role sessions last an hour). Without MFA the refresh is silent;
+ * with it, concurrent requests share one in-flight refresh, so the terminal is never asked for two
+ * codes at once. A failed refresh is not cached: the next request tries again.
  */
 export function cachingCredentials(
   provider: () => Promise<AwsCredentials>,
@@ -67,6 +68,15 @@ export function cachingCredentials(
       });
     return inflight;
   };
+}
+
+function isBlockedBody(payload: Buffer): boolean {
+  try {
+    const json = JSON.parse(payload.toString("utf8")) as unknown;
+    return typeof json === "object" && json !== null && "blocked" in json;
+  } catch {
+    return false;
+  }
 }
 
 export function createProxyServer(options: ProxyOptions): Server {
@@ -166,7 +176,12 @@ export function createProxyServer(options: ProxyOptions): Server {
       return;
     }
     const payload = Buffer.from(await upstream.arrayBuffer());
-    log(`${method} ${logPath} ${upstream.status}`);
+    // A 403 with a `blocked` body is the gateway's allowlist deciding, not a credential problem. It goes
+    // to the client unchanged; no retry, no other tier.
+    const allowlisted = upstream.status === 403 && isBlockedBody(payload);
+    log(
+      `${method} ${logPath} ${upstream.status}${allowlisted ? ` (not on the gateway allowlist; widening it is a PR in eqrm-infra ct-read-gateway, handler allowlist)` : ""}`,
+    );
     const responseHeaders: Record<string, string> = {
       "content-type": upstream.headers.get("content-type") ?? "application/json",
     };
