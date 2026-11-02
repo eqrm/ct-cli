@@ -1,0 +1,92 @@
+# Self-hosted Renovate — runs the Renovate CLI in our own CI (GitHub-hosted
+# runner) under a dedicated GitHub App, instead of granting the Mend cloud app
+# access to the repo. Config lives in ./renovate.json (Renovate auto-reads it).
+#
+# Why self-hosted: Renovate (unlike Dependabot) writes the platform-specific
+# optional deps that npm silently drops, so npm PRs stop failing `npm ci`
+# (see npm/cli#4828, #8320). Running it here keeps private code inside our
+# trust boundary — nothing is cloned to a third party. Renovate also owns
+# security remediation (reads Dependabot alerts) — Dependabot security updates
+# are turned off so we don't run two PR-openers.
+#
+# Schedule: the workflow runs DAILY so vulnerability fixes (renovate.json
+# `vulnerabilityAlerts`, scheduled "at any time") land within ~24h. Routine
+# version updates are gated to Tuesday inside renovate.json `schedule` — the
+# morning after Monday's release, so they bake on staging for a full week.
+#
+# Tuesday gets two extra runs inside that window. `prHourlyLimit` caps new PRs
+# per run, and with a single run per week the queue drained at 2 PRs/week while
+# the release-tooling lockfile — the only fix for its transitive CVEs — sat
+# rate-limited for weeks (35 open alerts, Oct 2026). Three hourly runs open the
+# backlog in waves the self-hosted runners can absorb.
+name: Renovate
+
+on:
+  schedule:
+    - cron: "0 4 * * *" # daily 04:00 UTC (~06:00 Europe/Berlin)
+    - cron: "0 5,6 * * 2" # Tuesday 05:00 + 06:00 UTC, still before 9am Berlin
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: "Renovate log level"
+        required: false
+        default: "info"
+        type: choice
+        options:
+          - debug
+          - info
+          - warn
+
+# Only one Renovate run at a time; never cancel an in-flight run (it may be
+# mid-commit on a branch). The job's `timeout-minutes` is the one exception and
+# is deliberately set far above any plausible run (observed max ~2 min, cap 60):
+# a wall-clock cancel here can strand a half-written branch, so the cap exists
+# only to stop a wedged runner holding a slot for six hours — never to bound a
+# run that is merely slow.
+concurrency:
+  group: renovate
+  cancel-in-progress: false
+
+# The renovate job authenticates as the Renovate App, not GITHUB_TOKEN. The
+# dashboard-guard job below reads the Dependency Dashboard issue with the default
+# token, which needs `issues: read`.
+permissions:
+  contents: read
+
+jobs:
+  renovate:
+    # GitHub-hosted on purpose: this job holds the Renovate App private key (#1967).
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Generate Renovate App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.RENOVATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+          # Without owner/repositories the token covers this repo only, so the
+          # git-submodules manager's `ls-remote` on the private .docs-sources/ repos
+          # fails with "Repository not found" (#1115). The list must match .gitmodules;
+          # RENOVATE_REPOSITORIES below still limits Renovate to this repo.
+          owner: eqrm
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Run Renovate
+        uses: renovatebot/github-action@a63d9a7bc606f7336fd20b47f2f32259a35e6213 # v46.3.9
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+        env:
+          # Single-repo run; no org-wide autodiscovery.
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+          LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
+
+  # A pinned action whose digest Renovate cannot resolve stops receiving updates
+  # ENTIRELY — including security updates — and does so silently: the only trace is a
+  # collapsed warning on the Dependency Dashboard issue that nobody reads on a schedule.
+  # A known-vulnerable dependency gets triaged; an un-looked-up one gets nothing, which
+  # makes a silent lookup failure worse than a loud vulnerability (#886).
+  #
+  # So the warning gets an active surface: this job fails, and a failing scheduled
+  # workflow mails the repo admins. Runs even when Renovate itself failed — the
+  # dashboard state from the previous run is still worth reading.
