@@ -1,5 +1,5 @@
 ---
-sources_hash: 3ec7b58bafe7fca7
+sources_hash: cbcfa00a70fddc28
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -58,10 +58,14 @@ both Optigem IDs. On "merge" you pick the surviving person, then:
 2. For shared **static** groups, only member fields where both sides hold different values
    are shown; you choose per field. Empty-versus-filled fields resolve automatically. The
    result is written to the survivor's membership, then the loser's membership is removed.
-3. ChurchTools' merge page opens in your browser. Complete the merge there and confirm in
-   the terminal.
+3. The pair is tagged "Dublette" in ChurchTools (survivor as the original), because
+   ChurchTools' duplicate page lists only tagged and ChurchTools-detected pairs, and has no
+   deep link to a single pair. `ct dupes` then prints the URL (always) and opens
+   `{host}/persons/duplicates`. There: tab "Dublette", search for the survivor, check that
+   Original is the survivor (otherwise "Original und Duplikat tauschen"), choose the Optigem
+   ID shown, and merge. Back in the terminal, confirm.
 
-The group changes in steps 1 and 2 happen before the merge page opens. If you stop there
+The group changes in steps 1 and 2 happen before the duplicate page opens. If you stop there
 (merge not finished, or the clean-up fails), they stay applied; the loser's previous
 memberships are in the audit log under `merge-started`.
 
@@ -69,8 +73,7 @@ memberships are in the audit log under `merge-started`.
 again. A re-scan keeps earlier decisions (dismissed, merged) for pairs that still turn up, so
 a dismissal whose write-back failed does not reappear. The relationship types are found by
 their function keys `noduplicate` and `openduplicate`; if the instance has none, the command
-stops rather than guess an id. The default merge-page URL is a template that may need adjusting with `--merge-url`
-for your ChurchTools version.
+stops rather than guess an id. `--merge-url` overrides the page to open (placeholders `{host}`, `{original}`, `{duplicate}`).
 
 ## Personal-data guard
 

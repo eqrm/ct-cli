@@ -290,3 +290,26 @@ export async function markNoDuplicate(
     relationshipTypeId: types.noDuplicate,
   });
 }
+
+/**
+ * Tag a pair "Dublette" (open duplicate) so it shows up on ChurchTools' own duplicate page, which
+ * lists only tagged and ChurchTools-detected pairs. Returns false when the tag already exists.
+ */
+export async function markDuplicate(
+  client: DupesClient,
+  original: number,
+  duplicate: number,
+  types: RelationshipTypeIds,
+): Promise<boolean> {
+  const rels = await client.get<PersonRel[]>(`/persons/${original}/relationships`);
+  for (const r of rels) {
+    const typeId = r.relationshipType?.id ?? r.relationshipTypeId;
+    const other = Number(r.relative?.domainIdentifier ?? r.relativeId);
+    if (typeId === types.duplicate && other === duplicate) return false;
+  }
+  await client.request("POST", `/persons/${original}/relationships`, {
+    otherPersonId: duplicate,
+    relationshipTypeId: types.duplicate,
+  });
+  return true;
+}

@@ -128,7 +128,7 @@ export function dupesCommand(): Command {
       .option("--limit <n>", "review at most this many pairs", (v) => Number(v))
       .option(
         "--merge-url <template>",
-        "merge page URL with {host} {original} {duplicate}",
+        "page to open after tagging (placeholders {host} {original} {duplicate})",
         DEFAULT_MERGE_URL,
       ),
   ).action((opts: CommonOptions & { limit?: number; mergeUrl: string }) =>

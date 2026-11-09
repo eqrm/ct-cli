@@ -8,6 +8,7 @@ import {
   findSharedGroups,
   loadMembership,
   loadPerson,
+  markDuplicate,
   markNoDuplicate,
   patchMembership,
   removeMembership,
@@ -39,7 +40,7 @@ export interface ReviewDeps {
   now?: () => Date;
 }
 
-export const DEFAULT_MERGE_URL = "{host}/persons/{original}/merge/{duplicate}";
+export const DEFAULT_MERGE_URL = "{host}/persons/duplicates";
 
 export function renderMergeUrl(template: string, host: string, original: number, duplicate: number): string {
   const values: Record<string, string> = {
@@ -139,8 +140,10 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
     `  shared groups: ${shared.dynamic.length} dynamic, ${shared.static.length} static` +
       (cand.markedDuplicate ? "   (already tagged as duplicate in ChurchTools)" : ""),
   );
-  for (const g of shared.dynamic) io.print(`    [dynamic] group ${r.id(g.groupId)}`);
-  for (const g of shared.static) io.print(`    [static]  group ${r.id(g.groupId)}`);
+  const label = (g: { groupId: number; title: string }): string =>
+    r.enabled ? `group ${r.id(g.groupId)}` : `${g.title || "(no name)"} (id ${g.groupId})`;
+  for (const g of shared.dynamic) io.print(`    [dynamic] ${label(g)}`);
+  for (const g of shared.static) io.print(`    [static]  ${label(g)}`);
 
   const action = await askChoice(io, "  [m]erge  [n]o duplicate  [s]kip  [q]uit > ", ["m", "n", "s", "q"]);
   if (action === "q") return "quit";
@@ -241,12 +244,31 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
     return "pending";
   }
 
+  try {
+    const created = await markDuplicate(client, survivor.id, loser.id, deps.types);
+    store.audit({ action: "duplicate-tagged", survivingId: survivor.id, loserId: loser.id, created }, now());
+  } catch (err) {
+    store.audit({ action: "merge-error", survivingId: survivor.id, loserId: loser.id }, now());
+    io.print(
+      `  Could not tag the pair as "Dublette"${err instanceof CtApiError ? ` (HTTP ${err.status})` : ""}; ` +
+        "it may not appear on ChurchTools' duplicate page.",
+    );
+  }
   const url = renderMergeUrl(deps.mergeUrl, deps.host, survivor.id, loser.id);
-  io.print(r.enabled ? "  Opening ChurchTools' merge page (URL hidden)." : `  Opening ${url}`);
+  io.print(
+    r.enabled
+      ? "  Opening ChurchTools' duplicate page (URL hidden)."
+      : `  Open (copy if no browser opens): ${url}`,
+  );
+  io.print(
+    `  On that page: tab "Dublette", search for ${r.name(survivor.firstName, survivor.lastName)}, ` +
+      'check that Original is the survivor (else use "Original und Duplikat tauschen")' +
+      (finance ? `, and pick Optigem ID ${r.value(leading)}.` : "."),
+  );
   try {
     await io.openUrl(url);
   } catch {
-    io.print("  Could not open a browser; open the merge page manually.");
+    io.print("  Could not open a browser; open the page manually.");
   }
   for (;;) {
     const done = await askChoice(io, "  Merge finished in ChurchTools? [y/n] > ", ["y", "n"]);
