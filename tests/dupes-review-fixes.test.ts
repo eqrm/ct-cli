@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveRelationshipTypes, type DupesClient } from "../src/dupes/ct.js";
 import { cleanName } from "../src/dupes/normalize.js";
-import { renderMergeUrl } from "../src/dupes/review.js";
 import { SCAN_SCHEMA, carryStates, type ScanFile } from "../src/dupes/store.js";
 import type { Candidate } from "../src/dupes/detector.js";
 
@@ -38,15 +37,6 @@ describe("review fixes", () => {
     const next = carryStates(previous, [cand(1, 2), cand(5, 6), cand(7, 8)]);
     expect(next.map((c) => c.state)).toEqual(["dismissed", "open", "open"]);
     expect(carryStates(null, [cand(1, 2)])[0]!.state).toBe("open");
-  });
-
-  it("renders the merge URL literally and without a double slash", () => {
-    expect(
-      renderMergeUrl("{host}/persons/{original}/merge/{duplicate}", "https://example.church.tools/", 1, 2),
-    ).toBe("https://example.church.tools/persons/1/merge/2");
-    expect(renderMergeUrl("{host}/x?a=$&{duplicate}", "https://h$1.example", 1, 2)).toBe(
-      "https://h$1.example/x?a=$&2",
-    );
   });
 
   it("keeps letters of non-Latin scripts in names", () => {

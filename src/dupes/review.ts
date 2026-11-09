@@ -5,25 +5,22 @@
 import { CtApiError } from "../api/ctClient.js";
 import { MERGE_CONFIRMED } from "./finance.js";
 import {
-  findSharedGroups,
-  loadMembership,
+  loadMergePreview,
   loadPerson,
-  markDuplicate,
+  loadRawPerson,
   markNoDuplicate,
-  patchMembership,
-  removeMembership,
+  mergePersons,
   type DupesClient,
+  type MergeDiffEntry,
   type PersonRecord,
   type RelationshipTypeIds,
 } from "./ct.js";
-import { buildMembershipPatch, diffMemberships, type MembershipDiff } from "./memberships.js";
 import type { Redactor } from "./redact.js";
 import type { DupesStore, ScanFile, StoredCandidate } from "./store.js";
 
 export interface ReviewIO {
   ask(question: string): Promise<string>;
   print(line: string): void;
-  openUrl(url: string): Promise<void>;
 }
 
 export interface ReviewDeps {
@@ -35,21 +32,7 @@ export interface ReviewDeps {
   types: RelationshipTypeIds;
   operator: { id: number; name: string };
   io: ReviewIO;
-  /** URL template with `{host}`, `{original}`, `{duplicate}`. */
-  mergeUrl: string;
   now?: () => Date;
-}
-
-export const DEFAULT_MERGE_URL = "{host}/persons/duplicates";
-
-export function renderMergeUrl(template: string, host: string, original: number, duplicate: number): string {
-  const values: Record<string, string> = {
-    host: host.replace(/\/+$/, ""),
-    original: String(original),
-    duplicate: String(duplicate),
-  };
-  // A function replacer, so `$` in a value is taken literally.
-  return template.replace(/\{(host|original|duplicate)\}/g, (_m, k: string) => values[k]!);
 }
 
 /** Rows of the side-by-side view: label plus both values. */
@@ -108,12 +91,38 @@ async function askChoice(io: ReviewIO, question: string, allowed: string[]): Pro
   }
 }
 
-function fmtDiff(d: MembershipDiff, r: Redactor): string {
-  const v = (x: string): string => (x === "" ? "(empty)" : r.value(x));
-  return `${d.label}: A=${v(d.survivor)}  B=${v(d.loser)}`;
+export type ReviewOutcome = "merged" | "dismissed" | "skipped" | "pending" | "quit";
+
+/** ChurchTools proposes the older person as the original: older creation date, else the lower id. */
+export function olderOf(a: PersonRecord, b: PersonRecord): PersonRecord {
+  if (a.createdDate !== "" && b.createdDate !== "" && a.createdDate !== b.createdDate) {
+    return a.createdDate < b.createdDate ? a : b;
+  }
+  return a.id < b.id ? a : b;
 }
 
-export type ReviewOutcome = "merged" | "dismissed" | "skipped" | "pending" | "quit";
+/**
+ * Build the merge PATCH body: the original's person object, with the duplicate's value for every
+ * field the operator took from the duplicate. `email` is a read-only display key in the diff; the
+ * person object carries addresses in `emails`, so that is the key written.
+ */
+export function buildMergeBody(
+  original: Record<string, unknown>,
+  duplicate: Record<string, unknown>,
+  diffs: readonly MergeDiffEntry[],
+  fromDuplicate: ReadonlySet<string>,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { ...original };
+  for (const d of diffs) {
+    if (d.key === null || !fromDuplicate.has(d.key)) continue;
+    if (d.key === "email") {
+      if (duplicate.emails !== undefined) body.emails = duplicate.emails;
+      continue;
+    }
+    body[d.key] = d.key in duplicate ? duplicate[d.key] : d.new;
+  }
+  return body;
+}
 
 /** Handle one candidate. Returns what happened. */
 export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): Promise<ReviewOutcome> {
@@ -135,15 +144,7 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
   }
   io.print("");
   for (const line of renderComparison(a, b, r)) io.print(line);
-  const shared = await findSharedGroups(client, a.id, b.id);
-  io.print(
-    `  shared groups: ${shared.dynamic.length} dynamic, ${shared.static.length} static` +
-      (cand.markedDuplicate ? "   (already tagged as duplicate in ChurchTools)" : ""),
-  );
-  const label = (g: { groupId: number; title: string }): string =>
-    r.enabled ? `group ${r.id(g.groupId)}` : `${g.title || "(no name)"} (id ${g.groupId})`;
-  for (const g of shared.dynamic) io.print(`    [dynamic] ${label(g)}`);
-  for (const g of shared.static) io.print(`    [static]  ${label(g)}`);
+  if (cand.markedDuplicate) io.print("  (already tagged as duplicate in ChurchTools)");
 
   const action = await askChoice(io, "  [m]erge  [n]o duplicate  [s]kip  [q]uit > ", ["m", "n", "s", "q"]);
   if (action === "q") return "quit";
@@ -163,53 +164,85 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
   }
 
   // --- merge ---
-  const keep = await askChoice(io, "  Keep which person (the survivor)? [a/b] > ", ["a", "b"]);
+  const older = olderOf(a, b);
+  const mark = (p: PersonRecord): string => (p.id === older.id ? " (older, ChurchTools' default)" : "");
+  io.print(`  A${mark(a)}`);
+  io.print(`  B${mark(b)}`);
+  const olderKey = older.id === a.id ? "a" : "b";
+  const keep =
+    (await askChoice(io, `  Keep which person (the survivor)? [a/b, Enter = ${olderKey}] > `, [
+      "a",
+      "b",
+      "",
+    ])) || olderKey;
   const survivor = keep === "a" ? a : b;
   const loser = keep === "a" ? b : a;
+
+  let preview;
+  let originalRaw: Record<string, unknown>;
+  let duplicateRaw: Record<string, unknown>;
+  try {
+    [preview, originalRaw, duplicateRaw] = await Promise.all([
+      loadMergePreview(client, survivor.id, loser.id),
+      loadRawPerson(client, survivor.id),
+      loadRawPerson(client, loser.id),
+    ]);
+  } catch (err) {
+    store.audit({ action: "merge-error", survivingId: survivor.id, loserId: loser.id }, now());
+    io.print(
+      `  Could not load the merge preview${err instanceof CtApiError ? ` (HTTP ${err.status})` : ""}.`,
+    );
+    return "pending";
+  }
+
+  const fromDuplicate = new Set<string>();
   let leading = survivor.optigem;
   let orphaned = loser.optigem;
-  if (survivor.optigem !== "" && loser.optigem !== "" && survivor.optigem !== loser.optigem) {
+  const bothOptigem = survivor.optigem !== "" && loser.optigem !== "";
+  if (bothOptigem && survivor.optigem !== loser.optigem) {
     const pick = await askChoice(
       io,
       `  Both have an Optigem ID. Leading ID: [s]urvivor (${r.value(survivor.optigem)}) or [l]oser (${r.value(loser.optigem)}) > `,
       ["s", "l"],
     );
-    if (pick === "l") [leading, orphaned] = [loser.optigem, survivor.optigem];
-    io.print("  Select this ID on ChurchTools' merge page too.");
-  }
-  const finance = survivor.optigem !== "" && loser.optigem !== "";
-
-  // Plan the group work.
-  const picks: Array<{
-    groupId: number;
-    diffs: MembershipDiff[];
-    choices: Record<string, "survivor" | "loser">;
-    snapshot: unknown;
-  }> = [];
-  for (const g of shared.static) {
-    const [ms, ml] = await Promise.all([
-      loadMembership(client, g.groupId, survivor.id),
-      loadMembership(client, g.groupId, loser.id),
-    ]);
-    const diffs = diffMemberships(ms, ml);
-    const choices: Record<string, "survivor" | "loser"> = {};
-    const conflicts = diffs.filter((d) => d.conflict);
-    if (conflicts.length > 0) io.print(`  Static group ${r.id(g.groupId)}: conflicting member fields`);
-    for (const d of conflicts) {
-      const ans = await askChoice(io, `    ${fmtDiff(d, r)}  keep [s]urvivor's or [l]oser's? > `, ["s", "l"]);
-      choices[d.key] = ans === "l" ? "loser" : "survivor";
+    if (pick === "l") {
+      [leading, orphaned] = [loser.optigem, survivor.optigem];
+      fromDuplicate.add(deps.optigemField);
     }
-    picks.push({ groupId: g.groupId, diffs, choices, snapshot: ml });
   }
-  const groupCount = shared.dynamic.length + shared.static.length;
-  const groupStep =
-    groupCount === 0
-      ? "no shared groups to clean up"
-      : `remove person ${r.id(loser.id)} from ${shared.dynamic.length} dynamic and ` +
-        `${shared.static.length} static shared group(s)`;
+  const optigemDecided = bothOptigem && survivor.optigem !== loser.optigem;
+
+  const choosable = preview.personDiff.filter(
+    (d): d is MergeDiffEntry & { key: string } =>
+      d.key !== null && !(optigemDecided && d.key === deps.optigemField),
+  );
+  if (choosable.length > 0) io.print("  Fields that differ (default: keep the survivor's value):");
+  for (const d of choosable) {
+    const v = (x: string): string => (x === "" ? "(empty)" : r.value(x));
+    const ans = await askChoice(
+      io,
+      `    ${d.name}: survivor=${v(d.old)}  other=${v(d.new)}  keep [s]urvivor's or [o]ther's? [Enter = s] > `,
+      ["s", "o", ""],
+    );
+    if (ans === "o") fromDuplicate.add(d.key);
+  }
+  const applied: MergeDiffEntry[] = [...choosable];
+  if (optigemDecided) {
+    applied.push({
+      key: deps.optigemField,
+      name: "Optigem ID",
+      old: survivor.optigem,
+      new: loser.optigem,
+      printDiff: true,
+    });
+  }
+  const body = buildMergeBody(originalRaw, duplicateRaw, applied, fromDuplicate);
+
+  const gd = preview.groupsDiff;
+  io.print(`  ${gd.new.length} group(s) move over, ${gd.both.length} shared.`);
   io.print(
-    `  Plan: keep person ${r.id(survivor.id)}, merge person ${r.id(loser.id)} into it; ${groupStep}; ` +
-      "then open ChurchTools' merge page.",
+    `  Plan: keep person ${r.id(survivor.id)}, merge person ${r.id(loser.id)} into it through ChurchTools' ` +
+      "merge API (memberships and related records move over).",
   );
   if ((await askChoice(io, "  Proceed? [y/n] > ", ["y", "n"])) === "n") return "skipped";
 
@@ -218,95 +251,51 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
       action: "merge-started",
       survivingId: survivor.id,
       loserId: loser.id,
-      loserSnapshot: {
-        optigem: loser.optigem,
-        memberships: picks.map((p) => ({ groupId: p.groupId, m: p.snapshot })),
+      personDiff: preview.personDiff.map((d) => ({ key: d.key, original: d.old, duplicate: d.new })),
+      groupsDiff: {
+        original: gd.old.map((g) => g.id),
+        duplicate: gd.new.map((g) => g.id),
+        both: gd.both.map((g) => g.id),
       },
+      fromDuplicate: [...fromDuplicate],
     },
     now(),
   );
   try {
-    for (const g of shared.dynamic) {
-      await removeMembership(client, g.groupId, loser.id);
-      store.audit({ action: "dynamic-group-removal", groupId: g.groupId, personId: loser.id }, now());
-      io.print(`  Removed ${r.id(loser.id)} from dynamic group ${r.id(g.groupId)}.`);
-    }
-    for (const p of picks) {
-      const body = buildMembershipPatch(p.diffs, p.choices);
-      if (body) await patchMembership(client, p.groupId, survivor.id, body);
-      await removeMembership(client, p.groupId, loser.id);
-      store.audit(
-        { action: "static-group-merge", groupId: p.groupId, survivorPatch: body, choices: p.choices },
-        now(),
-      );
-      io.print(`  Merged memberships in static group ${r.id(p.groupId)}.`);
-    }
+    await mergePersons(client, survivor.id, loser.id, body);
   } catch (err) {
     store.audit({ action: "merge-error", survivingId: survivor.id, loserId: loser.id }, now());
-    io.print(
-      `  Group clean-up failed${err instanceof CtApiError ? ` (HTTP ${err.status})` : ""}; stopping before the merge page.`,
-    );
-    io.print("  Changes made before the failure stay applied; see the audit log (merge-started) to restore.");
+    io.print(`  Merge failed${err instanceof CtApiError ? ` (HTTP ${err.status})` : ""}.`);
     return "pending";
   }
 
+  let duplicateStillExists = false;
+  let duplicateCheckFailed = false;
   try {
-    const created = await markDuplicate(client, survivor.id, loser.id, deps.types);
-    store.audit({ action: "duplicate-tagged", survivingId: survivor.id, loserId: loser.id, created }, now());
+    await loadPerson(client, loser.id, deps.optigemField);
+    duplicateStillExists = true;
+    io.print("  ChurchTools kept the duplicate record (it was not deleted); the merge is recorded anyway.");
   } catch (err) {
-    store.audit({ action: "merge-error", survivingId: survivor.id, loserId: loser.id }, now());
-    io.print(
-      `  Could not tag the pair as "Dublette"${err instanceof CtApiError ? ` (HTTP ${err.status})` : ""}; ` +
-        "it may not appear on ChurchTools' duplicate page.",
-    );
-  }
-  const url = renderMergeUrl(deps.mergeUrl, deps.host, survivor.id, loser.id);
-  io.print(
-    r.enabled
-      ? "  Opening ChurchTools' duplicate page (URL hidden)."
-      : `  Open (copy if no browser opens): ${url}`,
-  );
-  io.print(
-    `  On that page: tab "Dublette", search for ${r.name(survivor.firstName, survivor.lastName)}, ` +
-      'check that Original is the survivor (else use "Original und Duplikat tauschen")' +
-      (finance ? `, and pick Optigem ID ${r.value(leading)}.` : "."),
-  );
-  try {
-    await io.openUrl(url);
-  } catch {
-    io.print("  Could not open a browser; open the page manually.");
-  }
-  for (;;) {
-    const done = await askChoice(io, "  Merge finished in ChurchTools? [y/n] > ", ["y", "n"]);
-    if (done === "n") {
-      store.audit({ action: "merge-pending", survivingId: survivor.id, loserId: loser.id }, now());
-      io.print(
-        "  Note: the group changes above are already applied in ChurchTools; the loser's previous " +
-          "memberships are in the audit log (merge-started).",
-      );
-      return "pending";
+    if (!(err instanceof CtApiError && err.status === 404)) {
+      duplicateCheckFailed = true;
+      io.print("  Merged, but could not check whether the duplicate record still exists.");
     }
-    try {
-      await loadPerson(client, loser.id, deps.optigemField);
-      io.print("  The second person still exists in ChurchTools.");
-      if ((await askChoice(io, "  Record the merge anyway? [y/n] > ", ["y", "n"])) === "n") continue;
-    } catch (err) {
-      if (!(err instanceof CtApiError && err.status === 404)) throw err;
-    }
-    break;
   }
   store.audit(
     {
       action: MERGE_CONFIRMED,
       survivingId: survivor.id,
       loserId: loser.id,
-      leadingOptigemId: finance ? leading : "",
-      orphanedOptigemId: finance ? orphaned : "",
+      leadingOptigemId: bothOptigem ? leading : "",
+      orphanedOptigemId: bothOptigem ? orphaned : "",
       mergedBy: deps.operator.name,
       mergedById: deps.operator.id,
+      ...(duplicateStillExists ? { duplicateStillExists: true } : {}),
+      ...(duplicateCheckFailed ? { duplicateCheckFailed: true } : {}),
     },
     now(),
   );
+  io.print("  Merged.");
   return "merged";
 }
 

@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import { CtApiError } from "../api/ctClient.js";
@@ -16,7 +15,7 @@ import {
 import { buildFinanceExport, financeMerges, toCsv } from "../dupes/finance.js";
 import { assertHumanSession } from "../dupes/guard.js";
 import { makeRedactor, type Redactor } from "../dupes/redact.js";
-import { DEFAULT_MERGE_URL, runReview, type ReviewIO } from "../dupes/review.js";
+import { runReview, type ReviewIO } from "../dupes/review.js";
 import { DupesStore, SCAN_SCHEMA, carryStates } from "../dupes/store.js";
 import { info, success, warn } from "../ui.js";
 
@@ -59,13 +58,6 @@ async function openSession(opts: CommonOptions): Promise<Session> {
   const optigemField = opts.optigemField ?? process.env.CT_DUPES_OPTIGEM_FIELD ?? DEFAULT_OPTIGEM_FIELD;
   const redactor = makeRedactor(opts.redact === true, opts.redact ? store.redactSecret() : "");
   return { host, store, redactor, optigemField };
-}
-
-function openInBrowser(url: string): Promise<void> {
-  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
-  return new Promise((resolve, reject) => {
-    execFile(cmd, [url], (err) => (err ? reject(err) : resolve()));
-  });
 }
 
 async function run(opts: CommonOptions, fn: () => Promise<void>): Promise<void> {
@@ -125,13 +117,8 @@ export function dupesCommand(): Command {
     dupes
       .command("review")
       .description("Review stored candidates one pair at a time: merge, not a duplicate, skip")
-      .option("--limit <n>", "review at most this many pairs", (v) => Number(v))
-      .option(
-        "--merge-url <template>",
-        "page to open after tagging (placeholders {host} {original} {duplicate})",
-        DEFAULT_MERGE_URL,
-      ),
-  ).action((opts: CommonOptions & { limit?: number; mergeUrl: string }) =>
+      .option("--limit <n>", "review at most this many pairs", (v) => Number(v)),
+  ).action((opts: CommonOptions & { limit?: number }) =>
     run(opts, async () => {
       const s = await openSession(opts);
       const scan = s.store.loadScan();
@@ -142,7 +129,6 @@ export function dupesCommand(): Command {
       const io: ReviewIO = {
         ask: (q) => rl.question(q),
         print: (line) => process.stdout.write(`${line}\n`),
-        openUrl: openInBrowser,
       };
       try {
         const counts = await runReview(
@@ -155,7 +141,6 @@ export function dupesCommand(): Command {
             types,
             operator: { id: me.id, name: `${me.firstName ?? ""} ${me.lastName ?? ""}`.trim() },
             io,
-            mergeUrl: opts.mergeUrl,
           },
           scan,
           opts.limit,

@@ -2,10 +2,8 @@
  * ChurchTools access for `ct dupes`. All person data enters the process here.
  * Takes a narrow client interface so tests can substitute a fake.
  */
-import { fetchDynamicGroupIds } from "../api/dynamicGroups.js";
 import type { CtClient } from "../api/ctClient.js";
 import { type Candidate, type DupePerson, detect, pairKey, pairScorer, tierOf } from "./detector.js";
-import { toMembership, type Membership } from "./memberships.js";
 
 export type DupesClient = Pick<CtClient, "get" | "getAll" | "request">;
 
@@ -191,71 +189,55 @@ export function buildCandidates(persons: readonly PersonRecord[], rel: RelationS
   return [...found.values()].sort((p, q) => q.score - p.score || p.a - q.a || p.b - q.b);
 }
 
-export interface SharedGroups {
-  dynamic: Array<{ groupId: number; title: string }>;
-  static: Array<{ groupId: number; title: string }>;
+export interface MergeDiffEntry {
+  key: string | null;
+  name: string;
+  old: string;
+  new: string;
+  printDiff: boolean;
 }
 
-interface PersonGroupRow {
-  group: { title?: string; domainIdentifier: string };
+export interface MergeGroup {
+  id: number;
+  title?: string;
+  type?: string;
+  role?: string;
+  roleId?: number;
+  groupMemberStatus?: string;
 }
 
-const dynamicIdCache = new WeakMap<DupesClient, Promise<Set<number>>>();
-
-/** Dynamic group ids, fetched once per client (constant for a review session). */
-function dynamicGroupIds(client: DupesClient): Promise<Set<number>> {
-  let ids = dynamicIdCache.get(client);
-  if (!ids) {
-    ids = fetchDynamicGroupIds(client);
-    dynamicIdCache.set(client, ids);
-    ids.catch(() => dynamicIdCache.delete(client));
-  }
-  return ids;
+export interface MergePreview {
+  personDiff: MergeDiffEntry[];
+  groupsDiff: { old: MergeGroup[]; new: MergeGroup[]; both: MergeGroup[] };
 }
 
-/** Groups both persons belong to, split into dynamic (auto) and static. */
-export async function findSharedGroups(client: DupesClient, a: number, b: number): Promise<SharedGroups> {
-  const [ga, gb] = await Promise.all([
-    client.getAll<PersonGroupRow>(`/persons/${a}/groups`),
-    client.getAll<PersonGroupRow>(`/persons/${b}/groups`),
-  ]);
-  const idsB = new Set(gb.data.map((r) => Number(r.group.domainIdentifier)));
-  const dynamicIds = await dynamicGroupIds(client);
-  const out: SharedGroups = { dynamic: [], static: [] };
-  const seen = new Set<number>();
-  for (const row of ga.data) {
-    const id = Number(row.group.domainIdentifier);
-    if (!idsB.has(id) || seen.has(id)) continue;
-    seen.add(id);
-    const entry = { groupId: id, title: row.group.title ?? "" };
-    (dynamicIds.has(id) ? out.dynamic : out.static).push(entry);
-  }
-  return out;
+/** The raw person object, exactly as `GET /persons/{id}` returns it (the merge PATCH body starts from it). */
+export async function loadRawPerson(client: DupesClient, id: number): Promise<Record<string, unknown>> {
+  return client.get<Record<string, unknown>>(`/persons/${id}`);
 }
 
-export async function loadMembership(
+/** Beta endpoint. `old` is the original's value, `new` the duplicate's. */
+export async function loadMergePreview(
   client: DupesClient,
-  groupId: number,
-  personId: number,
-): Promise<Membership> {
-  return toMembership(await client.get(`/groups/${groupId}/members/${personId}`));
+  original: number,
+  duplicate: number,
+): Promise<MergePreview> {
+  const raw = await client.get<Partial<MergePreview>>(`/persons/${original}/merge/${duplicate}`);
+  const g = raw.groupsDiff ?? { old: [], new: [], both: [] };
+  return {
+    personDiff: raw.personDiff ?? [],
+    groupsDiff: { old: g.old ?? [], new: g.new ?? [], both: g.both ?? [] },
+  };
 }
 
-export async function patchMembership(
+/** Merge `duplicate` into `original` in one ChurchTools transaction (memberships and records move over). */
+export async function mergePersons(
   client: DupesClient,
-  groupId: number,
-  personId: number,
+  original: number,
+  duplicate: number,
   body: Record<string, unknown>,
 ): Promise<void> {
-  await client.request("PATCH", `/groups/${groupId}/members/${personId}`, body);
-}
-
-export async function removeMembership(
-  client: DupesClient,
-  groupId: number,
-  personId: number,
-): Promise<void> {
-  await client.request("DELETE", `/groups/${groupId}/members/${personId}`);
+  await client.request("PATCH", `/persons/${original}/merge/${duplicate}`, body);
 }
 
 interface PersonRel {
@@ -289,27 +271,4 @@ export async function markNoDuplicate(
     otherPersonId: b,
     relationshipTypeId: types.noDuplicate,
   });
-}
-
-/**
- * Tag a pair "Dublette" (open duplicate) so it shows up on ChurchTools' own duplicate page, which
- * lists only tagged and ChurchTools-detected pairs. Returns false when the tag already exists.
- */
-export async function markDuplicate(
-  client: DupesClient,
-  original: number,
-  duplicate: number,
-  types: RelationshipTypeIds,
-): Promise<boolean> {
-  const rels = await client.get<PersonRel[]>(`/persons/${original}/relationships`);
-  for (const r of rels) {
-    const typeId = r.relationshipType?.id ?? r.relationshipTypeId;
-    const other = Number(r.relative?.domainIdentifier ?? r.relativeId);
-    if (typeId === types.duplicate && other === duplicate) return false;
-  }
-  await client.request("POST", `/persons/${original}/relationships`, {
-    otherPersonId: duplicate,
-    relationshipTypeId: types.duplicate,
-  });
-  return true;
 }

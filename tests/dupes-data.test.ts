@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildCandidates, loadRelationState, toPersonRecord, type DupesClient } from "../src/dupes/ct.js";
 import { FINANCE_SCHEMA, buildFinanceExport, financeMerges, toCsv } from "../src/dupes/finance.js";
-import { buildMembershipPatch, diffMemberships, type Membership } from "../src/dupes/memberships.js";
 
 const rec = (id: number, first: string, last: string, extra: Record<string, unknown> = {}) =>
   toPersonRecord({ id, firstName: first, lastName: last, birthday: "1990-05-05", ...extra }, "optigemId");
@@ -60,34 +59,6 @@ describe("relation state and candidates", () => {
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ source: "ct", matchClass: "ct" });
     expect(out[0]!.score).toBeGreaterThanOrEqual(35);
-  });
-});
-
-const mem = (over: Partial<Membership> = {}): Membership => ({
-  groupId: 1,
-  groupTitle: "Gruppe",
-  roleId: 3,
-  status: "active",
-  comment: "",
-  fields: {},
-  ...over,
-});
-
-describe("membership merge", () => {
-  it("auto-resolves when one side is empty and prompts only on conflicts", () => {
-    const s = mem({ fields: { "7": { name: "Tribe", value: "A" }, "8": { name: "Paid", value: "" } } });
-    const l = mem({ fields: { "7": { name: "Tribe", value: "B" }, "8": { name: "Paid", value: "yes" } } });
-    const diffs = diffMemberships(s, l);
-    expect(diffs.map((d) => [d.key, d.conflict])).toEqual([
-      ["field:7", true],
-      ["field:8", false],
-    ]);
-    expect(buildMembershipPatch(diffs, { "field:7": "survivor" })).toEqual({ fields: { "8": "yes" } });
-    expect(buildMembershipPatch(diffs, { "field:7": "loser" })).toEqual({ fields: { "7": "B", "8": "yes" } });
-  });
-
-  it("returns null when nothing differs", () => {
-    expect(buildMembershipPatch(diffMemberships(mem(), mem()), {})).toBeNull();
   });
 });
 
