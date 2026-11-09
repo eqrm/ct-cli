@@ -201,9 +201,15 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
     }
     picks.push({ groupId: g.groupId, diffs, choices, snapshot: ml });
   }
+  const groupCount = shared.dynamic.length + shared.static.length;
+  const groupStep =
+    groupCount === 0
+      ? "no shared groups to clean up"
+      : `remove person ${r.id(loser.id)} from ${shared.dynamic.length} dynamic and ` +
+        `${shared.static.length} static shared group(s)`;
   io.print(
-    `  Plan: keep ${r.id(survivor.id)}, drop ${r.id(loser.id)} from ${shared.dynamic.length} dynamic and ` +
-      `${shared.static.length} static shared group(s), then open ChurchTools' merge page.`,
+    `  Plan: keep person ${r.id(survivor.id)}, merge person ${r.id(loser.id)} into it; ${groupStep}; ` +
+      "then open ChurchTools' merge page.",
   );
   if ((await askChoice(io, "  Proceed? [y/n] > ", ["y", "n"])) === "n") return "skipped";
 
