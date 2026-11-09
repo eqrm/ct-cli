@@ -1,5 +1,5 @@
 ---
-sources_hash: af0b8491650306d9
+sources_hash: af9be3e8c28ea515
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -53,23 +53,28 @@ Pairs are dropped when:
 Both persons are shown side by side with both Optigem IDs. On "merge":
 
 1. You pick the surviving person (the original). The default, on Enter, is the **older**
-   person (earlier creation date, else the lower id), which is also what ChurchTools' own
+   person (the lower id), which is also what ChurchTools' own
    merge UI proposes.
 2. `ct dupes` loads the merge preview. Every differing person field with a key is listed;
-   for each you keep the survivor's value (default) or take the other person's. If both have
-   different Optigem IDs, you also choose the leading ID, which is written as a field choice.
+   for each you keep the survivor's or the other person's value; the default is the non-empty side (the survivor's if both are filled). The Optigem ID is not asked per field: a lone ID is always kept, and if both have
+   different IDs you choose the leading one.
    The number of groups that move over and that both persons share is shown for information.
 3. After the plan and `Proceed? [y/n]`, the survivor's person object (with your choices
    applied) is sent in one `PATCH`. ChurchTools moves memberships, relations, bookings and
    other related records to the survivor in a single transaction, so there is **no
-   group clean-up** before the merge. The `email` entry of the preview is written through the
-   person's `emails` list.
+   group clean-up** before the merge. Addresses are never replaced: `emails` becomes the survivor's list plus the other
+   person's addresses not present yet (without their ids); choosing the other person's email
+   makes that address the default. Just before the PATCH the survivor is re-read, so the body
+   reflects its current state. A chosen field the other person's record does not carry is
+   skipped with a warning.
 4. Afterwards the duplicate is looked up: a 404 means it is gone. If ChurchTools kept the
    record, the merge is still recorded, with `duplicateStillExists: true` in the audit log;
    `ct dupes` never deletes it.
 
-If the merge call fails, the pair stays open (`pending`), `merge-error` is logged and only the
-HTTP status is printed. The audit log keeps `merge-started` (the differing fields of both
+If the merge call fails, `merge-error` is logged and only the HTTP status is printed. If the
+duplicate is gone nevertheless, the merge is recorded (`afterError: true`); otherwise the pair stays
+open (`pending`). At the start of a later review, a pair whose `merge-started` was never confirmed
+and whose duplicate is gone is recorded as merged (`recovered: true`). The audit log keeps `merge-started` (the differing fields of both
 persons and the group ids of the preview) and `merge-confirmed` (what the finance export reads).
 
 "Keine Dublette" writes the relationship back to ChurchTools so the pair is never proposed
