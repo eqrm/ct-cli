@@ -1,5 +1,5 @@
 ---
-sources_hash: af9be3e8c28ea515
+sources_hash: 6b3bd8f40f084748
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -52,19 +52,20 @@ Pairs are dropped when:
 
 Both persons are shown side by side with both Optigem IDs. On "merge":
 
-1. You pick the surviving person (the original). The default, on Enter, is the **older**
-   person (the lower id), which is also what ChurchTools' own
-   merge UI proposes.
+1. The view is laid out like ChurchTools' "Dubletten überprüfen" dialog: **Original** on the
+   left, **Duplikat** on the right, with ID, created date and last login above the fields. The
+   Original is the older person (the lower id), as in ChurchTools' own merge UI. `t` (tauschen)
+   swaps the two columns and can be pressed repeatedly. On `m`, the shown Original is kept.
 2. `ct dupes` loads the merge preview. Every differing person field with a key is listed;
-   for each you keep the survivor's or the other person's value; the default is the non-empty side (the survivor's if both are filled). The Optigem ID is not asked per field: a lone ID is always kept, and if both have
-   different IDs you choose the leading one.
+   for each you keep the Original's (`o`) or the Duplikat's (`d`) value; the default is the non-empty side (the Original's if both are filled). The Optigem ID is not asked per field: a lone ID is always kept, and if both have
+   different IDs you choose the leading one (`o` or `d`).
    The number of groups that move over and that both persons share is shown for information.
-3. After the plan and `Proceed? [y/n]`, the survivor's person object (with your choices
+3. After the plan and `Proceed? [y/n]`, the Original's person object (with your choices
    applied) is sent in one `PATCH`. ChurchTools moves memberships, relations, bookings and
-   other related records to the survivor in a single transaction, so there is **no
-   group clean-up** before the merge. Addresses are never replaced: `emails` becomes the survivor's list plus the other
+   other related records to the Original in a single transaction, so there is **no
+   group clean-up** before the merge. Addresses are never replaced: `emails` becomes the Original's list plus the other
    person's addresses not present yet (without their ids); choosing the other person's email
-   makes that address the default. Just before the PATCH the survivor is re-read, so the body
+   makes that address the default. Just before the PATCH the Original is re-read, so the body
    reflects its current state. A chosen field the other person's record does not carry is
    skipped with a warning.
 4. Afterwards the duplicate is looked up: a 404 means it is gone. If ChurchTools kept the

@@ -149,11 +149,10 @@ const patches = (calls: Call[]) => calls.filter((c) => c.method === "PATCH");
 describe("review loop (merge API)", () => {
   it("defaults the survivor to the lower id and keeps the original's values on Enter", async () => {
     // merge, Enter (survivor), then Enter for lastName, campusId, email, proceed
-    const t = setup(["m", "", "", "", "", "y"]);
+    const t = setup(["m", "", "", "", "y"]);
     const counts = await runReview(t.deps, t.scan);
     expect(counts.merged).toBe(1);
-    expect(t.questions.some((q) => q.includes("[a/b, Enter = a]"))).toBe(true);
-    expect(t.out.join("\n")).toContain("(older, ChurchTools' default)");
+    expect(t.out.join("\n")).toMatch(/Original\s+Duplikat/);
     const [p] = patches(t.calls);
     expect(p!.path).toBe("/persons/1/merge/2");
     expect(p!.body).toEqual({
@@ -165,7 +164,7 @@ describe("review loop (merge API)", () => {
 
   it("applies the duplicate's values, ignores null-key diffs and writes email via emails", async () => {
     // survivor a; lastName: other; campusId: survivor; email: other
-    const t = setup(["m", "a", "o", "s", "o", "y"]);
+    const t = setup(["m", "d", "o", "d", "y"]);
     await runReview(t.deps, t.scan);
     const [p] = patches(t.calls);
     expect(p!.body).toEqual({
@@ -183,7 +182,7 @@ describe("review loop (merge API)", () => {
   });
 
   it("treats a 404 on the duplicate as merged and logs the finance fields", async () => {
-    const t = setup(["m", "", "", "", "", "y"]);
+    const t = setup(["m", "", "", "", "y"]);
     await runReview(t.deps, t.scan);
     expect(t.scan.candidates[0]!.state).toBe("merged");
     const audit = t.store.readAudit();
@@ -193,7 +192,7 @@ describe("review loop (merge API)", () => {
   });
 
   it("records the merge with a flag when ChurchTools kept the duplicate", async () => {
-    const t = setup(["m", "", "", "", "", "y"], { stays: true });
+    const t = setup(["m", "", "", "", "y"], { stays: true });
     const counts = await runReview(t.deps, t.scan);
     expect(counts.merged).toBe(1);
     expect(t.out.join("\n")).toContain("kept the duplicate record");
@@ -205,7 +204,7 @@ describe("review loop (merge API)", () => {
   });
 
   it("returns pending on PATCH 500 and writes no merge-confirmed line", async () => {
-    const t = setup(["m", "", "", "", "", "y"], { patchFails: true });
+    const t = setup(["m", "", "", "", "y"], { patchFails: true });
     const counts = await runReview(t.deps, t.scan);
     expect(counts.pending).toBe(1);
     expect(t.out.join("\n")).toContain("Merge failed (HTTP 500)");
@@ -217,7 +216,7 @@ describe("review loop (merge API)", () => {
   it("puts the Optigem choice into the body and the finance audit", async () => {
     const persons = { 1: raw(1, { optigemId: "10001" }), 2: raw(2, { optigemId: "10002" }) };
     // survivor a, leading = loser, then Enter for lastName, campusId, email (campus equal in this fake still diffed)
-    const t = setup(["m", "a", "l", "", "", "", "y"], { persons });
+    const t = setup(["m", "d", "", "", "", "y"], { persons });
     await runReview(t.deps, t.scan);
     const [p] = patches(t.calls);
     expect((p!.body as Record<string, unknown>).optigemId).toBe("10002");
@@ -262,7 +261,7 @@ describe("review loop (merge API)", () => {
     const personDiff = [
       { key: "email", name: "Email", old: "a@example.org", new: "b@example.org", printDiff: true },
     ];
-    const t = setup(["m", "", "o", "y"], { persons, personDiff });
+    const t = setup(["m", "d", "y"], { persons, personDiff });
     await runReview(t.deps, t.scan);
     const body = patches(t.calls)[0]!.body as Record<string, unknown>;
     expect(body.emails).toEqual([
@@ -286,7 +285,7 @@ describe("review loop (merge API)", () => {
     const personDiff = [
       { key: "email", name: "Email", old: "a@example.org", new: "b@example.org", printDiff: true },
     ];
-    const t = setup(["m", "", "s", "y"], { persons, personDiff });
+    const t = setup(["m", "o", "y"], { persons, personDiff });
     await runReview(t.deps, t.scan);
     const body = patches(t.calls)[0]!.body as Record<string, unknown>;
     expect(body.emails).toEqual([
@@ -300,15 +299,15 @@ describe("review loop (merge API)", () => {
   it("defaults to the non-empty side when the survivor's value is empty", async () => {
     const persons = { 1: raw(1, { mobile: "" }), 2: raw(2, { mobile: "0151" }) };
     const personDiff = [{ key: "mobile", name: "Mobile", old: "", new: "0151", printDiff: true }];
-    const t = setup(["m", "", "", "y"], { persons, personDiff });
+    const t = setup(["m", "", "y"], { persons, personDiff });
     await runReview(t.deps, t.scan);
-    expect(t.questions.some((q) => q.includes("[Enter = o]"))).toBe(true);
+    expect(t.questions.some((q) => q.includes("[Enter = d]"))).toBe(true);
     expect((patches(t.calls)[0]!.body as Record<string, unknown>).mobile).toBe("0151");
   });
 
   it("skips a chosen field the duplicate object lacks and warns", async () => {
     const personDiff = [{ key: "nickname", name: "Nickname", old: "", new: "Eri", printDiff: true }];
-    const t = setup(["m", "", "", "y"], { personDiff });
+    const t = setup(["m", "", "y"], { personDiff });
     await runReview(t.deps, t.scan);
     expect(patches(t.calls)[0]!.body).not.toHaveProperty("nickname");
     expect(t.out.join("\n")).toContain("Nickname: value cannot be carried over automatically");
@@ -317,7 +316,7 @@ describe("review loop (merge API)", () => {
   it("keeps a lone Optigem ID and records it as leading without finance export", async () => {
     const persons = { 1: raw(1), 2: raw(2, { optigemId: "10002" }) };
     const personDiff = [{ key: "optigemId", name: "Optigem", old: "", new: "10002", printDiff: true }];
-    const t = setup(["m", "", "y"], { persons, personDiff });
+    const t = setup(["m", "y"], { persons, personDiff });
     await runReview(t.deps, t.scan);
     expect((patches(t.calls)[0]!.body as Record<string, unknown>).optigemId).toBe("10002");
     expect(t.store.readAudit().at(-1)).toMatchObject({ leadingOptigemId: "10002", orphanedOptigemId: "" });
@@ -327,14 +326,33 @@ describe("review loop (merge API)", () => {
   it("does not prompt for an Optigem diff when both have IDs", async () => {
     const persons = { 1: raw(1, { optigemId: "1" }), 2: raw(2, { optigemId: "2" }) };
     const personDiff = [{ key: "optigemId", name: "Optigem", old: "1", new: "2", printDiff: true }];
-    const t = setup(["m", "", "s", "y"], { persons, personDiff });
+    const t = setup(["m", "o", "y"], { persons, personDiff });
     await runReview(t.deps, t.scan);
     expect(t.questions.filter((q) => q.includes("Optigem:"))).toEqual([]);
     expect((patches(t.calls)[0]!.body as Record<string, unknown>).optigemId).toBe("1");
   });
 
-  it("merges the other way when b is chosen", async () => {
-    const t = setup(["m", "b", "", "", "", "y"]);
+  it("swaps original and duplicate (repeatedly) before merging", async () => {
+    const t = setup(["t", "t", "t", "m", "", "", "", "y"]);
+    await runReview(t.deps, t.scan);
+    expect(patches(t.calls)[0]!.path).toBe("/persons/2/merge/1");
+    const heads = t.out.filter((l) => /^\s+Original\s+Duplikat/.test(l));
+    expect(heads).toHaveLength(4);
+    expect(t.questions.some((q) => q.includes("[t]auschen"))).toBe(true);
+    expect(t.questions.some((q) => q.includes("Keep which"))).toBe(false);
+  });
+
+  it("shows ID, created and last login (never) in the header", async () => {
+    const t = setup(["q"]);
+    await runReview(t.deps, t.scan);
+    const text = t.out.join("\n");
+    expect(text).toMatch(/ID\s+#1\s+#2/);
+    expect(text).toContain("2020-01-01");
+    expect(text).toMatch(/last login\s+never\s+never/);
+  });
+
+  it("merges the other way when swapped", async () => {
+    const t = setup(["t", "m", "", "", "", "y"]);
     await runReview(t.deps, t.scan);
     const [p] = patches(t.calls);
     expect(p!.path).toBe("/persons/2/merge/1");
@@ -342,7 +360,7 @@ describe("review loop (merge API)", () => {
   });
 
   it("returns pending when the merge preview cannot be loaded", async () => {
-    const t = setup(["m", ""], { previewFails: true });
+    const t = setup(["m"], { previewFails: true });
     const counts = await runReview(t.deps, t.scan);
     expect(counts.pending).toBe(1);
     expect(patches(t.calls)).toEqual([]);
@@ -350,7 +368,7 @@ describe("review loop (merge API)", () => {
   });
 
   it("records the merge when the PATCH errors but the duplicate is gone", async () => {
-    const t = setup(["m", "", "", "", "", "y"], { patchFails: true, goneAfterError: true });
+    const t = setup(["m", "", "", "", "y"], { patchFails: true, goneAfterError: true });
     const counts = await runReview(t.deps, t.scan);
     expect(counts.merged).toBe(1);
     expect(t.store.readAudit().at(-1)).toMatchObject({ action: "merge-confirmed", afterError: true });
@@ -358,7 +376,7 @@ describe("review loop (merge API)", () => {
 
   it("recovers an unrecorded merge at the next review start", async () => {
     // First run: PATCH errors, the duplicate still exists -> pending.
-    const t = setup(["m", "", "", "", "", "y"], { patchFails: true });
+    const t = setup(["m", "", "", "", "y"], { patchFails: true });
     await runReview(t.deps, t.scan);
     expect(t.store.readAudit().some((e) => e.action === "merge-confirmed")).toBe(false);
     // Later the duplicate is gone (merge went through server-side).

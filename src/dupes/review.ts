@@ -35,8 +35,9 @@ export interface ReviewDeps {
   now?: () => Date;
 }
 
-/** Rows of the side-by-side view: label plus both values. */
+/** Rows of the side-by-side view below the header: label plus both values. */
 export function comparisonRows(a: PersonRecord, b: PersonRecord): Array<[string, string, string]> {
+  const id = (n: number | null): string => (n === null ? "" : String(n));
   return [
     ["first name", a.firstName, b.firstName],
     ["last name", a.lastName, b.lastName],
@@ -47,37 +48,33 @@ export function comparisonRows(a: PersonRecord, b: PersonRecord): Array<[string,
     ["birthday", a.birthday ?? "", b.birthday ?? ""],
     ["street", a.street, b.street],
     ["zip / city", `${a.zip} ${a.city}`.trim(), `${b.zip} ${b.city}`.trim()],
-    ["sex id", a.sexId === null ? "" : String(a.sexId), b.sexId === null ? "" : String(b.sexId)],
-    [
-      "campus id",
-      a.campusId === null ? "" : String(a.campusId),
-      b.campusId === null ? "" : String(b.campusId),
-    ],
-    [
-      "status id",
-      a.statusId === null ? "" : String(a.statusId),
-      b.statusId === null ? "" : String(b.statusId),
-    ],
+    ["sex id", id(a.sexId), id(b.sexId)],
+    ["campus id", id(a.campusId), id(b.campusId)],
+    ["status id", id(a.statusId), id(b.statusId)],
     ["optigem id", a.optigem, b.optigem],
-    ["created", a.createdDate.slice(0, 10), b.createdDate.slice(0, 10)],
     ["last edited", a.lastEditedDate.slice(0, 10), b.lastEditedDate.slice(0, 10)],
-    ["last login", a.lastLogin.slice(0, 10), b.lastLogin.slice(0, 10)],
   ];
 }
 
 const DATE_ROWS = new Set(["created", "last edited", "last login"]);
 
 function show(r: Redactor, label: string, v: string): string {
-  return DATE_ROWS.has(label) ? v : r.value(v);
+  return DATE_ROWS.has(label) || label === "ID" ? v : r.value(v);
 }
 
 function pad(s: string, n: number): string {
   return s.length >= n ? s : s + " ".repeat(n - s.length);
 }
 
-export function renderComparison(a: PersonRecord, b: PersonRecord, r: Redactor): string[] {
-  const lines = [`  ${pad("", 12)} ${pad(`A (#${r.id(a.id)})`, 26)} B (#${r.id(b.id)})`];
-  for (const [label, va, vb] of comparisonRows(a, b)) {
+/** ChurchTools-style view: Original on the left, Duplikat on the right. */
+export function renderComparison(original: PersonRecord, duplicate: PersonRecord, r: Redactor): string[] {
+  const lines = [`  ${pad("", 12)} ${pad("Original", 26)} Duplikat`];
+  const head: Array<[string, string, string]> = [
+    ["ID", `#${r.id(original.id)}`, `#${r.id(duplicate.id)}`],
+    ["created", original.createdDate.slice(0, 10), duplicate.createdDate.slice(0, 10)],
+    ["last login", original.lastLogin.slice(0, 10) || "never", duplicate.lastLogin.slice(0, 10) || "never"],
+  ];
+  for (const [label, va, vb] of [...head, ...comparisonRows(original, duplicate)]) {
     const same = va === vb ? "=" : " ";
     lines.push(`${same} ${pad(label, 12)} ${pad(show(r, label, va), 26)} ${show(r, label, vb)}`);
   }
@@ -239,11 +236,21 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
     }
     throw err;
   }
-  io.print("");
-  for (const line of renderComparison(a, b, r)) io.print(line);
-  if (cand.markedDuplicate) io.print("  (already tagged as duplicate in ChurchTools)");
-
-  const action = await askChoice(io, "  [m]erge  [n]o duplicate  [s]kip  [q]uit > ", ["m", "n", "s", "q"]);
+  // ChurchTools proposes the older person (lower id) as the Original.
+  if (olderOf(a, b).id !== a.id) [a, b] = [b, a];
+  let action: string;
+  for (;;) {
+    io.print("");
+    for (const line of renderComparison(a, b, r)) io.print(line);
+    if (cand.markedDuplicate) io.print("  (already tagged as duplicate in ChurchTools)");
+    action = await askChoice(
+      io,
+      "  [m]erge  [t]auschen (swap original/duplicate)  [n]o duplicate  [s]kip  [q]uit > ",
+      ["m", "t", "n", "s", "q"],
+    );
+    if (action !== "t") break;
+    [a, b] = [b, a];
+  }
   if (action === "q") return "quit";
   if (action === "s") return "skipped";
 
@@ -261,19 +268,8 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
   }
 
   // --- merge ---
-  const older = olderOf(a, b);
-  const mark = (p: PersonRecord): string => (p.id === older.id ? " (older, ChurchTools' default)" : "");
-  io.print(`  A${mark(a)}`);
-  io.print(`  B${mark(b)}`);
-  const olderKey = older.id === a.id ? "a" : "b";
-  const keep =
-    (await askChoice(io, `  Keep which person (the survivor)? [a/b, Enter = ${olderKey}] > `, [
-      "a",
-      "b",
-      "",
-    ])) || olderKey;
-  const survivor = keep === "a" ? a : b;
-  const loser = keep === "a" ? b : a;
+  const survivor = a;
+  const loser = b;
 
   let preview;
   let originalRaw: Record<string, unknown>;
@@ -299,10 +295,10 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
   if (bothOptigem && survivor.optigem !== loser.optigem) {
     const pick = await askChoice(
       io,
-      `  Both have an Optigem ID. Leading ID: [s]urvivor (${r.value(survivor.optigem)}) or [l]oser (${r.value(loser.optigem)}) > `,
-      ["s", "l"],
+      `  Both have an Optigem ID. Leading ID: [o]riginal (${r.value(survivor.optigem)}) or [d]uplikat (${r.value(loser.optigem)}) > `,
+      ["o", "d"],
     );
-    if (pick === "l") [leading, orphaned] = [loser.optigem, survivor.optigem];
+    if (pick === "d") [leading, orphaned] = [loser.optigem, survivor.optigem];
   }
 
   const fromDuplicate = new Set<string>();
@@ -310,17 +306,17 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
     (d): d is MergeDiffEntry & { key: string } => d.key !== null && d.key !== deps.optigemField,
   );
   if (choosable.length > 0)
-    io.print("  Fields that differ (default: the non-empty value, else the survivor's):");
+    io.print("  Fields that differ (default: the non-empty value, else the Original's):");
   for (const d of choosable) {
     const v = (x: string): string => (x === "" ? "(empty)" : r.value(x));
-    const def = d.old === "" && d.new !== "" ? "o" : "s";
+    const def = d.old === "" && d.new !== "" ? "d" : "o";
     const ans =
       (await askChoice(
         io,
-        `    ${d.name}: survivor=${v(d.old)}  other=${v(d.new)}  keep [s]urvivor's or [o]ther's? [Enter = ${def}] > `,
-        ["s", "o", ""],
+        `    ${d.name}: Original=${v(d.old)}  Duplikat=${v(d.new)}  keep [o]riginal's or [d]uplikat's? [Enter = ${def}] > `,
+        ["o", "d", ""],
       )) || def;
-    if (ans === "o") fromDuplicate.add(d.key);
+    if (ans === "d") fromDuplicate.add(d.key);
   }
   const applyChoices = (original: Record<string, unknown>): ReturnType<typeof buildMergeBody> => {
     const res = buildMergeBody(original, duplicateRaw, choosable, fromDuplicate);
@@ -332,7 +328,7 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
   const gd = preview.groupsDiff;
   io.print(`  ${gd.new.length} group(s) move over, ${gd.both.length} shared.`);
   io.print(
-    `  Plan: keep person ${r.id(survivor.id)}, merge person ${r.id(loser.id)} into it through ChurchTools' ` +
+    `  Plan: keep Original ${r.id(survivor.id)}, merge Duplikat ${r.id(loser.id)} into it through ChurchTools' ` +
       "merge API (memberships and related records move over).",
   );
   if ((await askChoice(io, "  Proceed? [y/n] > ", ["y", "n"])) === "n") return "skipped";
@@ -343,7 +339,7 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
     body = applyChoices(await loadRawPerson(client, survivor.id)).body;
   } catch (err) {
     store.audit({ action: "merge-error", survivingId: survivor.id, loserId: loser.id }, now());
-    io.print(`  Could not re-read the survivor${err instanceof CtApiError ? ` (HTTP ${err.status})` : ""}.`);
+    io.print(`  Could not re-read the Original${err instanceof CtApiError ? ` (HTTP ${err.status})` : ""}.`);
     return "pending";
   }
 
