@@ -210,8 +210,8 @@ export class CtClient {
     const hint = (body as { hint?: unknown }).hint;
     if (typeof hint === "string" && hint.startsWith("ct gateway proxy")) return `${base}: ${hint}`;
     return (
-      `${base}: this path is not on the gateway allowlist. Widening it goes through a PR in ` +
-      "eqrm-infra `ct-read-gateway` (handler allowlist); there is no retry or other tier."
+      `${base}: this path is not on the gateway allowlist. Widening it is a change to the gateway's ` +
+      "handler allowlist (ask whoever runs the gateway); ct does not retry."
     );
   }
 

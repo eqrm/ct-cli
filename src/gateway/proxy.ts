@@ -180,7 +180,7 @@ export function createProxyServer(options: ProxyOptions): Server {
     // to the client unchanged; no retry, no other tier.
     const allowlisted = upstream.status === 403 && isBlockedBody(payload);
     log(
-      `${method} ${logPath} ${upstream.status}${allowlisted ? ` (not on the gateway allowlist; widening it is a PR in eqrm-infra ct-read-gateway, handler allowlist)` : ""}`,
+      `${method} ${logPath} ${upstream.status}${allowlisted ? ` (not on the gateway allowlist; widening it is a change to the gateway's handler allowlist)` : ""}`,
     );
     const responseHeaders: Record<string, string> = {
       "content-type": upstream.headers.get("content-type") ?? "application/json",

@@ -105,7 +105,9 @@ describe("CtClient in gateway mode", () => {
     await c.authenticateViaGateway();
     fetchMock.mockClear();
     fetchMock.mockImplementation(async () => new Response('{"blocked":"GET /api/secret"}', { status: 403 }));
-    await expect(c.get("/secret")).rejects.toThrow(/not on the gateway allowlist.*ct-read-gateway/);
+    await expect(c.get("/secret")).rejects.toThrow(
+      /not on the gateway allowlist\. Widening it is a change to the gateway's handler allowlist/,
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

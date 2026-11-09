@@ -158,7 +158,9 @@ describe("allowlist 403", () => {
     const res = await fetch(`${proxy}/api/not-allowed`);
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ blocked: "GET /api/not-allowed" });
-    expect(logs.join("\n")).toMatch(/not on the gateway allowlist.*eqrm-infra ct-read-gateway/);
+    expect(logs.join("\n")).toMatch(
+      /not on the gateway allowlist; widening it is a change to the gateway's handler allowlist/,
+    );
   });
 });
 

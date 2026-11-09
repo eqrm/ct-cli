@@ -24,7 +24,7 @@ proxy forwards to:
       "gateway": {
         "url": "https://<id>.execute-api.eu-central-1.amazonaws.com",
         "region": "eu-central-1",
-        "profile": "eqrm-ct-reader"
+        "profile": "ct-gateway-reader"
       }
     }
   }
@@ -35,8 +35,8 @@ The AWS profile assumes the reader role (`~/.aws/config`). The reader role needs
 the default profile has no `mfa_serial` and `ct gateway proxy` never prompts:
 
 ```ini
-[profile eqrm-ct-reader]
-role_arn = arn:aws:iam::600627318234:role/eqrm-ct-gateway-reader
+[profile ct-gateway-reader]
+role_arn = arn:aws:iam::<account>:role/<gateway-reader-role>
 source_profile = default
 region = eu-central-1
 ```
@@ -76,5 +76,5 @@ discards it and the gateway uses its own session.
   if the profile has `mfa_serial`).
 - A `403` with a `blocked` body is the gateway's allowlist deciding. The proxy passes it to the
   client unchanged and logs that the path is not on the gateway allowlist; `ct` reports the same.
-  Widening the allowlist is a PR in eqrm-infra `ct-read-gateway` (handler allowlist). There is
-  no automatic retry and no switching to another tier.
+  Widening the allowlist is a change to the gateway's handler allowlist, made by whoever runs
+  the gateway. There is no automatic retry and no switching to another tier.
