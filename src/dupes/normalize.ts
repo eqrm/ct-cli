@@ -17,10 +17,10 @@ export function deaccent(input: string): string {
     .replace(/[̀-ͯ]/g, "");
 }
 
-/** Deaccented name with everything but `a-z 0-9 space -` removed. */
+/** Deaccented name with everything but letters (any script), digits, space and `-` removed. */
 export function cleanName(input: string | null | undefined): string {
   return deaccent(input ?? "")
-    .replace(/[^a-z0-9 -]/g, "")
+    .replace(/[^\p{L}\p{N} -]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
 }

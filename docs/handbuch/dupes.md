@@ -1,5 +1,5 @@
 ---
-sources_hash: 4d866bf0bcecebbc
+sources_hash: 3ec7b58bafe7fca7
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -61,8 +61,15 @@ both Optigem IDs. On "merge" you pick the surviving person, then:
 3. ChurchTools' merge page opens in your browser. Complete the merge there and confirm in
    the terminal.
 
+The group changes in steps 1 and 2 happen before the merge page opens. If you stop there
+(merge not finished, or the clean-up fails), they stay applied; the loser's previous
+memberships are in the audit log under `merge-started`.
+
 "Keine Dublette" writes the relationship back to ChurchTools so the pair is never proposed
-again. The default merge-page URL is a template that may need adjusting with `--merge-url`
+again. A re-scan keeps earlier decisions (dismissed, merged) for pairs that still turn up, so
+a dismissal whose write-back failed does not reappear. The relationship types are found by
+their function keys `noduplicate` and `openduplicate`; if the instance has none, the command
+stops rather than guess an id. The default merge-page URL is a template that may need adjusting with `--merge-url`
 for your ChurchTools version.
 
 ## Personal-data guard

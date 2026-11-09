@@ -42,10 +42,13 @@ export interface ReviewDeps {
 export const DEFAULT_MERGE_URL = "{host}/persons/{original}/merge/{duplicate}";
 
 export function renderMergeUrl(template: string, host: string, original: number, duplicate: number): string {
-  return template
-    .replace("{host}", host)
-    .replace("{original}", String(original))
-    .replace("{duplicate}", String(duplicate));
+  const values: Record<string, string> = {
+    host: host.replace(/\/+$/, ""),
+    original: String(original),
+    duplicate: String(duplicate),
+  };
+  // A function replacer, so `$` in a value is taken literally.
+  return template.replace(/\{(host|original|duplicate)\}/g, (_m, k: string) => values[k]!);
 }
 
 /** Rows of the side-by-side view: label plus both values. */
@@ -234,6 +237,7 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
     io.print(
       `  Group clean-up failed${err instanceof CtApiError ? ` (HTTP ${err.status})` : ""}; stopping before the merge page.`,
     );
+    io.print("  Changes made before the failure stay applied; see the audit log (merge-started) to restore.");
     return "pending";
   }
 
@@ -248,6 +252,10 @@ export async function reviewCandidate(deps: ReviewDeps, cand: StoredCandidate): 
     const done = await askChoice(io, "  Merge finished in ChurchTools? [y/n] > ", ["y", "n"]);
     if (done === "n") {
       store.audit({ action: "merge-pending", survivingId: survivor.id, loserId: loser.id }, now());
+      io.print(
+        "  Note: the group changes above are already applied in ChurchTools; the loser's previous " +
+          "memberships are in the audit log (merge-started).",
+      );
       return "pending";
     }
     try {

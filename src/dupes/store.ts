@@ -20,6 +20,17 @@ export interface StoredCandidate extends Candidate {
   state: CandidateState;
 }
 
+/**
+ * States for a fresh scan: a pair decided earlier (dismissed or merged) keeps its decision, so a
+ * dismissal whose write-back failed, or a merge recorded with both persons still present, does not
+ * come back as open.
+ */
+export function carryStates(previous: ScanFile | null, candidates: readonly Candidate[]): StoredCandidate[] {
+  const prior = new Map<string, CandidateState>();
+  for (const c of previous?.candidates ?? []) if (c.state !== "open") prior.set(`${c.a}:${c.b}`, c.state);
+  return candidates.map((c) => ({ ...c, state: prior.get(`${c.a}:${c.b}`) ?? "open" }));
+}
+
 export interface ScanFile {
   schema: typeof SCAN_SCHEMA;
   host: string;

@@ -4,7 +4,7 @@
  */
 import { fetchDynamicGroupIds } from "../api/dynamicGroups.js";
 import type { CtClient } from "../api/ctClient.js";
-import { type Candidate, type DupePerson, detect, pairKey, scorePair, tierOf } from "./detector.js";
+import { type Candidate, type DupePerson, detect, pairKey, pairScorer, tierOf } from "./detector.js";
 import { toMembership, type Membership } from "./memberships.js";
 
 export type DupesClient = Pick<CtClient, "get" | "getAll" | "request">;
@@ -93,8 +93,14 @@ interface RelType {
 export async function resolveRelationshipTypes(client: DupesClient): Promise<RelationshipTypeIds> {
   const md = await client.get<{ relationshipTypes?: RelType[] }>("/person/masterdata");
   const types = md.relationshipTypes ?? [];
-  const noDuplicate = types.find((t) => t.functionKeys?.includes("noduplicate"))?.id ?? 6;
-  const duplicate = types.find((t) => t.functionKeys?.includes("openduplicate"))?.id ?? 9;
+  const noDuplicate = types.find((t) => t.functionKeys?.includes("noduplicate"))?.id;
+  const duplicate = types.find((t) => t.functionKeys?.includes("openduplicate"))?.id;
+  // No fallback ids: they differ per instance, and a wrong guess writes a wrong relationship.
+  if (noDuplicate === undefined || duplicate === undefined) {
+    throw new Error(
+      "ChurchTools masterdata has no relationship types with the function keys noduplicate/openduplicate.",
+    );
+  }
   return { noDuplicate, duplicate };
 }
 
@@ -153,6 +159,7 @@ export function buildCandidates(persons: readonly PersonRecord[], rel: RelationS
   const dupes = persons.map(toDupePerson);
   const byId = new Map(dupes.map((p) => [p.id, p]));
   const found = new Map(detect(dupes, { suppressed: rel.suppressed }).map((c) => [pairKey(c.a, c.b), c]));
+  const scorePair = pairScorer(dupes);
   const addExternal = (pair: [number, number], marked: boolean): void => {
     const [x, y] = pair;
     const key = pairKey(x, y);
@@ -165,7 +172,7 @@ export function buildCandidates(persons: readonly PersonRecord[], rel: RelationS
       if (marked) hit.markedDuplicate = true;
       return;
     }
-    const res = scorePair(pa, pb, dupes);
+    const res = scorePair(pa, pb);
     if (res.veto === "placeholder" && !marked) return;
     const score = Math.max(res.veto ? 0 : res.score, 35);
     found.set(key, {
@@ -193,6 +200,19 @@ interface PersonGroupRow {
   group: { title?: string; domainIdentifier: string };
 }
 
+const dynamicIdCache = new WeakMap<DupesClient, Promise<Set<number>>>();
+
+/** Dynamic group ids, fetched once per client (constant for a review session). */
+function dynamicGroupIds(client: DupesClient): Promise<Set<number>> {
+  let ids = dynamicIdCache.get(client);
+  if (!ids) {
+    ids = fetchDynamicGroupIds(client);
+    dynamicIdCache.set(client, ids);
+    ids.catch(() => dynamicIdCache.delete(client));
+  }
+  return ids;
+}
+
 /** Groups both persons belong to, split into dynamic (auto) and static. */
 export async function findSharedGroups(client: DupesClient, a: number, b: number): Promise<SharedGroups> {
   const [ga, gb] = await Promise.all([
@@ -200,7 +220,7 @@ export async function findSharedGroups(client: DupesClient, a: number, b: number
     client.getAll<PersonGroupRow>(`/persons/${b}/groups`),
   ]);
   const idsB = new Set(gb.data.map((r) => Number(r.group.domainIdentifier)));
-  const dynamicIds = await fetchDynamicGroupIds(client);
+  const dynamicIds = await dynamicGroupIds(client);
   const out: SharedGroups = { dynamic: [], static: [] };
   const seen = new Set<number>();
   for (const row of ga.data) {

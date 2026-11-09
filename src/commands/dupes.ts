@@ -17,7 +17,7 @@ import { buildFinanceExport, financeMerges, toCsv } from "../dupes/finance.js";
 import { assertHumanSession } from "../dupes/guard.js";
 import { makeRedactor, type Redactor } from "../dupes/redact.js";
 import { DEFAULT_MERGE_URL, runReview, type ReviewIO } from "../dupes/review.js";
-import { DupesStore, SCAN_SCHEMA } from "../dupes/store.js";
+import { DupesStore, SCAN_SCHEMA, carryStates } from "../dupes/store.js";
 import { info, success, warn } from "../ui.js";
 
 interface CommonOptions {
@@ -109,7 +109,7 @@ export function dupesCommand(): Command {
         host: s.host,
         scannedAt: new Date().toISOString(),
         personsScanned: persons.length,
-        candidates: candidates.map((c) => ({ ...c, state: "open" as const })),
+        candidates: carryStates(s.store.loadScan(), candidates),
       });
       const by = (t: string): number => candidates.filter((c) => c.tier === t).length;
       success(

@@ -234,9 +234,18 @@ function scorePrepared(a: Prep, b: Prep, ctx: Context): PairScore {
   return { score, matchClass: cls, signals };
 }
 
-/** Score one pair outside the detector (used to rate pairs ChurchTools itself suggested). */
+/**
+ * Scorer for pairs outside the detector (used to rate pairs ChurchTools itself suggested).
+ * The population context is built once, so scoring many pairs stays linear.
+ */
+export function pairScorer(all: readonly DupePerson[]): (pa: DupePerson, pb: DupePerson) => PairScore {
+  const ctx = buildContext(all.map(prep));
+  return (pa, pb) => scorePrepared(prep(pa), prep(pb), ctx);
+}
+
+/** Score one pair outside the detector. Prefer {@link pairScorer} for more than one pair. */
 export function scorePair(pa: DupePerson, pb: DupePerson, all: readonly DupePerson[]): PairScore {
-  return scorePrepared(prep(pa), prep(pb), buildContext(all.map(prep)));
+  return pairScorer(all)(pa, pb);
 }
 
 function buildContext(preps: Prep[]): Context {
