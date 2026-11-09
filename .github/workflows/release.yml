@@ -100,7 +100,7 @@ jobs:
   # .github/scripts/smoke-test-binary.sh for exactly what this does and doesn't prove).
   smoke-darwin-arm64:
     needs: build
-    runs-on: macos-14 # Apple Silicon
+    runs-on: macos-15 # Apple Silicon (macos-14 is no longer accepted: "configuration not supported", 2026-11-09)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
