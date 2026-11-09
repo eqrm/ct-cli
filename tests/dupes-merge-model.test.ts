@@ -1,0 +1,143 @@
+import { describe, expect, it } from "vitest";
+import { formatValue } from "../src/dupes/actions.js";
+import { toPersonRecord } from "../src/dupes/ct.js";
+import {
+  buildBody,
+  buildModel,
+  defaultChoice,
+  olderFirst,
+  optigemOutcome,
+  setChoice,
+  setDefaultEmail,
+  toggleEmail,
+  type MergeModel,
+} from "../src/dupes/merge-model.js";
+import { raw } from "./dupes-fixtures.js";
+
+const model = (o: Record<string, unknown>, d: Record<string, unknown>): MergeModel =>
+  buildModel(o, d, [], "optigemId");
+
+describe("merge model", () => {
+  it("only offers whitelisted person fields; system keys are never choosable", () => {
+    const m = model(raw(1), raw(2, { lastName: "Beispiel", domainType: "person", imageUrl: "x" }));
+    const keys = m.fields.map((f) => f.key);
+    expect(keys).toContain("lastName");
+    for (const k of [
+      "guid",
+      "id",
+      "meta",
+      "domainType",
+      "imageUrl",
+      "securityLevelForPerson",
+      "emails",
+      "email",
+    ]) {
+      expect(keys).not.toContain(k);
+    }
+  });
+
+  it("skips fields that are empty on both sides and defaults to the non-empty side", () => {
+    const m = model(raw(1, { mobile: "" }), raw(2, { mobile: "0151", job: "" }));
+    expect(m.fields.find((f) => f.key === "job")).toBeUndefined();
+    expect(m.fields.find((f) => f.key === "mobile")!.choice).toBe("duplicate");
+    expect(m.fields.find((f) => f.key === "firstName")!.choice).toBe("original");
+    expect(defaultChoice("a", "b")).toBe("original");
+    expect(defaultChoice("", "")).toBe("none");
+  });
+
+  it("keeps the Original's values by default and applies chosen duplicate values", () => {
+    const o = raw(1);
+    const d = raw(2, { lastName: "Beispiel" });
+    let m = model(o, d);
+    expect(buildBody(o, d, m).body.lastName).toBe("Muster");
+    m = setChoice(m, "lastName", "duplicate");
+    expect(buildBody(o, d, m).body.lastName).toBe("Beispiel");
+    m = setChoice(m, "lastName", "none");
+    expect(buildBody(o, d, m).body.lastName).toBe("");
+  });
+
+  it("unions emails: duplicate addresses without id, original ids kept, one default", () => {
+    const o = raw(1, {
+      email: "a@example.org",
+      emails: [
+        { id: 1, email: "a@example.org", isDefault: true },
+        { id: 2, email: "a2@example.org", isDefault: false },
+      ],
+    });
+    const d = raw(2, {
+      emails: [
+        { id: 9, email: "B@example.org", isDefault: true },
+        { id: 8, email: "A@example.org" },
+      ],
+    });
+    const m = model(o, d);
+    expect(m.emails.map((e) => [e.address, e.isDefault])).toEqual([
+      ["a@example.org", true],
+      ["a2@example.org", false],
+      ["B@example.org", false],
+    ]);
+    const body = buildBody(o, d, m).body;
+    expect(body.emails).toEqual([
+      { id: 1, email: "a@example.org", isDefault: true },
+      { id: 2, email: "a2@example.org", isDefault: false },
+      { email: "B@example.org", isDefault: false },
+    ]);
+    expect(body.email).toBe("a@example.org");
+  });
+
+  it("toggling and default selection keep exactly one default among included addresses", () => {
+    const o = raw(1, { emails: [{ id: 1, email: "a@example.org", isDefault: true }] });
+    const d = raw(2, { emails: [{ id: 9, email: "b@example.org", isDefault: true }] });
+    let m = model(o, d);
+    m = setDefaultEmail(m, "b@example.org");
+    expect(buildBody(o, d, m).body.emails).toEqual([
+      { id: 1, email: "a@example.org", isDefault: false },
+      { email: "b@example.org", isDefault: true },
+    ]);
+    m = toggleEmail(m, "b@example.org");
+    expect(buildBody(o, d, m).body.emails).toEqual([{ id: 1, email: "a@example.org", isDefault: true }]);
+  });
+
+  it("Optigem: lone ID is preselected; both IDs follow the choice", () => {
+    expect(optigemOutcome(model(raw(1), raw(2, { optigemId: "7" })))).toEqual({ leading: "7", orphaned: "" });
+    const o = raw(1, { optigemId: "1" });
+    const d = raw(2, { optigemId: "2" });
+    let m = model(o, d);
+    expect(optigemOutcome(m)).toEqual({ leading: "1", orphaned: "2" });
+    m = setChoice(m, "optigemId", "duplicate");
+    expect(optigemOutcome(m)).toEqual({ leading: "2", orphaned: "1" });
+    expect(buildBody(o, d, m).body.optigemId).toBe("2");
+  });
+
+  it("warns instead of writing a display string when the duplicate lacks the key", () => {
+    const o = raw(1, { job: "x" });
+    const d = raw(2);
+    let m = model(o, d);
+    m = {
+      ...m,
+      fields: [
+        ...m.fields,
+        { key: "job", label: "Job", original: "x", duplicate: "y", choice: "duplicate", optigem: false },
+      ],
+    };
+    const res = buildBody(o, d, m);
+    expect(res.warnings[0]).toContain("cannot be carried over automatically");
+    expect(res.body.job).toBe("x");
+  });
+
+  it("the older person (lower id) is the default Original", () => {
+    expect(olderFirst({ id: 5 }, { id: 3 }).map((p) => p.id)).toEqual([3, 5]);
+  });
+});
+
+describe("campus and status ids", () => {
+  it("keeps id 0 (a valid campus/status id) and shows names where masterdata has them", () => {
+    const rec = toPersonRecord(raw(1), "optigemId");
+    expect(rec.campusId).toBe(0);
+    expect(rec.statusId).toBe(0);
+    const labels = { campusId: new Map([[0, "Hauptcampus"]]) };
+    expect(formatValue("campusId", 0, labels)).toBe("Hauptcampus");
+    expect(formatValue("statusId", 0, labels)).toBe("0");
+    expect(formatValue("campusId", null, labels)).toBe("");
+  });
+});

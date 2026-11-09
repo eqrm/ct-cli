@@ -1,4 +1,3 @@
-import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import { CtApiError } from "../api/ctClient.js";
 import { authedSession } from "../api/session.js";
@@ -15,7 +14,6 @@ import {
 import { buildFinanceExport, financeMerges, toCsv } from "../dupes/finance.js";
 import { assertHumanSession } from "../dupes/guard.js";
 import { makeRedactor, type Redactor } from "../dupes/redact.js";
-import { runReview, type ReviewIO } from "../dupes/review.js";
 import { DupesStore, SCAN_SCHEMA, carryStates } from "../dupes/store.js";
 import { info, success, warn } from "../ui.js";
 
@@ -116,42 +114,35 @@ export function dupesCommand(): Command {
   addCommon(
     dupes
       .command("review")
-      .description("Review stored candidates one pair at a time: merge, not a duplicate, skip")
-      .option("--limit <n>", "review at most this many pairs", (v) => Number(v)),
-  ).action((opts: CommonOptions & { limit?: number }) =>
+      .description("Review stored candidates in a full-screen view: merge, not a duplicate, skip"),
+  ).action((opts: CommonOptions) =>
     run(opts, async () => {
       const s = await openSession(opts);
       const scan = s.store.loadScan();
       if (!scan) throw new Error("No scan found. Run `ct dupes scan` first.");
       const { client, me } = await authedSession();
       const types = await resolveRelationshipTypes(client);
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const io: ReviewIO = {
-        ask: (q) => rl.question(q),
-        print: (line) => process.stdout.write(`${line}\n`),
-      };
-      try {
-        const counts = await runReview(
-          {
-            client,
-            store: s.store,
-            host: s.host,
-            redactor: s.redactor,
-            optigemField: s.optigemField,
-            types,
-            operator: { id: me.id, name: `${me.firstName ?? ""} ${me.lastName ?? ""}`.trim() },
-            io,
-          },
-          scan,
-          opts.limit,
-        );
-        info(
-          `Done: ${counts.merged} merged, ${counts.dismissed} not duplicates, ` +
-            `${counts.skipped} skipped, ${counts.pending} pending.`,
-        );
-      } finally {
-        rl.close();
-      }
+      // Lazy: Ink and React load only for this command.
+      const [{ runReviewTui }, { loadLabels }] = await Promise.all([
+        import("../dupes/tui/run.js"),
+        import("../dupes/actions.js"),
+      ]);
+      const labels = await loadLabels(client);
+      await runReviewTui(
+        {
+          client,
+          store: s.store,
+          host: s.host,
+          redactor: s.redactor,
+          optigemField: s.optigemField,
+          types,
+          operator: { id: me.id, name: `${me.firstName ?? ""} ${me.lastName ?? ""}`.trim() },
+          labels,
+        },
+        scan,
+      );
+      const by = (st: string): number => scan.candidates.filter((c) => c.state === st).length;
+      info(`Done: ${by("merged")} merged, ${by("dismissed")} not duplicates, ${by("open")} still open.`);
     }),
   );
 

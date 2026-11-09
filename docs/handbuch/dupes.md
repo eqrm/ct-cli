@@ -1,12 +1,16 @@
 ---
-sources_hash: 6b3bd8f40f084748
+sources_hash: 68b24d900c1702b5
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
   - src/dupes/detector.ts
   - src/dupes/guard.ts
   - src/dupes/store.ts
-  - src/dupes/review.ts
+  - src/dupes/actions.ts
+  - src/dupes/merge-model.ts
+  - src/dupes/tui/App.tsx
+  - src/dupes/tui/ListScreen.tsx
+  - src/dupes/tui/PairScreen.tsx
   - src/dupes/finance.ts
   - src/dupes/redact.ts
 reviewed: 2026-11-09
@@ -28,7 +32,7 @@ its behaviour may change between ChurchTools releases.
 | Command                                  | What it does                                                                                      |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `ct dupes scan [--env]`                  | Loads non-archived persons and ChurchTools' own duplicate suggestions, scores pairs, stores them. |
-| `ct dupes review [--limit N]`            | One pair at a time: merge, "keine Dublette", skip or quit.                                        |
+| `ct dupes review`                        | Full-screen review of the scanned pairs: merge, "keine Dublette", skip.                           |
 | `ct dupes export-finance [--since DATE]` | Writes `optigem-merges-<date>.csv` and `.json` for merges where both persons had an Optigem ID.   |
 
 Common options: `-e, --env`, `--redact`, `--optigem-field <key>` (or
@@ -50,32 +54,72 @@ Pairs are dropped when:
 
 ## Review and merge
 
-Both persons are shown side by side with both Optigem IDs. On "merge":
+`ct dupes review` opens a full-screen terminal view (Ink) modelled on ChurchTools' "Dubletten
+überprüfen" dialog. Ink and React load only for this command, so every other `ct` command
+starts as fast as before.
 
-1. The view is laid out like ChurchTools' "Dubletten überprüfen" dialog: **Original** on the
-   left, **Duplikat** on the right, with ID, created date and last login above the fields. The
-   Original is the older person (the lower id), as in ChurchTools' own merge UI. `t` (tauschen)
-   swaps the two columns and can be pressed repeatedly. On `m`, the shown Original is kept.
-2. `ct dupes` loads the merge preview. Every differing person field with a key is listed;
-   for each you keep the Original's (`o`) or the Duplikat's (`d`) value; the default is the non-empty side (the Original's if both are filled). The Optigem ID is not asked per field: a lone ID is always kept, and if both have
-   different IDs you choose the leading one (`o` or `d`).
-   The number of groups that move over and that both persons share is shown for information.
-3. After the plan and `Proceed? [y/n]`, the Original's person object (with your choices
-   applied) is sent in one `PATCH`. ChurchTools moves memberships, relations, bookings and
-   other related records to the Original in a single transaction, so there is **no
-   group clean-up** before the merge. Addresses are never replaced: `emails` becomes the Original's list plus the other
-   person's addresses not present yet (without their ids); choosing the other person's email
-   makes that address the default. Just before the PATCH the Original is re-read, so the body
-   reflects its current state. A chosen field the other person's record does not carry is
-   skipped with a warning.
-4. Afterwards the duplicate is looked up: a 404 means it is gone. If ChurchTools kept the
-   record, the merge is still recorded, with `duplicateStillExists: true` in the audit log;
-   `ct dupes` never deletes it.
+### List screen
 
-If the merge call fails, `merge-error` is logged and only the HTTP status is printed. If the
-duplicate is gone nevertheless, the merge is recorded (`afterError: true`); otherwise the pair stays
-open (`pending`). At the start of a later review, a pair whose `merge-started` was never confirmed
-and whose duplicate is gone is recorded as merged (`recovered: true`). The audit log keeps `merge-started` (the differing fields of both
+All candidates of the last scan with tier, score, match class, source, both names and state
+(`open`, `merged`, `dismissed`). Names come from one `GET /persons` when the screen opens.
+
+| Key         | Action                          |
+| ----------- | ------------------------------- |
+| `↑` `↓`     | move; `PgUp` / `PgDn` page      |
+| `1` `2` `3` | show only tier T1 / T2 / T3     |
+| `a`         | show all                        |
+| `Enter`     | open the pair (open pairs only) |
+| `q`         | quit                            |
+
+### Pair screen
+
+Two cards, **Original** (green) and **Duplikat** (red), show name, ID, created date and last
+login. The Original is the older person (the lower id), as in ChurchTools' own merge UI. Below
+them a table has the columns Feld, Original, Ergebnis and Duplikat. Only differing fields are
+listed; `i` also shows identical ones. The chosen side is green, the other red.
+
+| Key          | Action                                                                           |
+| ------------ | -------------------------------------------------------------------------------- |
+| `↑` `↓`      | move the row cursor                                                              |
+| `←`          | take the Duplikat's value into Ergebnis                                          |
+| `→`          | take the Original's value                                                        |
+| `x`          | clear Ergebnis (field rows); include or exclude the address (email rows)         |
+| `Space`, `*` | email rows: include or exclude an address; make it the default address           |
+| `i`          | show or hide identical fields                                                    |
+| `t`          | swap Original and Duplikat (reloads the merge preview for the new direction)     |
+| `m`          | merge: a confirm dialog lists what changes; `y` or `Enter` sends it, `n` cancels |
+| `n`          | "keine Dublette"                                                                 |
+| `s`          | skip                                                                             |
+| `Esc`        | back to the list                                                                 |
+
+Defaults: the non-empty side wins, the Original wins a conflict. Only real person fields can
+be chosen (names, nickname, birthday, address, phones, sex, campus, status, job, departments
+and similar). System keys such as `guid`, `id`, `meta`, image and URL fields, security levels
+and privacy fields are never offered and always come from the Original. Campus, status and sex
+show their names from `/person/masterdata` (the ids when masterdata has no name; id `0` is a
+valid campus or status id).
+
+Email addresses are one row per distinct address of both persons. All are included by default
+and the Original's default address stays default; exactly one included address is the default
+(`*`). Duplicate addresses are sent without their `id`.
+
+The Optigem ID is a normal row. A lone ID is preselected; with two different IDs the Original's
+wins until you choose. The leading and orphaned IDs in the audit log and the finance export
+follow the final choice.
+
+An info line shows the group counts of the merge preview (the original's groups, the
+duplicate's, shared ones). ChurchTools moves memberships, relations and other related records
+itself, so `ct dupes` does **no** group clean-up.
+
+On confirm the Original is re-read, your choices are applied to that fresh object and sent in
+one `PATCH /persons/{original}/merge/{duplicate}`. Afterwards the duplicate is looked up: a 404
+means it is gone; if ChurchTools kept the record, the merge is still recorded with
+`duplicateStillExists: true` and the record is never deleted. If the call fails, only the HTTP
+status is shown and the pair stays open. `merge-error` is logged; if the duplicate is gone
+nevertheless, the merge is recorded (`afterError: true`). When a pair later no longer loads and
+its `merge-started` was never confirmed, it is recorded as merged (`recovered: true`). After an
+action you return to the list with the cursor on the next open pair; the scan file is saved
+after every decision. The audit log keeps `merge-started` (the differing fields of both
 persons and the group ids of the preview) and `merge-confirmed` (what the finance export reads).
 
 "Keine Dublette" writes the relationship back to ChurchTools so the pair is never proposed
