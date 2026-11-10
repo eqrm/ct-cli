@@ -212,53 +212,50 @@ export function optigemOutcome(m: MergeModel): OptigemOutcome {
  * skipped and reported in `warnings`.
  */
 /**
- * Keys ChurchTools derives or owns. Its own merge UI never sends them in the PATCH body (observed
- * in a HAR of the web UI); sending the full GET object is rejected with HTTP 400.
+ * System keys ChurchTools' own merge UI sends in the PATCH body (observed in a HAR of the web UI).
+ * Everything else the GET returns is left out: sending the full GET object is rejected (400), and
+ * nested objects such as `invitationStatus` or `privacyPolicyAgreement` make the endpoint fail
+ * with a 500 (verified on a dev instance).
  */
-export const READ_ONLY_KEYS = new Set([
-  "email",
-  "createdDate",
-  "createdPid",
-  "modifiedDate",
-  "modifiedPid",
-  "customFields",
-  "isActive",
-  "isSystemUser",
-  "castHelper",
-  "kids",
-  "parents",
-  "spouse",
-  "imageKey",
-  "imageUrl",
-  "familyImageKey",
-  "familyImageUrl",
-  "latitude",
-  "longitude",
-  "latitudeLoose",
-  "longitudeLoose",
-  "loginString",
-  "lastLogin",
-  "firstLogin",
-  "password",
-  "sortNameDynamicProperty",
-  "receivingEmail",
-]);
+export const SYSTEM_KEYS = [
+  "id",
+  "guid",
+  "domainType",
+  "meta",
+  "campusId",
+  "statusId",
+  "departmentIds",
+  "canChat",
+  "chatActive",
+  "isArchived",
+  "isDead",
+  "firstContact",
+  "lastEditedDate",
+  "visibility",
+  "securityLevelForPerson",
+  "editSecurityLevelForPerson",
+  "privacyPolicyAgreementDate",
+  "privacyPolicyAgreementTypeId",
+  "privacyPolicyAgreementWhoId",
+] as const;
 
-/** The Original as ChurchTools' merge UI sends it: writable keys with a value, emails without ids. */
-export function writableBody(raw: Record<string, unknown>): Record<string, unknown> {
+const META_KEYS = ["createdDate", "createdPerson", "modifiedDate", "modifiedPerson"];
+
+/**
+ * The Original as ChurchTools' merge UI sends it: the system keys above plus the person fields
+ * (`personKeys`), each only when it has a value.
+ */
+export function writableBody(
+  raw: Record<string, unknown>,
+  personKeys: Iterable<string>,
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (READ_ONLY_KEYS.has(k) || v === null || v === "" || v === undefined) continue;
-    out[k] = v;
+  for (const k of new Set<string>([...SYSTEM_KEYS, ...personKeys])) {
+    if (k in raw && !isEmpty(raw[k])) out[k] = raw[k];
   }
-  // The UI sends only these meta keys.
   if (out.meta && typeof out.meta === "object") {
     const m = out.meta as Record<string, unknown>;
-    out.meta = Object.fromEntries(
-      ["createdDate", "createdPerson", "modifiedDate", "modifiedPerson"]
-        .filter((k) => k in m)
-        .map((k) => [k, m[k]]),
-    );
+    out.meta = Object.fromEntries(META_KEYS.filter((k) => k in m).map((k) => [k, m[k]]));
   }
   return out;
 }
@@ -268,14 +265,16 @@ export function buildBody(
   duplicateRaw: Record<string, unknown>,
   m: MergeModel,
 ): { body: Record<string, unknown>; warnings: string[] } {
-  const body = writableBody(freshOriginal);
+  const body = writableBody(freshOriginal, [
+    ...CHOOSABLE_FIELDS.map((f) => f.key),
+    ...m.fields.map((f) => f.key),
+  ]);
   const warnings: string[] = [];
   for (const f of m.fields) {
     if (f.choice === "original") continue;
     if (f.choice === "none") {
       body[f.key] = cleared(freshOriginal[f.key] ?? f.original);
     } else if (f.key in duplicateRaw) {
-      if (READ_ONLY_KEYS.has(f.key)) continue;
       body[f.key] = duplicateRaw[f.key];
     } else {
       warnings.push(`${f.label}: value cannot be carried over automatically, set it in ChurchTools.`);

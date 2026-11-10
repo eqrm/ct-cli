@@ -97,6 +97,8 @@ describe("merge model", () => {
       nickname: "",
       job: null,
       isDead: false,
+      invitationStatus: { status: "accepted" },
+      privacyPolicyAgreement: { date: "2020-01-01" },
       meta: {
         createdDate: "c",
         createdPerson: { id: 1 },
@@ -107,7 +109,17 @@ describe("merge model", () => {
     });
     const d = raw(2, { nickname: "Nick", emails: [] });
     const body = buildBody(o, d, model(o, d)).body;
-    for (const k of ["email", "createdDate", "imageUrl", "parents", "isActive", "lastLogin", "job"]) {
+    for (const k of [
+      "email",
+      "createdDate",
+      "imageUrl",
+      "parents",
+      "isActive",
+      "lastLogin",
+      "job",
+      "invitationStatus",
+      "privacyPolicyAgreement",
+    ]) {
       expect(body, k).not.toHaveProperty(k);
     }
     expect(body.isDead).toBe(false);

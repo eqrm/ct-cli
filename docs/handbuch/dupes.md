@@ -1,5 +1,5 @@
 ---
-sources_hash: d5db23610eca3c22
+sources_hash: d445e0d330866742
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -114,12 +114,18 @@ itself, so `ct dupes` does **no** group clean-up.
 
 On confirm the Original is re-read, your choices are applied to that fresh object and sent in
 one `PATCH /persons/{original}/merge/{duplicate}`. The body has the shape ChurchTools' own merge
-UI sends: only keys with a value, no read-only or derived keys (`email`, created/modified fields,
-image URLs, `parents`, `kids`, `spouse`, login data and similar), and only the four `meta` keys
-`createdDate`, `createdPerson`, `modifiedDate`, `modifiedPerson`. ChurchTools rejects the
-complete `GET` object with HTTP 400. Afterwards the duplicate is looked up: a 404
-means it is gone; if ChurchTools kept the record, the merge is still recorded with
-`duplicateStillExists: true` and the record is never deleted. If the call fails, the HTTP
+UI sends: a fixed list of system keys (`id`, `guid`, `meta` with its four created/modified keys,
+campus, status, departments, security levels, privacy agreement and similar) plus the person
+fields, each only with a value. Anything else from the `GET` is left out: the complete object is
+rejected with HTTP 400, and nested objects such as `invitationStatus` make the endpoint fail with
+a 500 (verified on a dev instance).
+
+Verified on a dev instance: the duplicate is deleted, its group memberships move to the Original,
+an address that is not included disappears, and a cleared field is sent as `""` and stays empty.
+ChurchTools refuses the merge (HTTP 403) while both persons are in a common group; the merge
+preview lists those groups under `both`.
+
+If the call fails, the HTTP
 status and the field names ChurchTools rejected are shown (never values or messages) and the pair
 stays open. `merge-error` is logged; if the duplicate is gone
 nevertheless, the merge is recorded (`afterError: true`). When a pair later no longer loads and
