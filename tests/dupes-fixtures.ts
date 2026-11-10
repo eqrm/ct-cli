@@ -43,6 +43,13 @@ export interface FakeOpts {
   goneAfterError?: boolean;
   /** Ids that answer 404 from the start. */
   gone?: number[];
+  /** Shared groups of the preview (default: none). */
+  both?: Array<{ id: number; title?: string }>;
+  dynamicGroupIds?: number[];
+  /** Memberships by `${groupId}:${personId}`. */
+  memberships?: Record<string, Record<string, unknown>>;
+  /** Group member writes that fail with this status. */
+  groupWriteFails?: number;
 }
 
 export interface FakeState {
@@ -77,7 +84,12 @@ export function fakeClient(
             { key: "guid", name: "GUID", old: "guid-1", new: "guid-2", printDiff: false },
             { key: null, name: "Something", old: "x", new: "y", printDiff: true },
           ],
-          groupsDiff: { old: [{ id: 10 }], new: [{ id: 11 }, { id: 12 }], both: [{ id: 13 }] },
+          groupsDiff: {
+            // ChurchTools sends `both` as group ids; the groups themselves are in old/new.
+            old: [{ id: 10 }, ...(opts.both ?? [])],
+            new: [{ id: 11 }, { id: 12 }, ...(opts.both ?? [])],
+            both: (opts.both ?? []).map((g) => g.id),
+          },
         };
       }
       if (path === "/person/masterdata") {
@@ -88,9 +100,22 @@ export function fakeClient(
         };
       }
       if (/^\/persons\/\d+\/relationships$/.test(path)) return [];
+      const gm = /^\/groups\/(\d+)\/members\/(\d+)$/.exec(path);
+      if (gm) {
+        return (
+          opts.memberships?.[`${gm[1]}:${gm[2]}`] ?? {
+            groupTypeRoleId: 1,
+            groupMemberStatus: "active",
+            memberStartDate: "2024-01-01",
+            fields: [],
+          }
+        );
+      }
       throw new Error(`unexpected GET ${path}`);
     },
     getAll: async (path: string) => {
+      if (path === "/dynamicgroups")
+        return { data: (opts.dynamicGroupIds ?? []).map((id) => ({ groupId: id })) };
       if (path === "/persons") {
         return {
           data: Object.values(persons).map((p) => ({
@@ -104,6 +129,9 @@ export function fakeClient(
     },
     request: async (method: string, path: string, body?: unknown) => {
       calls.push({ method, path, body });
+      if (opts.groupWriteFails && /^\/groups\/\d+\/members\/\d+$/.test(path)) {
+        throw new CtApiError("group", opts.groupWriteFails, {});
+      }
       const m = /^\/persons\/(\d+)\/merge\/(\d+)$/.exec(path);
       if (method === "PATCH" && m) {
         if (opts.patchFails) {

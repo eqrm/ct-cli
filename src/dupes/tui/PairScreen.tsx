@@ -21,20 +21,50 @@ import {
   type MergeModel,
   type Side,
 } from "../merge-model.js";
+import { itemDiffers, setItemChoice, type MemberItem, type SharedGroup } from "../groups.js";
 import type { StoredCandidate } from "../store.js";
 
 export type PairOutcome = "merged" | "dismissed" | "skipped" | "back";
 
-type Entry = { kind: "field"; row: FieldRow } | { kind: "email"; row: EmailRow };
+type Entry =
+  | { kind: "field"; row: FieldRow }
+  | { kind: "email"; row: EmailRow }
+  | { kind: "group"; group: SharedGroup }
+  | { kind: "member"; group: SharedGroup; row: MemberItem };
 
-const entryId = (e: Entry): string => (e.kind === "field" ? `f:${e.row.key}` : `e:${e.row.address}`);
+const entryId = (e: Entry): string =>
+  e.kind === "field"
+    ? `f:${e.row.key}`
+    : e.kind === "email"
+      ? `e:${e.row.address}`
+      : e.kind === "group"
+        ? `g:${e.group.id}`
+        : `m:${e.group.id}:${e.row.key}`;
 
-export function visibleEntries(model: MergeModel, showIdentical: boolean): Entry[] {
+export function visibleEntries(
+  model: MergeModel,
+  showIdentical: boolean,
+  shared: readonly SharedGroup[] = [],
+): Entry[] {
   const out: Entry[] = [];
   for (const f of model.fields) if (showIdentical || differs(f)) out.push({ kind: "field", row: f });
   const emailsDiffer = model.emails.some((e) => !e.originalEntry || !e.duplicateEntry);
   if (showIdentical || emailsDiffer) for (const e of model.emails) out.push({ kind: "email", row: e });
+  for (const g of shared) {
+    out.push({ kind: "group", group: g });
+    for (const i of g.items)
+      if (showIdentical || itemDiffers(i)) out.push({ kind: "member", group: g, row: i });
+  }
   return out;
+}
+
+/** What happens to a shared group, in one line. */
+export function groupPlan(g: SharedGroup): string {
+  if (g.dynamic) return `Auto-Gruppe: Duplikat wird entfernt`;
+  const taken = g.items.filter((i) => i.choice === "duplicate" && itemDiffers(i)).map((i) => i.label);
+  return taken.length === 0
+    ? "Mitgliedschaft des Originals bleibt, Duplikat wird entfernt"
+    : `Original übernimmt ${taken.join(", ")} vom Duplikat; Duplikat wird entfernt`;
 }
 
 const clip = (s: string, n: number): string =>
@@ -82,6 +112,7 @@ export function PairScreen(props: {
   const [dir, setDir] = useState<[number, number]>([Math.min(cand.a, cand.b), Math.max(cand.a, cand.b)]);
   const [pair, setPair] = useState<PairData | null>(null);
   const [model, setModel] = useState<MergeModel | null>(null);
+  const [shared, setShared] = useState<SharedGroup[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
   const [showIdentical, setShowIdentical] = useState(false);
@@ -98,6 +129,7 @@ export function PairScreen(props: {
         if (!live) return;
         setPair(p);
         setModel(p.model);
+        setShared(p.shared);
         setCursor(0);
       },
       async (err: unknown) => {
@@ -121,7 +153,7 @@ export function PairScreen(props: {
     };
   }, [dir]);
 
-  const entries = pair && model ? visibleEntries(model, showIdentical) : [];
+  const entries = pair && model ? visibleEntries(model, showIdentical, shared) : [];
   const current = entries[Math.min(cursor, Math.max(0, entries.length - 1))];
 
   const update = (f: (m: MergeModel) => MergeModel): void => setModel((m) => (m ? f(m) : m));
@@ -152,6 +184,11 @@ export function PairScreen(props: {
     else if (current?.kind === "field" && (key.leftArrow || key.rightArrow || input === "x")) {
       const side: Side = key.leftArrow ? "duplicate" : key.rightArrow ? "original" : "none";
       update((m) => setChoice(m, current.row.key, side));
+    } else if (current?.kind === "member" && (key.leftArrow || key.rightArrow)) {
+      const side: Side = key.leftArrow ? "duplicate" : "original";
+      const g = current.group.id;
+      const k = current.row.key;
+      setShared((gs) => setItemChoice(gs, g, k, side));
     } else if (current?.kind === "email" && (input === " " || input === "x")) {
       update((m) => toggleEmail(m, current.row.address));
     } else if (current?.kind === "email" && input === "*") {
@@ -174,15 +211,25 @@ export function PairScreen(props: {
   async function doMerge(): Promise<void> {
     if (!pair || !model) return;
     setMode("busy");
-    const res = await executeMerge(deps, pair, model);
+    const res = await executeMerge(deps, pair, model, shared);
     if (res.kind === "failed") {
       setOutcome("back");
       setMessage([
         res.stage === "reread"
           ? `Could not re-read the Original${res.status ? ` (HTTP ${res.status})` : ""}; nothing was changed.`
-          : `Merge failed${res.status ? ` (HTTP ${res.status})` : ""}${
-              res.fields && res.fields.length > 0 ? `; ChurchTools rejected: ${res.fields.join(", ")}` : ""
-            }. Nothing was changed.`,
+          : res.stage === "groups"
+            ? `Gruppe ${res.groupId ?? "?"} konnte nicht vorbereitet werden${res.status ? ` (HTTP ${res.status})` : ""}; nicht zusammengeführt.${
+                res.groupsDone && res.groupsDone.length > 0
+                  ? ` Bereits erledigt (nicht zurückgenommen): Gruppen ${res.groupsDone.map((g) => g.groupId).join(", ")}.`
+                  : ""
+              }`
+            : `Merge failed${res.status ? ` (HTTP ${res.status})` : ""}${
+                res.fields && res.fields.length > 0 ? `; ChurchTools rejected: ${res.fields.join(", ")}` : ""
+              }.${
+                res.groupsDone && res.groupsDone.length > 0
+                  ? ` Gruppen ${res.groupsDone.map((g) => g.groupId).join(", ")} wurden schon vorbereitet (Duplikat entfernt).`
+                  : " Nothing was changed."
+              }`,
       ]);
     } else {
       setOutcome("merged");
@@ -233,7 +280,7 @@ export function PairScreen(props: {
 
   const labelW = 18;
   const colW = Math.max(10, Math.floor((cols - labelW - 8) / 3));
-  const height = Math.max(5, rowsAvail - 16);
+  const height = Math.max(5, rowsAvail - 16 - shared.length);
   const start = Math.min(Math.max(0, cursor - height + 1), Math.max(0, entries.length - height));
   const window = entries.slice(start, start + height);
   const gd = pair.preview.groupsDiff;
@@ -256,9 +303,13 @@ export function PairScreen(props: {
           Duplikat {r.id(pair.duplicate.id)} wird in Original {r.id(pair.original.id)} zusammengeführt.
         </Text>
         <Text>
-          ChurchTools verschiebt Gruppenmitgliedschaften und verknüpfte Daten; das Duplikat wird nicht von ct
-          gelöscht.
+          ChurchTools verschiebt Gruppenmitgliedschaften und verknüpfte Daten und löscht das Duplikat.
         </Text>
+        {shared.map((g) => (
+          <Text key={g.id}>
+            Gruppe {g.title}: {groupPlan(g)}
+          </Text>
+        ))}
         {changed.length === 0 ? (
           <Text dimColor>Alle Felder bleiben beim Original.</Text>
         ) : (
@@ -327,6 +378,38 @@ export function PairScreen(props: {
             </Box>
           );
         }
+        if (e.kind === "group") {
+          return (
+            <Box key={entryId(e)}>
+              <Text inverse={selected} bold color="yellow">
+                {pointer}
+                {clip(`Gruppe ${e.group.title}`, labelW + colW * 3 + 2)}
+              </Text>
+            </Box>
+          );
+        }
+        if (e.kind === "member") {
+          const i = e.row;
+          const diff = itemDiffers(i);
+          const oText = show(i.key, i.original);
+          const dText = show(i.key, i.duplicate);
+          const oColor = diff ? (i.choice === "original" ? "green" : "red") : undefined;
+          const dColor = diff ? (i.choice === "duplicate" ? "green" : "red") : undefined;
+          return (
+            <Box key={entryId(e)}>
+              <Text inverse={selected}>
+                {pointer}
+                {clip(`  ${i.label}`, labelW - 1)}
+              </Text>
+              <Text> </Text>
+              {cell(oText, oColor)}
+              <Text> </Text>
+              {cell(i.choice === "original" ? oText : dText, "green", true)}
+              <Text> </Text>
+              {cell(dText, dColor)}
+            </Box>
+          );
+        }
         const m = e.row;
         return (
           <Box key={entryId(e)}>
@@ -352,8 +435,13 @@ export function PairScreen(props: {
       ) : null}
       <Text dimColor>
         Gruppen: {gd.old.length} (Duplikat: {gd.new.length}), gemeinsam: {gd.both.length}. ChurchTools
-        verschiebt die Mitgliedschaften beim Zusammenführen.
+        verschiebt die übrigen Mitgliedschaften beim Zusammenführen.
       </Text>
+      {shared.map((g) => (
+        <Text key={g.id} color="yellow">
+          {clip(`Gruppe ${g.title}: ${groupPlan(g)}`, Math.max(20, cols - 1))}
+        </Text>
+      ))}
       <Text color="cyan">
         m Zusammenführen t Tauschen n Keine Dublette s Überspringen Esc Liste i Identische ←/→ Wert x
         leeren/umschalten * Standard-Adresse

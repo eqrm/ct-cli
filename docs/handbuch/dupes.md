@@ -1,5 +1,5 @@
 ---
-sources_hash: d445e0d330866742
+sources_hash: 3d53b2cde4f96aa8
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -8,6 +8,7 @@ sources:
   - src/dupes/store.ts
   - src/dupes/actions.ts
   - src/dupes/merge-model.ts
+  - src/dupes/groups.ts
   - src/dupes/tui/App.tsx
   - src/dupes/tui/ListScreen.tsx
   - src/dupes/tui/PairScreen.tsx
@@ -81,7 +82,7 @@ listed; `i` also shows identical ones. The chosen side is green, the other red.
 | Key          | Action                                                                           |
 | ------------ | -------------------------------------------------------------------------------- |
 | `↑` `↓`      | move the row cursor                                                              |
-| `←`          | take the Duplikat's value into Ergebnis                                          |
+| `←`          | take the Duplikat's value into Ergebnis (also on group membership rows)          |
 | `→`          | take the Original's value                                                        |
 | `x`          | clear Ergebnis (field rows); include or exclude the address (email rows)         |
 | `Space`, `*` | email rows: include or exclude an address; make it the default address           |
@@ -110,7 +111,22 @@ follow the final choice.
 
 An info line shows the group counts of the merge preview (the original's groups, the
 duplicate's, shared ones). ChurchTools moves memberships, relations and other related records
-itself, so `ct dupes` does **no** group clean-up.
+itself, but it refuses the merge (HTTP 403) while both persons are in a common group. So
+`ct dupes` cleans up the shared groups first:
+
+- **dynamic (Auto) groups:** the Duplikat is removed; the group's ruleset decides about the
+  Original.
+- **other groups:** the Original's membership is kept. Its role, status, join and end date,
+  comment and group member fields are listed below the person fields, one row per differing
+  value, with `←` / `→` like a person field. By default the earlier join date wins, empty values
+  are filled from the Duplikat and the Original wins a conflict. Values taken from the Duplikat
+  are written to the Original's membership (`PATCH /groups/{g}/members/{original}`), then the
+  Duplikat is removed from the group.
+
+The confirm dialog lists the plan per group. The merge preview reports shared groups under
+`both` as group ids; titles come from its `old` and `new` lists. If a group step fails, the merge
+is not sent, the pair stays open and `merge-error` (stage `groups`, with the steps already done)
+is logged; successful steps are logged as `groups-prepared`.
 
 On confirm the Original is re-read, your choices are applied to that fresh object and sent in
 one `PATCH /persons/{original}/merge/{duplicate}`. The body has the shape ChurchTools' own merge
@@ -122,8 +138,8 @@ a 500 (verified on a dev instance).
 
 Verified on a dev instance: the duplicate is deleted, its group memberships move to the Original,
 an address that is not included disappears, and a cleared field is sent as `""` and stays empty.
-ChurchTools refuses the merge (HTTP 403) while both persons are in a common group; the merge
-preview lists those groups under `both`.
+The group clean-up was run end to end there with one static group (join date, comment and a
+member field taken from the Duplikat) and one dynamic group.
 
 If the call fails, the HTTP
 status and the field names ChurchTools rejected are shown (never values or messages) and the pair

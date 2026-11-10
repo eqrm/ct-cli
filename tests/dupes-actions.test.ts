@@ -26,7 +26,7 @@ describe("merge actions", () => {
     expect(p!.body).not.toHaveProperty("null");
     const audit = t.store.readAudit();
     expect(audit.map((e) => e.action)).toEqual(["merge-started", "merge-confirmed"]);
-    expect(audit[0]).toMatchObject({ groupsDiff: { original: [10], duplicate: [11, 12], both: [13] } });
+    expect(audit[0]).toMatchObject({ groupsDiff: { original: [10], duplicate: [11, 12], both: [] } });
   });
 
   it("merges in the swapped direction", async () => {
@@ -50,7 +50,7 @@ describe("merge actions", () => {
     const t = setup({ patchFails: true });
     const pair = await loadPair(t.deps, 1, 2);
     const res = await executeMerge(t.deps, pair, pair.model);
-    expect(res).toEqual({ kind: "failed", status: 500, stage: "patch", fields: [] });
+    expect(res).toEqual({ kind: "failed", status: 500, stage: "patch", fields: [], groupsDone: [] });
     expect(t.store.readAudit().map((e) => e.action)).toEqual(["merge-started", "merge-error"]);
   });
 
@@ -129,5 +129,85 @@ describe("rejectedFields", () => {
     expect(rejectedFields(err)).toEqual(["emails[0].contactLabelId", "birthday"]);
     expect(rejectedFields(new Error("x"))).toEqual([]);
     expect(rejectedFields(new CtApiError("x", 400, null))).toEqual([]);
+  });
+});
+
+describe("shared groups", () => {
+  const memberships = {
+    "13:1": {
+      groupTypeRoleId: 1,
+      groupMemberStatus: "active",
+      memberStartDate: "2024-01-01",
+      comment: null,
+      fields: [
+        { id: 5, name: "Paid", value: true },
+        { id: 6, name: "Team", value: null },
+      ],
+    },
+    "13:2": {
+      groupTypeRoleId: 2,
+      groupMemberStatus: "active",
+      memberStartDate: "2015-03-01",
+      comment: "seit Gründung",
+      fields: [
+        { id: 5, name: "Paid", value: false },
+        { id: 6, name: "Team", value: "Beta" },
+      ],
+    },
+  };
+  const both = [
+    { id: 13, title: "Hauskreis" },
+    { id: 14, title: "Auto" },
+  ];
+
+  it("defaults: earlier join date and empty values from the Duplikat, conflicts stay with the Original", async () => {
+    const t = setup({ both, dynamicGroupIds: [14], memberships });
+    const pair = await loadPair(t.deps, 1, 2);
+    const [st, dy] = pair.shared;
+    expect(dy).toMatchObject({ id: 14, dynamic: true, items: [] });
+    const choice = Object.fromEntries(st!.items.map((i) => [i.key, i.choice]));
+    expect(choice).toEqual({
+      groupTypeRoleId: "original",
+      groupMemberStatus: "original",
+      memberStartDate: "duplicate",
+      comment: "duplicate",
+      "field:5": "original",
+      "field:6": "duplicate",
+    });
+  });
+
+  it("updates the Original's membership, removes the Duplikat from every shared group, then merges", async () => {
+    const t = setup({ both, dynamicGroupIds: [14], memberships });
+    const pair = await loadPair(t.deps, 1, 2);
+    const res = await executeMerge(t.deps, pair, pair.model);
+    expect(res).toMatchObject({ kind: "merged" });
+    const writes = t.calls.map((c) => `${c.method} ${c.path}`);
+    expect(writes).toEqual([
+      "PATCH /groups/13/members/1",
+      "DELETE /groups/13/members/2",
+      "DELETE /groups/14/members/2",
+      "PATCH /persons/1/merge/2",
+    ]);
+    expect(t.calls[0]!.body).toEqual({
+      memberStartDate: "2015-03-01",
+      comment: "seit Gründung",
+      fields: { "6": "Beta" },
+    });
+    const prepared = t.store.readAudit().find((e) => e.action === "groups-prepared");
+    expect(prepared).toMatchObject({
+      groupsDone: [
+        { groupId: 13, dynamic: false, updated: ["memberStartDate", "comment", "field:6"] },
+        { groupId: 14, dynamic: true, updated: [] },
+      ],
+    });
+  });
+
+  it("stops before the merge when a group step fails", async () => {
+    const t = setup({ both, dynamicGroupIds: [14], memberships, groupWriteFails: 403 });
+    const pair = await loadPair(t.deps, 1, 2);
+    const res = await executeMerge(t.deps, pair, pair.model);
+    expect(res).toMatchObject({ kind: "failed", stage: "groups", status: 403, groupId: 13, groupsDone: [] });
+    expect(t.calls.some((c) => c.path.includes("/merge/"))).toBe(false);
+    expect(t.store.readAudit().some((e) => e.action === "merge-confirmed")).toBe(false);
   });
 });

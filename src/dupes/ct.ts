@@ -222,12 +222,20 @@ export async function loadMergePreview(
   original: number,
   duplicate: number,
 ): Promise<MergePreview> {
-  const raw = await client.get<Partial<MergePreview>>(`/persons/${original}/merge/${duplicate}`);
-  const g = raw.groupsDiff ?? { old: [], new: [], both: [] };
-  return {
-    personDiff: raw.personDiff ?? [],
-    groupsDiff: { old: g.old ?? [], new: g.new ?? [], both: g.both ?? [] },
-  };
+  const raw = await client.get<{
+    personDiff?: MergeDiffEntry[];
+    groupsDiff?: { old?: MergeGroup[]; new?: MergeGroup[]; both?: Array<number | MergeGroup> };
+  }>(`/persons/${original}/merge/${duplicate}`);
+  const g = raw.groupsDiff ?? {};
+  const oldG = g.old ?? [];
+  const newG = g.new ?? [];
+  // Verified on a dev instance: `both` is a list of group ids; the groups themselves (title, role)
+  // are in `old` and `new`, which include the shared ones.
+  const both = (g.both ?? []).map((x) => {
+    const id = typeof x === "number" ? x : x.id;
+    return oldG.find((o) => o.id === id) ?? newG.find((n) => n.id === id) ?? { id };
+  });
+  return { personDiff: raw.personDiff ?? [], groupsDiff: { old: oldG, new: newG, both } };
 }
 
 /** Merge `duplicate` into `original` in one ChurchTools transaction (memberships and records move over). */

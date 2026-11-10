@@ -17,6 +17,13 @@ import {
 } from "./ct.js";
 import { MERGE_CONFIRMED } from "./finance.js";
 import { buildBody, buildModel, optigemOutcome, type MergeModel } from "./merge-model.js";
+import {
+  loadDynamicGroupIds,
+  loadSharedGroups,
+  prepareSharedGroups,
+  type GroupStep,
+  type SharedGroup,
+} from "./groups.js";
 import type { Redactor } from "./redact.js";
 import type { DupesStore } from "./store.js";
 
@@ -39,6 +46,7 @@ const LOOKUPS: Record<string, string> = {
   campusId: "campuses",
   statusId: "statuses",
   sexId: "sexes",
+  groupTypeRoleId: "roles",
   nationalityId: "nationalities",
   familyStatusId: "familyStatuses",
 };
@@ -105,6 +113,8 @@ export interface PairData {
   duplicateRaw: Record<string, unknown>;
   preview: MergePreview;
   model: MergeModel;
+  /** Groups both persons are in; cleaned up before the merge (ChurchTools refuses otherwise). */
+  shared: SharedGroup[];
 }
 
 /** Load both persons and the merge preview for one direction (`originalId` survives). */
@@ -117,6 +127,16 @@ export async function loadPair(deps: ReviewDeps, originalId: number, duplicateId
     loadRawPerson(client, originalId),
     loadRawPerson(client, duplicateId),
   ]);
+  const shared =
+    preview.groupsDiff.both.length === 0
+      ? []
+      : await loadSharedGroups(
+          client,
+          preview.groupsDiff.both,
+          originalId,
+          duplicateId,
+          await loadDynamicGroupIds(client),
+        );
   return {
     original,
     duplicate,
@@ -124,6 +144,7 @@ export async function loadPair(deps: ReviewDeps, originalId: number, duplicateId
     duplicateRaw,
     preview,
     model: buildModel(originalRaw, duplicateRaw, preview.personDiff, deps.optigemField),
+    shared,
   };
 }
 
@@ -135,7 +156,16 @@ export type MergeResult =
       afterError: boolean;
       warnings: string[];
     }
-  | { kind: "failed"; status: number | null; stage: "reread" | "patch"; fields?: string[] };
+  | {
+      kind: "failed";
+      status: number | null;
+      stage: "reread" | "groups" | "patch";
+      fields?: string[];
+      /** Group steps that went through before the failure (they are not rolled back). */
+      groupsDone?: GroupStep[];
+      /** The group whose clean-up failed (stage "groups"). */
+      groupId?: number;
+    };
 
 async function duplicateGone(deps: ReviewDeps, id: number): Promise<boolean | null> {
   try {
@@ -174,6 +204,7 @@ export async function executeMerge(
   deps: ReviewDeps,
   pair: PairData,
   model: MergeModel,
+  shared: readonly SharedGroup[] = pair.shared,
 ): Promise<MergeResult> {
   const now = deps.now ?? ((): Date => new Date());
   const { store } = deps;
@@ -208,6 +239,19 @@ export async function executeMerge(
     },
     now(),
   );
+  const groupsDone: GroupStep[] = [];
+  try {
+    await prepareSharedGroups(deps.client, shared, survivingId, loserId, groupsDone);
+  } catch (err) {
+    const failedGroup = shared[groupsDone.length]?.id;
+    store.audit(
+      { action: "merge-error", survivingId, loserId, stage: "groups", groupsDone, failedGroup },
+      now(),
+    );
+    return { kind: "failed", status: status(err), stage: "groups", groupsDone, groupId: failedGroup };
+  }
+  if (groupsDone.length > 0)
+    store.audit({ action: "groups-prepared", survivingId, loserId, groupsDone }, now());
   try {
     await mergePersons(deps.client, survivingId, loserId, built.body);
   } catch (err) {
@@ -222,7 +266,7 @@ export async function executeMerge(
         warnings: built.warnings,
       };
     }
-    return { kind: "failed", status: status(err), stage: "patch", fields: rejectedFields(err) };
+    return { kind: "failed", status: status(err), stage: "patch", fields: rejectedFields(err), groupsDone };
   }
   const gone = await duplicateGone(deps, loserId);
   confirm(deps, survivingId, loserId, leading, orphaned, {

@@ -67,7 +67,7 @@ describe("pair screen", () => {
     expect(t.frame()).toContain("Nachname");
     expect(t.frame()).not.toContain("Vorname");
     expect(t.frame()).not.toContain("GUID");
-    expect(t.frame()).toContain("Gruppen: 1 (Duplikat: 2), gemeinsam: 1");
+    expect(t.frame()).toContain("Gruppen: 1 (Duplikat: 2), gemeinsam: 0");
     await t.press("i");
     expect(t.frame()).toContain("Hauptcampus");
     expect(t.frame()).not.toContain("GUID");
@@ -120,6 +120,49 @@ describe("pair screen", () => {
     await t.press("y");
     await until(() => patches(t.calls).length === 1);
     expect(patches(t.calls)[0]!.body).toMatchObject({ lastName: "" });
+  });
+
+  it("lists shared groups, lets a membership value be taken from the Duplikat, and cleans up before merging", async () => {
+    const memberships = {
+      "13:1": {
+        groupTypeRoleId: 1,
+        memberStartDate: "2024-01-01",
+        fields: [{ id: 6, name: "Team", value: "Alpha" }],
+      },
+      "13:2": {
+        groupTypeRoleId: 1,
+        memberStartDate: "2015-03-01",
+        fields: [{ id: 6, name: "Team", value: "Beta" }],
+      },
+    };
+    const t = await boot({
+      personDiff: [],
+      both: [
+        { id: 13, title: "Hauskreis" },
+        { id: 14, title: "Auto" },
+      ],
+      dynamicGroupIds: [14],
+      memberships,
+    });
+    await t.press(KEY.enter);
+    await until(() => t.frame().includes("Gruppe Hauskreis"));
+    expect(t.frame()).toContain("Gruppe Auto: Auto-Gruppe: Duplikat wird entfernt");
+    expect(t.frame()).toContain("Original übernimmt Beitritt vom Duplikat");
+    for (let i = 0; i < 10 && !/› +Team/.test(t.frame()); i++) await t.press(KEY.down);
+    expect(t.frame()).toMatch(/› +Team/);
+    await t.press(KEY.left);
+    expect(t.frame()).toContain("Original übernimmt Beitritt, Team vom Duplikat");
+    await t.press("m");
+    expect(t.frame()).toContain("Gruppe Hauskreis:");
+    await t.press("y");
+    await until(() => patches(t.calls).some((c) => c.path.includes("/merge/")));
+    expect(t.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "PATCH /groups/13/members/1",
+      "DELETE /groups/13/members/2",
+      "DELETE /groups/14/members/2",
+      "PATCH /persons/1/merge/2",
+    ]);
+    expect(t.calls[0]!.body).toEqual({ memberStartDate: "2015-03-01", fields: { "6": "Beta" } });
   });
 
   it("toggles an email address and moves the default", async () => {
