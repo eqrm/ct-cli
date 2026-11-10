@@ -142,7 +142,7 @@ describe("pair screen", () => {
     await t.press("y");
     await until(() => patches(t.calls).length === 1);
     expect((patches(t.calls)[0]!.body as { emails: unknown[] }).emails).toEqual([
-      { email: "b@example.org", isDefault: true },
+      { contactLabelId: null, email: "b@example.org", isDefault: true },
     ]);
   });
 

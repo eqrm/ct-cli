@@ -78,11 +78,47 @@ describe("merge model", () => {
     ]);
     const body = buildBody(o, d, m).body;
     expect(body.emails).toEqual([
-      { id: 1, email: "a@example.org", isDefault: true },
-      { id: 2, email: "a2@example.org", isDefault: false },
-      { email: "B@example.org", isDefault: false },
+      { contactLabelId: null, email: "a@example.org", isDefault: true },
+      { contactLabelId: null, email: "a2@example.org", isDefault: false },
+      { contactLabelId: null, email: "B@example.org", isDefault: false },
     ]);
-    expect(body.email).toBe("a@example.org");
+    expect("email" in body).toBe(false);
+  });
+
+  it("sends the body in the shape ChurchTools' own merge UI sends (no read-only or empty keys)", () => {
+    const o = raw(1, {
+      email: "a@example.org",
+      emails: [{ id: 1, email: "a@example.org", isDefault: true, contactLabelId: 2, extra: "x" }],
+      createdDate: "2020-01-01",
+      imageUrl: "https://example.org/i.png",
+      parents: [],
+      isActive: true,
+      lastLogin: "2024-01-01",
+      nickname: "",
+      job: null,
+      isDead: false,
+      meta: {
+        createdDate: "c",
+        createdPerson: { id: 1 },
+        modifiedDate: "m",
+        modifiedPerson: { id: 1 },
+        other: 1,
+      },
+    });
+    const d = raw(2, { nickname: "Nick", emails: [] });
+    const body = buildBody(o, d, model(o, d)).body;
+    for (const k of ["email", "createdDate", "imageUrl", "parents", "isActive", "lastLogin", "job"]) {
+      expect(body, k).not.toHaveProperty(k);
+    }
+    expect(body.isDead).toBe(false);
+    expect(body.nickname).toBe("Nick");
+    expect(Object.keys(body.meta as object).sort()).toEqual([
+      "createdDate",
+      "createdPerson",
+      "modifiedDate",
+      "modifiedPerson",
+    ]);
+    expect(body.emails).toEqual([{ contactLabelId: 2, email: "a@example.org", isDefault: true }]);
   });
 
   it("toggling and default selection keep exactly one default among included addresses", () => {
@@ -91,11 +127,13 @@ describe("merge model", () => {
     let m = model(o, d);
     m = setDefaultEmail(m, "b@example.org");
     expect(buildBody(o, d, m).body.emails).toEqual([
-      { id: 1, email: "a@example.org", isDefault: false },
-      { email: "b@example.org", isDefault: true },
+      { contactLabelId: null, email: "a@example.org", isDefault: false },
+      { contactLabelId: null, email: "b@example.org", isDefault: true },
     ]);
     m = toggleEmail(m, "b@example.org");
-    expect(buildBody(o, d, m).body.emails).toEqual([{ id: 1, email: "a@example.org", isDefault: true }]);
+    expect(buildBody(o, d, m).body.emails).toEqual([
+      { contactLabelId: null, email: "a@example.org", isDefault: true },
+    ]);
   });
 
   it("Optigem: lone ID is preselected; both IDs follow the choice", () => {

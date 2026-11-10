@@ -211,18 +211,71 @@ export function optigemOutcome(m: MergeModel): OptigemOutcome {
  * are copied without their id. A chosen duplicate value the duplicate object does not carry is
  * skipped and reported in `warnings`.
  */
+/**
+ * Keys ChurchTools derives or owns. Its own merge UI never sends them in the PATCH body (observed
+ * in a HAR of the web UI); sending the full GET object is rejected with HTTP 400.
+ */
+export const READ_ONLY_KEYS = new Set([
+  "email",
+  "createdDate",
+  "createdPid",
+  "modifiedDate",
+  "modifiedPid",
+  "customFields",
+  "isActive",
+  "isSystemUser",
+  "castHelper",
+  "kids",
+  "parents",
+  "spouse",
+  "imageKey",
+  "imageUrl",
+  "familyImageKey",
+  "familyImageUrl",
+  "latitude",
+  "longitude",
+  "latitudeLoose",
+  "longitudeLoose",
+  "loginString",
+  "lastLogin",
+  "firstLogin",
+  "password",
+  "sortNameDynamicProperty",
+  "receivingEmail",
+]);
+
+/** The Original as ChurchTools' merge UI sends it: writable keys with a value, emails without ids. */
+export function writableBody(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (READ_ONLY_KEYS.has(k) || v === null || v === "" || v === undefined) continue;
+    out[k] = v;
+  }
+  // The UI sends only these meta keys.
+  if (out.meta && typeof out.meta === "object") {
+    const m = out.meta as Record<string, unknown>;
+    out.meta = Object.fromEntries(
+      ["createdDate", "createdPerson", "modifiedDate", "modifiedPerson"]
+        .filter((k) => k in m)
+        .map((k) => [k, m[k]]),
+    );
+  }
+  return out;
+}
+
 export function buildBody(
   freshOriginal: Record<string, unknown>,
   duplicateRaw: Record<string, unknown>,
   m: MergeModel,
 ): { body: Record<string, unknown>; warnings: string[] } {
-  const body: Record<string, unknown> = { ...freshOriginal };
+  const body = writableBody(freshOriginal);
   const warnings: string[] = [];
   for (const f of m.fields) {
     if (f.choice === "original") continue;
     if (f.choice === "none") {
       body[f.key] = cleared(freshOriginal[f.key] ?? f.original);
     } else if (f.key in duplicateRaw) {
+      if (READ_ONLY_KEYS.has(f.key)) continue;
       body[f.key] = duplicateRaw[f.key];
     } else {
       warnings.push(`${f.label}: value cannot be carried over automatically, set it in ChurchTools.`);
@@ -233,13 +286,11 @@ export function buildBody(
     const fresh = new Map(emailList(freshOriginal.emails).map((e) => [addrKey(e), e]));
     const emails = included.map((e) => {
       const live = fresh.get(e.address.toLowerCase()) ?? e.originalEntry;
-      const base = live ? { ...live } : { ...e.duplicateEntry };
-      if (!live) delete base.id;
-      return { ...base, isDefault: e.isDefault };
+      const base = (live ?? e.duplicateEntry ?? {}) as Record<string, unknown>;
+      // ChurchTools' merge UI sends exactly these three keys per address (no id).
+      return { contactLabelId: base.contactLabelId ?? null, email: e.address, isDefault: e.isDefault };
     });
     body.emails = emails;
-    if ("email" in body)
-      body.email = (emails.find((e) => e.isDefault) as { email?: string } | undefined)?.email ?? "";
   }
   return { body, warnings };
 }

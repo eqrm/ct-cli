@@ -180,7 +180,9 @@ export function PairScreen(props: {
       setMessage([
         res.stage === "reread"
           ? `Could not re-read the Original${res.status ? ` (HTTP ${res.status})` : ""}; nothing was changed.`
-          : `Merge failed${res.status ? ` (HTTP ${res.status})` : ""}.`,
+          : `Merge failed${res.status ? ` (HTTP ${res.status})` : ""}${
+              res.fields && res.fields.length > 0 ? `; ChurchTools rejected: ${res.fields.join(", ")}` : ""
+            }. Nothing was changed.`,
       ]);
     } else {
       setOutcome("merged");

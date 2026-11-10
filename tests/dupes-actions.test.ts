@@ -50,7 +50,7 @@ describe("merge actions", () => {
     const t = setup({ patchFails: true });
     const pair = await loadPair(t.deps, 1, 2);
     const res = await executeMerge(t.deps, pair, pair.model);
-    expect(res).toEqual({ kind: "failed", status: 500, stage: "patch" });
+    expect(res).toEqual({ kind: "failed", status: 500, stage: "patch", fields: [] });
     expect(t.store.readAudit().map((e) => e.action)).toEqual(["merge-started", "merge-error"]);
   });
 
@@ -109,5 +109,25 @@ describe("merge actions", () => {
     expect(t.calls).toEqual([
       { method: "POST", path: "/persons/1/relationships", body: { otherPersonId: 2, relationshipTypeId: 4 } },
     ]);
+  });
+});
+
+describe("rejectedFields", () => {
+  it("returns only well-formed field ids from a ChurchTools validation error, never messages or args", async () => {
+    const { rejectedFields } = await import("../src/dupes/actions.js");
+    const { CtApiError } = await import("../src/api/ctClient.js");
+    const err = new CtApiError("bad", 400, {
+      message: "Validation failed",
+      errors: [
+        { fieldId: "emails[0].contactLabelId", message: "x", args: { value: "secret@example.org" } },
+        { fieldId: "birthday", message: "y" },
+        { fieldId: "birthday" },
+        { fieldId: "not a key; secret@example.org" },
+        { message: "no field" },
+      ],
+    });
+    expect(rejectedFields(err)).toEqual(["emails[0].contactLabelId", "birthday"]);
+    expect(rejectedFields(new Error("x"))).toEqual([]);
+    expect(rejectedFields(new CtApiError("x", 400, null))).toEqual([]);
   });
 });

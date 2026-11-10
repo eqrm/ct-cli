@@ -43,6 +43,20 @@ const LOOKUPS: Record<string, string> = {
   familyStatusId: "familyStatuses",
 };
 
+/**
+ * Field keys ChurchTools names in a validation error (`errors[].fieldId`). Keys only, never the
+ * message or args, which can echo submitted values.
+ */
+export function rejectedFields(err: unknown): string[] {
+  if (!(err instanceof CtApiError)) return [];
+  const errors = (err.body as { errors?: unknown } | null)?.errors;
+  if (!Array.isArray(errors)) return [];
+  const keys = errors
+    .map((e) => (e as { fieldId?: unknown }).fieldId)
+    .filter((k): k is string => typeof k === "string" && /^[A-Za-z0-9_.[\]-]{1,64}$/.test(k));
+  return [...new Set(keys)];
+}
+
 /** Names for campus, status, sex, ... from `/person/masterdata`. Empty when unavailable. */
 export async function loadLabels(client: DupesClient): Promise<Labels> {
   const out: Labels = {};
@@ -121,7 +135,7 @@ export type MergeResult =
       afterError: boolean;
       warnings: string[];
     }
-  | { kind: "failed"; status: number | null; stage: "reread" | "patch" };
+  | { kind: "failed"; status: number | null; stage: "reread" | "patch"; fields?: string[] };
 
 async function duplicateGone(deps: ReviewDeps, id: number): Promise<boolean | null> {
   try {
@@ -208,7 +222,7 @@ export async function executeMerge(
         warnings: built.warnings,
       };
     }
-    return { kind: "failed", status: status(err), stage: "patch" };
+    return { kind: "failed", status: status(err), stage: "patch", fields: rejectedFields(err) };
   }
   const gone = await duplicateGone(deps, loserId);
   confirm(deps, survivingId, loserId, leading, orphaned, {

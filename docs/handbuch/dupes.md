@@ -1,5 +1,5 @@
 ---
-sources_hash: 68b24d900c1702b5
+sources_hash: d5db23610eca3c22
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -101,7 +101,8 @@ valid campus or status id).
 
 Email addresses are one row per distinct address of both persons. All are included by default
 and the Original's default address stays default; exactly one included address is the default
-(`*`). Duplicate addresses are sent without their `id`.
+(`*`). Each address is sent as `contactLabelId`, `email` and `isDefault`, without an `id`, as
+ChurchTools' own merge UI does.
 
 The Optigem ID is a normal row. A lone ID is preselected; with two different IDs the Original's
 wins until you choose. The leading and orphaned IDs in the audit log and the finance export
@@ -112,10 +113,15 @@ duplicate's, shared ones). ChurchTools moves memberships, relations and other re
 itself, so `ct dupes` does **no** group clean-up.
 
 On confirm the Original is re-read, your choices are applied to that fresh object and sent in
-one `PATCH /persons/{original}/merge/{duplicate}`. Afterwards the duplicate is looked up: a 404
+one `PATCH /persons/{original}/merge/{duplicate}`. The body has the shape ChurchTools' own merge
+UI sends: only keys with a value, no read-only or derived keys (`email`, created/modified fields,
+image URLs, `parents`, `kids`, `spouse`, login data and similar), and only the four `meta` keys
+`createdDate`, `createdPerson`, `modifiedDate`, `modifiedPerson`. ChurchTools rejects the
+complete `GET` object with HTTP 400. Afterwards the duplicate is looked up: a 404
 means it is gone; if ChurchTools kept the record, the merge is still recorded with
-`duplicateStillExists: true` and the record is never deleted. If the call fails, only the HTTP
-status is shown and the pair stays open. `merge-error` is logged; if the duplicate is gone
+`duplicateStillExists: true` and the record is never deleted. If the call fails, the HTTP
+status and the field names ChurchTools rejected are shown (never values or messages) and the pair
+stays open. `merge-error` is logged; if the duplicate is gone
 nevertheless, the merge is recorded (`afterError: true`). When a pair later no longer loads and
 its `merge-started` was never confirmed, it is recorded as merged (`recovered: true`). After an
 action you return to the list with the cursor on the next open pair; the scan file is saved
