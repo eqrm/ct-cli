@@ -5,10 +5,21 @@
  *
  * Allowed: any GET under `/api/`, and exactly two legacy POSTs — `index.php?q=churchauth/ajax` and
  * `index.php?q=churchdb/ajax` with the body exactly `func=getMasterData`.
+ *
+ * With `simulate: true` (`ct gateway proxy --simulate`) additionally `GET /simulate/<personId>/api/...`, the
+ * gateway's "read as another person" route. The id is digits only, positive, no leading zero. Without the
+ * option every `/simulate` request is denied here, as before.
  */
 
 export type FilterResult =
-  | { ok: true; method: "GET" | "POST"; path: string; query: [string, string][] }
+  | {
+      ok: true;
+      method: "GET" | "POST";
+      path: string;
+      query: [string, string][];
+      /** Set for `/simulate/<id>/api/...`: the request must be signed with the simulate credentials. */
+      simulatePersonId?: number;
+    }
   | { ok: false; reason: string };
 
 const LEGACY_QUERIES = new Set(["churchauth/ajax", "churchdb/ajax"]);
@@ -22,7 +33,12 @@ function deny(reason: string): FilterResult {
 }
 
 /** `rawUrl` is the request target as received (`/api/groups/1?x=y`). `body` is only consulted for POST. */
-export function checkRequest(method: string, rawUrl: string, body: string): FilterResult {
+export function checkRequest(
+  method: string,
+  rawUrl: string,
+  body: string,
+  options: { simulate?: boolean } = {},
+): FilterResult {
   let url: URL;
   try {
     url = new URL(rawUrl, "http://localhost");
@@ -34,6 +50,17 @@ export function checkRequest(method: string, rawUrl: string, body: string): Filt
   const query = [...url.searchParams.entries()].filter(([k]) => !STRIPPED_PARAMS.has(k.toLowerCase()));
 
   if (method === "GET") {
+    if (path === "/simulate" || path.startsWith("/simulate/")) {
+      if (!options.simulate) {
+        return deny("GET /simulate/... is only forwarded when the proxy runs with --simulate");
+      }
+      const m = /^\/simulate\/([1-9][0-9]*)(\/api\/.*)$/.exec(path);
+      if (!m)
+        return deny("only GET /simulate/<personId>/api/... is forwarded (personId: digits, no leading zero)");
+      const personId = Number(m[1]);
+      if (!Number.isSafeInteger(personId)) return deny("simulate personId is out of range");
+      return { ok: true, method: "GET", path, query, simulatePersonId: personId };
+    }
     if (!path.startsWith("/api/")) return deny("only GET /api/... is forwarded");
     return { ok: true, method: "GET", path, query };
   }

@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { profileCredentials } from "../src/gateway/credentials.js";
+import type { AwsCredentials } from "../src/gateway/proxy.js";
 import { cachingCredentials, createProxyServer, listenLoopback } from "../src/gateway/proxy.js";
 
 const CREDS = { accessKeyId: "AKIATEST", secretAccessKey: "secret", sessionToken: "tok-session" };
@@ -21,7 +22,9 @@ afterEach(async () => {
   }
 });
 
-async function start(): Promise<{ proxy: string; seen: Seen[]; logs: string[] }> {
+async function start(
+  simulate?: () => Promise<AwsCredentials>,
+): Promise<{ proxy: string; seen: Seen[]; logs: string[] }> {
   const seen: Seen[] = [];
   const upstream = createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -57,6 +60,7 @@ async function start(): Promise<{ proxy: string; seen: Seen[]; logs: string[] }>
     gatewayUrl: "https://gw.example.execute-api.eu-central-1.amazonaws.com",
     region: "eu-central-1",
     credentials: async () => CREDS,
+    simulateCredentials: simulate,
     log: (l) => logs.push(l),
     fetchImpl: (input, init) =>
       fetch(String(input).replace(/^https:\/\/[^/]+/, `http://127.0.0.1:${upstreamPort}`), init),
@@ -238,5 +242,66 @@ describe("cachingCredentials", () => {
     now = 3600_000 - 30_000; // inside the 60 s margin
     await get();
     expect(calls).toBe(2);
+  });
+});
+
+describe("simulate route", () => {
+  const SIM = { accessKeyId: "AKIASIMULATE", secretAccessKey: "sim-secret", sessionToken: "tok-sim" };
+
+  it("signs /simulate with the simulate credentials and everything else with the reader's, logging the person", async () => {
+    const { proxy, seen, logs } = await start(async () => SIM);
+    expect((await fetch(`${proxy}/simulate/42/api/persons/42?login_token=x`)).status).toBe(200);
+    expect((await fetch(`${proxy}/api/groups/1`)).status).toBe(200);
+    expect(seen[0]!.url).toBe("/simulate/42/api/persons/42");
+    expect(seen[0]!.headers.authorization).toContain("Credential=AKIASIMULATE/");
+    expect(seen[0]!.headers["x-amz-security-token"]).toBe("tok-sim");
+    expect(seen[1]!.headers.authorization).toContain("Credential=AKIATEST/");
+    expect(logs).toEqual([
+      "GET /simulate/42/api/persons/42 200 [simulate person 42]",
+      "GET /api/groups/1 200",
+    ]);
+  });
+
+  it("answers /simulate 403 locally without the flag, naming the flag", async () => {
+    const { proxy, seen } = await start();
+    const res = await fetch(`${proxy}/simulate/42/api/persons/42`);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { hint: string }).hint).toMatch(/--simulate/);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("still refuses malformed or non-GET simulate requests with the flag on", async () => {
+    const { proxy, seen } = await start(async () => SIM);
+    for (const [method, path] of [
+      ["GET", "/simulate/0/api/persons"],
+      ["GET", "/simulate/007/api/persons"],
+      ["GET", "/simulate/abc/api/persons"],
+      ["GET", "/simulate/42/other"],
+      ["PUT", "/simulate/42/api/persons/42"],
+    ] as const) {
+      expect(
+        (await fetch(`${proxy}${path}`, { method, body: method === "GET" ? undefined : "{}" })).status,
+      ).toBe(403);
+    }
+    expect(seen).toHaveLength(0);
+  });
+
+  it("re-runs the simulate provider (and so its MFA prompt) after expiry, via cachingCredentials", async () => {
+    let now = 0;
+    let prompts = 0;
+    const get = cachingCredentials(
+      async () => {
+        prompts++;
+        return { ...SIM, expiration: new Date(now + 3600_000) };
+      },
+      () => now,
+    );
+    const { proxy } = await start(get);
+    await fetch(`${proxy}/simulate/42/api/persons/42`);
+    await fetch(`${proxy}/simulate/43/api/persons/43`);
+    expect(prompts).toBe(1);
+    now = 3600_000 - 30_000;
+    await fetch(`${proxy}/simulate/42/api/persons/42`);
+    expect(prompts).toBe(2);
   });
 });

@@ -53,7 +53,7 @@ export interface GatewayConfig {
   /** The gateway's https base URL (API Gateway, SigV4/AWS_IAM). */
   url: string;
   region: string;
-  /** AWS profile (in ~/.aws/config) that assumes the reader role, with MFA. */
+  /** AWS profile (in ~/.aws/config) that assumes the reader role (no MFA; only the simulate role needs one). */
   profile: string;
 }
 

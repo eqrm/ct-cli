@@ -25,6 +25,12 @@ export interface ProxyOptions {
   region: string;
   /** Called for every request; implementations cache (see {@link cachingCredentials}). */
   credentials: () => Promise<AwsCredentials>;
+  /**
+   * Credentials of the MFA-trusted simulate role. When set, `GET /simulate/<personId>/api/...` is forwarded
+   * and signed with these; the reader credentials are never used for it, and these never for anything else.
+   * Unset: `/simulate` is denied locally.
+   */
+  simulateCredentials?: () => Promise<AwsCredentials>;
   log?: (line: string) => void;
   fetchImpl?: typeof fetch;
 }
@@ -102,8 +108,11 @@ export function createProxyServer(options: ProxyOptions): Server {
     const method = req.method ?? "";
     const rawUrl = req.url ?? "/";
     const logPath = rawUrl.split("?")[0] ?? "/";
+    // /simulate/<digits>/... : name the person in the log line (the path already carries the id).
+    const simulated = /^\/simulate\/([1-9][0-9]*)\//.exec(logPath)?.[1];
+    const tag = simulated ? ` [simulate person ${simulated}]` : "";
     const finish = (status: number, body: unknown, extra = ""): void => {
-      log(`${method} ${logPath} ${status}${extra}`);
+      log(`${method} ${logPath} ${status}${tag}${extra}`);
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
     };
@@ -121,7 +130,9 @@ export function createProxyServer(options: ProxyOptions): Server {
     }
 
     const body = method === "POST" ? await readBody(req) : "";
-    const verdict = checkRequest(method, rawUrl, body);
+    const verdict = checkRequest(method, rawUrl, body, {
+      simulate: options.simulateCredentials !== undefined,
+    });
     if (!verdict.ok) {
       finish(
         403,
@@ -138,7 +149,9 @@ export function createProxyServer(options: ProxyOptions): Server {
     let credentials: AwsCredentials;
     let signed: { headers: Record<string, string> };
     try {
-      credentials = await options.credentials();
+      const provider =
+        verdict.simulatePersonId !== undefined ? options.simulateCredentials! : options.credentials;
+      credentials = await provider();
       const [{ HttpRequest }, makeSigner] = await Promise.all([import("@smithy/protocol-http"), signer()]);
       const query: Record<string, string | string[]> = {};
       for (const [k, v] of verdict.query) {
@@ -180,7 +193,7 @@ export function createProxyServer(options: ProxyOptions): Server {
     // to the client unchanged; no retry, no other tier.
     const allowlisted = upstream.status === 403 && isBlockedBody(payload);
     log(
-      `${method} ${logPath} ${upstream.status}${allowlisted ? ` (not on the gateway allowlist; widening it is a change to the gateway's handler allowlist)` : ""}`,
+      `${method} ${logPath} ${upstream.status}${tag}${allowlisted ? ` (not on the gateway allowlist; widening it is a change to the gateway's handler allowlist)` : ""}`,
     );
     const responseHeaders: Record<string, string> = {
       "content-type": upstream.headers.get("content-type") ?? "application/json",

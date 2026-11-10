@@ -41,3 +41,52 @@ describe("gateway request filter", () => {
     expect(checkRequest("POST", "/index.php?login_token=x", "func=getMasterData").ok).toBe(false);
   });
 });
+
+describe("gateway request filter: /simulate", () => {
+  const on = { simulate: true };
+
+  it("is denied without the option, and the reason names the flag", () => {
+    const r = checkRequest("GET", "/simulate/42/api/persons/42", "");
+    expect(r).toMatchObject({ ok: false });
+    expect(!r.ok && r.reason).toMatch(/--simulate/);
+  });
+
+  it("allows GET /simulate/<id>/api/... with the option, keeping the query and stripping login_token", () => {
+    expect(checkRequest("GET", "/simulate/42/api/persons/42?a=1&login_token=s", "", on)).toEqual({
+      ok: true,
+      method: "GET",
+      path: "/simulate/42/api/persons/42",
+      query: [["a", "1"]],
+      simulatePersonId: 42,
+    });
+  });
+
+  it.each([
+    "/simulate",
+    "/simulate/",
+    "/simulate/42",
+    "/simulate/42/",
+    "/simulate/0/api/x",
+    "/simulate/042/api/x",
+    "/simulate/-1/api/x",
+    "/simulate/4.2/api/x",
+    "/simulate/%34%32/api/x",
+    "/simulate/42/index.php",
+    "/simulate/42/api",
+    "/simulate/42/../api/x",
+    "/simulate//42/api/x",
+    "/simulate/42/api//x",
+    "/simulate/99999999999999999999/api/x",
+  ])("denies %s", (path) => {
+    expect(checkRequest("GET", path, "", on).ok).toBe(false);
+  });
+
+  it.each(["POST", "PUT", "DELETE", "HEAD"])("denies %s on /simulate", (m) => {
+    expect(checkRequest(m, "/simulate/42/api/persons/42", "func=getMasterData", on).ok).toBe(false);
+  });
+
+  it("leaves /api and the legacy POSTs unchanged with the option on", () => {
+    expect(checkRequest("GET", "/api/groups/1", "", on)).toEqual(checkRequest("GET", "/api/groups/1", ""));
+    expect(checkRequest("POST", "/index.php?q=churchdb/ajax", "func=getMasterData", on).ok).toBe(true);
+  });
+});
