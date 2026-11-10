@@ -14,7 +14,7 @@ export interface ProfileCredentialsDeps {
 }
 
 /**
- * Credentials for the gateway reader role: the AWS profile assumes the role. The normal profile has no
+ * Credentials for one gateway role: the AWS profile assumes it. The reader profile has no
  * `mfa_serial`, so there is never a prompt and every refresh is silent. A profile that does have one
  * asks for the code on the terminal, and fails at once when there is no terminal to ask (a Claude Code
  * session, a launchd job) instead of hanging on stdin. Each call runs a fresh assume-role;
