@@ -1,5 +1,5 @@
 ---
-sources_hash: 26631f90125ed1c5
+sources_hash: 3189d0ade3c80be3
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -62,6 +62,8 @@ Pairs are dropped when:
 modelled on ChurchTools' own duplicate page (`/persons/duplicates`) and its "Dubletten
 überprüfen" dialog, with the ct dupes additions (tiers, match class, Optigem, shared groups).
 The command prints the URL and keeps running until you press "Beenden" on the page or `Ctrl-C`.
+"Finance-Export" in the page header downloads the finance export (below) as CSV into the browser's
+download folder; it is not offered with `--redact`.
 `--no-open` only prints the URL. `--tui` uses the full-screen terminal view instead (below).
 
 ### Browser view
@@ -234,6 +236,10 @@ per-person IDs are empty for merges logged before they were recorded.
 CSV header: `surviving_person_id,surviving_person_name,surviving_person_optigem_id,merged_person_id,merged_person_name,merged_person_optigem_id,leading_optigem_id,orphaned_optigem_id,identical_ids,merged_at,merged_by`.
 The JSON file wraps the same rows as camelCase objects in `{ schema, generatedAt, host, since, merges }`.
 Cells starting with a formula character are prefixed with `'`.
+
+The export files are derived from the audit log and can be deleted at any time: a new export
+writes them again. A downloaded CSV starts with a UTF-8 byte order mark so spreadsheet tools
+read names correctly. It contains names, so delete it once finance has it.
 
 ## Testing against a dev instance
 

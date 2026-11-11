@@ -115,6 +115,7 @@ h1 { font-size: 30px; margin: 0 0 24px; }
 <header>
   <span class="brand">ct dupes</span><span class="host" id="host"></span>
   <span class="spacer"></span><span class="who" id="who"></span>
+  <button id="finance" title="Merges mit zwei Optigem-IDs als CSV für Finance herunterladen">Finance-Export</button>
   <button id="quit" title="Server beenden und zurück ins Terminal">Beenden</button>
 </header>
 <main id="app"><p class="empty">Lade…</p></main>
@@ -424,6 +425,17 @@ function doMerge() {
 
 document.addEventListener("keydown", function (e) {
   if (e.key === "Escape" && S.dlg) closeDialog();
+});
+document.getElementById("finance").addEventListener("click", function () {
+  api("/api/finance-export", {}).then(function (r) {
+    if (r.count === 0) { toast("Noch keine Merges, bei denen beide Personen eine Optigem-ID hatten.", true); return; }
+    // BOM so Excel reads names with umlauts as UTF-8.
+    var url = URL.createObjectURL(new Blob(["\ufeff" + r.csv], { type: "text/csv;charset=utf-8" }));
+    var a = h("a", { href: url, download: r.filename });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    toast(r.count + (r.count === 1 ? " Merge" : " Merges") + " als " + r.filename + " heruntergeladen.", true);
+  }, function (e) { toast(e.message, false); });
 });
 document.getElementById("quit").addEventListener("click", function () {
   api("/api/quit", {}).finally(function () {

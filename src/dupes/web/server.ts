@@ -25,6 +25,7 @@ import {
   type PairData,
   type ReviewDeps,
 } from "../actions.js";
+import { financeMerges, toCsv } from "../finance.js";
 import { itemDiffers, setItemChoice, type SharedGroup } from "../groups.js";
 import {
   canMergeBoth,
@@ -414,6 +415,17 @@ export async function startReviewServer(
             ? 'In ChurchTools als "Keine Dublette" markiert.'
             : `Lokal gespeichert, aber ChurchTools hat das Zurückschreiben abgelehnt${res.status ? ` (HTTP ${res.status})` : ""}.`,
         ],
+      };
+    }
+    if (method === "POST" && path === "/api/finance-export") {
+      // The one deliberate real-data output; pseudonyms would make it useless to finance.
+      if (r.enabled)
+        throw new HttpError(409, "Mit --redact nicht verfügbar. Bitte ct dupes export-finance verwenden.");
+      const merges = financeMerges(deps.store.readAudit());
+      return {
+        count: merges.length,
+        filename: `optigem-merges-${new Date().toISOString().slice(0, 10)}.csv`,
+        csv: toCsv(merges),
       };
     }
     if (method === "POST" && path === "/api/quit") {

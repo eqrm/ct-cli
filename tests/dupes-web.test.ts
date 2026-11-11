@@ -1,7 +1,7 @@
 import { request } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { startReviewServer, type ReviewServer } from "../src/dupes/web/server.js";
-import { cleanDirs, patches, setup } from "./dupes-fixtures.js";
+import { cleanDirs, patches, raw, setup } from "./dupes-fixtures.js";
 
 const servers: ReviewServer[] = [];
 afterEach(async () => {
@@ -148,6 +148,18 @@ describe("ct dupes review in the browser", () => {
     expect(res.json.ok).toBe(true);
     expect(t.scan.candidates[1]!.state).toBe("dismissed");
     expect((await call("/api/dismiss", { index: 99 })).status).toBe(404);
+  });
+
+  it("hands the finance export to the page as CSV after a merge with two Optigem IDs", async () => {
+    const t = setup({ persons: { 1: raw(1, { optigemId: "10001" }), 2: raw(2, { optigemId: "10002" }) } });
+    const { call } = await start(t);
+    expect((await call("/api/finance-export", {})).json.count).toBe(0);
+    await call("/api/pair", { index: 0 });
+    expect((await call("/api/merge", { index: 0, choices: {} })).json.ok).toBe(true);
+    const { json } = await call("/api/finance-export", {});
+    expect(json.count).toBe(1);
+    expect(json.filename).toMatch(/^optigem-merges-\d{4}-\d{2}-\d{2}\.csv$/);
+    expect(json.csv.split("\n")[1]).toMatch(/^1,[^,]*,10001,2,[^,]*,10002,10001,10002,false,/);
   });
 
   it("stops when the page says it is done", async () => {
