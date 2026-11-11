@@ -1,5 +1,5 @@
 ---
-sources_hash: 669ac6f55dcbd95b
+sources_hash: fce9da8b156765fc
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -75,8 +75,7 @@ as **Original** and **Duplikat** (name, ID, created date, last login). Tabs filt
 columns Original, Vorschlag für Zusammenführung and Duplikat, grouped into Sonstiges (group
 counts), Adresse, Informationen, Kategorie, Bereich and Finanzen. Click the arrow next to the
 Original's or the Duplikat's value (or the value itself) to take that side; the chosen arrow is
-outlined, and `×` clears the field. On email rows the arrow or the checkbox includes or excludes
-the address, and the star makes it the default address. Each email row is labelled with its
+outlined, and `×` clears the field. On email rows the arrow includes the address and `×` leaves it out, and the star makes it the default address. Each email row is labelled with its
 contact type from masterdata ("E-Mail (Privat)"); an address both persons have keeps the
 Original's type, and the Duplikat's differing type is shown next to its value. Campus, status, sex and Bereich show
 their masterdata names, and dates read as in ChurchTools (30.06.1999). "Identische Felder" also lists equal fields. The shared groups follow, one block per

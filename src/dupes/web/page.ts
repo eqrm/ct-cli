@@ -327,14 +327,13 @@ function renderDialog() {
           if (on && !p.emails.some(function (x) { return x.isDefault; })) e.isDefault = true;
           renderDialog();
         };
-        var box = h("input", { type: "checkbox", checked: e.include, title: "Adresse übernehmen",
-          onchange: function (ev) { setInclude(ev.target.checked); } });
-        var flip = function () { setInclude(!e.include); };
+        var take = function () { setInclude(true); };
         g.push(h("div", { class: "label" }, e.label, star),
           h("div", { class: "val" + (e.inOriginal ? (e.include ? " chosen" : " lost") : "") }, e.inOriginal ? e.address : ""),
-          arrow(e.inOriginal, e.inOriginal && e.include, "Adresse übernehmen oder weglassen", "→", flip),
-          h("div", { class: "res" + (e.include ? "" : " cleared") }, box, e.include ? e.address : "(nicht übernehmen)"),
-          arrow(e.inDuplicate, !e.inOriginal && e.include, "Adresse übernehmen oder weglassen", "←", flip),
+          arrow(e.inOriginal, e.inOriginal && e.include, "Adresse übernehmen", "→", take),
+          h("div", { class: "res" + (e.include ? "" : " cleared") }, e.include ? e.address : "(nicht übernehmen)",
+            e.include ? h("button", { class: "clear", title: "Adresse nicht übernehmen", onclick: function () { setInclude(false); } }, "×") : null),
+          arrow(e.inDuplicate, !e.inOriginal && e.include, "Adresse übernehmen", "←", take),
           h("div", { class: "val" + (e.inDuplicate ? (e.include ? " chosen" : " lost") : "") }, e.inDuplicate ? e.address : "",
             e.duplicateType ? h("span", { class: "note", title: "Typ beim Duplikat; übernommen wird der Typ des Originals" }, " (" + e.duplicateType + ")") : null));
       });
