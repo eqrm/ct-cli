@@ -6,6 +6,7 @@
     "lib": ["ES2023"],
     "types": ["node"],
     "strict": true,
+    "jsx": "react-jsx",
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "verbatimModuleSyntax": true,

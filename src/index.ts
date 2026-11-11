@@ -13,6 +13,7 @@ import { refreshCommand } from "./commands/refresh.js";
 import { planCommand } from "./commands/plan.js";
 import { applyCommand } from "./commands/apply.js";
 import { destroyCommand } from "./commands/destroy.js";
+import { dupesCommand } from "./commands/dupes.js";
 import { gatewayCommand } from "./commands/gateway.js";
 import { initCommand } from "./commands/init.js";
 import { completionCommand } from "./commands/completion.js";
@@ -28,7 +29,8 @@ export function buildProgram(): Command {
     .name("ct")
     .description(
       "ChurchTools structure-as-code CLI — declarative plan/apply for the overarching, " +
-        "rights-bearing structure. Never manages people.",
+        "rights-bearing structure. Structure commands never touch people; `ct dupes` does, " +
+        "explicitly and only interactively.",
     )
     .version(versionLine(import.meta.url));
 
@@ -47,6 +49,7 @@ export function buildProgram(): Command {
   program.addCommand(planCommand());
   program.addCommand(applyCommand());
   program.addCommand(destroyCommand());
+  program.addCommand(dupesCommand());
   program.addCommand(completionCommand());
   for (const cmd of plannedCommands()) {
     program.addCommand(cmd);

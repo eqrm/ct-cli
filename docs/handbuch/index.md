@@ -47,6 +47,9 @@ each page marks explicitly what was **verified** and what is still an
 - **[API behaviour](api-behaviour.md)** — what ChurchTools does that its API
   documentation does not say: the session cookie rename, login tokens, OAuth
   clients, error bodies, and the traps in group membership reads and writes.
+- **[Duplicate review (`ct dupes`)](dupes.md)** — the interactive, operator-only
+  workflow for finding, reviewing and merging duplicate person records, and the
+  personal-data guard around it.
 
 !!! note "Language"
 These pages are English while the rest of the Handbuch is German. That is a

@@ -28,9 +28,11 @@ export `CT_LOGINTOKEN` (and `CT_HOST`) instead. Never commit a token — see
   tool can have. Anything touching diffing needs a test that pins the rendered plan.
 - **A clean apply must round-trip to a no-op.** If applying a config and re-planning shows
   a diff, the resource's `managedFields` are wrong — that is a bug, not a quirk.
-- **People are out of scope, permanently.** `assertNotPeople` guards every write path.
-  PRs that manage people will be declined regardless of quality; it is a boundary, not a
-  gap.
+- **People are out of scope for the structure engine, permanently.** `assertNotPeople`
+  guards every engine write path. PRs that make `plan` / `apply` manage people will be
+  declined regardless of quality; it is a boundary, not a gap. The only code that touches
+  person records is `ct dupes` (`src/dupes/`, `src/commands/dupes.ts`): interactive,
+  operator-driven, with its own personal-data guard. Keep it that way.
 - **Live-API tests are opt-in, and writes are triple-gated.** Reads need `CT_LIVE=1`.
   Writes additionally need `CT_LIVE_WRITE=1` **and** `CT_LIVE_WRITE_HOST` set to exactly
   the authenticated host — a deliberate barrier against a live write landing on prod.

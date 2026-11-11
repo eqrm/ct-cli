@@ -6,9 +6,13 @@ group types and roles, permissions, auto-groups — as versioned desired-state
 code, and reconcile it against the ChurchTools API with Terraform-style
 **`plan` / `apply`**.
 
-> **People are never managed.** This tool touches only the scaffold, and only
-> resources that are _explicitly_ declared or adopted. Everything else is
-> invisible: never shown, never changed, never proposed for deletion.
+> **The structure commands never touch people.** `plan` / `apply` / `destroy`
+> work only on the scaffold, and only on resources that are _explicitly_ declared
+> or adopted. Everything else is invisible: never shown, never changed, never
+> proposed for deletion. The one exception is the separate, interactive-only
+> [`ct dupes`](docs/handbuch/dupes.md) command family, which helps an operator
+> review duplicate person records. It never runs unattended and refuses to run
+> in a non-interactive session against a protected environment.
 
 > **Frozen.** The TypeScript config DSL receives bugfixes only and is removed
 > in ct-cli 5.0. Its successor is `terraform-provider-churchtools`, an
@@ -330,7 +334,7 @@ ct apply --env prod    # protected env: type the env name to confirm
 - Protected environments: apply/destroy always require typed confirmation of the
   env name — `--auto-approve` / `--force` never bypass it.
 - Per-env state files are host-bound: `--env prod` can never touch a dev-bound state.
-- People and memberships are never touched (a hard boundary in code).
+- `plan` / `apply` / `destroy` never touch people or memberships (a hard boundary in code). Only `ct dupes` does, explicitly and interactively.
 - Backup/export before every `apply` and `destroy`.
 - Rate-limit + retry on API calls (writes are never blindly re-sent on 5xx).
 - Tokens live in the OS keychain / `.env`, never in git.
