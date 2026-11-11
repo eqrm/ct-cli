@@ -1,5 +1,5 @@
 ---
-sources_hash: 3189d0ade3c80be3
+sources_hash: 445840f5422c421c
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -170,7 +170,11 @@ itself, but it refuses the merge (HTTP 403) while both persons are in a common g
 The dialog shows the plan per group (the terminal view's confirm dialog too). The merge preview reports shared groups under
 `both` as group ids; titles come from its `old` and `new` lists. If a group step fails, the merge
 is not sent, the pair stays open and `merge-error` (stage `groups`, with the steps already done)
-is logged; successful steps are logged as `groups-prepared`.
+is logged; successful steps are logged as `groups-prepared`. The clean-up is safe to repeat: a
+Duplikat that is no longer a member (404 on the `DELETE`) counts as removed. If the merge itself
+fails after the groups were cleaned up, the message says so and the pair is read again, so a
+retry works against the current memberships. ChurchTools offers no way to restore the
+Duplikat's removed memberships, so check the refusal reasons below before merging.
 
 On merge the Original is re-read, your choices are applied to that fresh object and sent in
 one `PATCH /persons/{original}/merge/{duplicate}`. The body has the shape ChurchTools' own merge
@@ -190,8 +194,10 @@ status, the field names ChurchTools rejected and its `messageKey` are shown (nev
 messages) and the pair
 stays open. ChurchTools refuses to merge a person with permissions of their own
 (`error.forbidden.merge-authorized-person`, HTTP 403); the page says so in plain words. `merge-error` is logged; if the duplicate is gone
-nevertheless, the merge is recorded (`afterError: true`). When a pair later no longer loads and
-its `merge-started` was never confirmed, it is recorded as merged (`recovered: true`). After an
+nevertheless, the merge is recorded (`afterError: true`). When a pair later no longer loads because
+the Duplikat itself is gone (404 on `GET /persons/{id}`) while the Original still loads, and its
+`merge-started` was never confirmed, it is recorded as merged (`recovered: true`). Any other 404
+while loading (a membership, the merge preview) is shown as a load error naming that request. After an
 action you return to the list with the cursor on the next open pair; the scan file is saved
 after every decision. The audit log keeps `merge-started` (the differing fields of both
 persons and the group ids of the preview) and `merge-confirmed` (what the finance export reads).
@@ -235,11 +241,11 @@ secret. Error messages never include person data.
 ## Finance export
 
 Schema `ct-cli.dupes.optigem-merges/1` (additive changes only within version 1). Rows are
-taken from confirmed merges where both persons carried an Optigem ID.
+taken from confirmed merges that orphaned at least one Optigem ID.
 
 Each row names both persons as they were before the merge (id, name, Optigem ID), the person
-that survives in ChurchTools and the Optigem ID it now carries (`leading`; the other one is
-`orphaned`). Finance decides which ID stays in Optigem and updates its records. Names and
+that survives in ChurchTools and the Optigem ID it now carries (`leading`, empty when the field was cleared) and every ID that no longer
+appears in ChurchTools (`orphaned`, several joined with `; `). Finance decides which ID stays in Optigem and updates its records. Names and
 per-person IDs are empty for merges logged before they were recorded.
 
 CSV header: `surviving_person_id,surviving_person_name,surviving_person_optigem_id,merged_person_id,merged_person_name,merged_person_optigem_id,leading_optigem_id,orphaned_optigem_id,identical_ids,merged_at,merged_by`.
