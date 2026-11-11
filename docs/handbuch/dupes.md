@@ -1,5 +1,5 @@
 ---
-sources_hash: b23b90a81c56fa87
+sources_hash: 7b3916c415d1d84e
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -185,7 +185,8 @@ member field taken from the Duplikat) and one dynamic group.
 If the call fails, the HTTP
 status, the field names ChurchTools rejected and its `messageKey` are shown (never values or
 messages) and the pair
-stays open. `merge-error` is logged; if the duplicate is gone
+stays open. ChurchTools refuses to merge a person with permissions of their own
+(`error.forbidden.merge-authorized-person`, HTTP 403); the page says so in plain words. `merge-error` is logged; if the duplicate is gone
 nevertheless, the merge is recorded (`afterError: true`). When a pair later no longer loads and
 its `merge-started` was never confirmed, it is recorded as merged (`recovered: true`). After an
 action you return to the list with the cursor on the next open pair; the scan file is saved

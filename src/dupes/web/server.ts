@@ -262,7 +262,12 @@ export function mergeMessages(res: MergeResult): string[] {
     ];
   const fields =
     res.fields && res.fields.length > 0 ? ` ChurchTools lehnt ab: ${res.fields.join(", ")}.` : "";
-  const reason = res.reason ? ` Grund laut ChurchTools: ${res.reason}.` : "";
+  const reason =
+    res.reason === "error.forbidden.merge-authorized-person"
+      ? " ChurchTools führt keine Person zusammen, die eigene Berechtigungen hat (Login mit Rechten). Erst die Berechtigungen entfernen oder das Paar als „Keine Dublette“ markieren."
+      : res.reason
+        ? ` Grund laut ChurchTools: ${res.reason}.`
+        : "";
   return [
     `Zusammenführen fehlgeschlagen${http(res.status)}.${fields}${reason}${done || " Nichts geändert."}`,
   ];
