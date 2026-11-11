@@ -114,33 +114,38 @@ export function dupesCommand(): Command {
   addCommon(
     dupes
       .command("review")
-      .description("Review stored candidates in a full-screen view: merge, not a duplicate, skip"),
-  ).action((opts: CommonOptions) =>
+      .description(
+        "Review stored candidates in the browser (or the terminal with --tui): merge, not a duplicate, skip",
+      )
+      .option("--tui", "use the full-screen terminal view instead of the browser")
+      .option("--no-open", "print the address instead of opening the browser"),
+  ).action((opts: CommonOptions & { tui?: boolean; open?: boolean }) =>
     run(opts, async () => {
       const s = await openSession(opts);
       const scan = s.store.loadScan();
       if (!scan) throw new Error("No scan found. Run `ct dupes scan` first.");
       const { client, me } = await authedSession();
       const types = await resolveRelationshipTypes(client);
-      // Lazy: Ink and React load only for this command.
-      const [{ runReviewTui }, { loadLabels }] = await Promise.all([
-        import("../dupes/tui/run.js"),
-        import("../dupes/actions.js"),
-      ]);
+      const { loadLabels } = await import("../dupes/actions.js");
       const labels = await loadLabels(client);
-      await runReviewTui(
-        {
-          client,
-          store: s.store,
-          host: s.host,
-          redactor: s.redactor,
-          optigemField: s.optigemField,
-          types,
-          operator: { id: me.id, name: `${me.firstName ?? ""} ${me.lastName ?? ""}`.trim() },
-          labels,
-        },
-        scan,
-      );
+      const deps = {
+        client,
+        store: s.store,
+        host: s.host,
+        redactor: s.redactor,
+        optigemField: s.optigemField,
+        types,
+        operator: { id: me.id, name: `${me.firstName ?? ""} ${me.lastName ?? ""}`.trim() },
+        labels,
+      };
+      if (opts.tui) {
+        // Lazy: Ink and React load only for the terminal view.
+        const { runReviewTui } = await import("../dupes/tui/run.js");
+        await runReviewTui(deps, scan);
+      } else {
+        const { runReviewWeb } = await import("../dupes/web/run.js");
+        await runReviewWeb(deps, scan, { open: opts.open !== false });
+      }
       const by = (st: string): number => scan.candidates.filter((c) => c.state === st).length;
       info(`Done: ${by("merged")} merged, ${by("dismissed")} not duplicates, ${by("open")} still open.`);
     }),

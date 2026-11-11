@@ -1,5 +1,5 @@
 ---
-sources_hash: 3d53b2cde4f96aa8
+sources_hash: 929c6c2b397760ab
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -9,6 +9,9 @@ sources:
   - src/dupes/actions.ts
   - src/dupes/merge-model.ts
   - src/dupes/groups.ts
+  - src/dupes/web/server.ts
+  - src/dupes/web/page.ts
+  - src/dupes/web/run.ts
   - src/dupes/tui/App.tsx
   - src/dupes/tui/ListScreen.tsx
   - src/dupes/tui/PairScreen.tsx
@@ -33,7 +36,7 @@ its behaviour may change between ChurchTools releases.
 | Command                                  | What it does                                                                                      |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `ct dupes scan [--env]`                  | Loads non-archived persons and ChurchTools' own duplicate suggestions, scores pairs, stores them. |
-| `ct dupes review`                        | Full-screen review of the scanned pairs: merge, "keine Dublette", skip.                           |
+| `ct dupes review [--tui] [--no-open]`    | Review the scanned pairs in the browser (or the terminal): merge, "keine Dublette", skip.         |
 | `ct dupes export-finance [--since DATE]` | Writes `optigem-merges-<date>.csv` and `.json` for merges where both persons had an Optigem ID.   |
 
 Common options: `-e, --env`, `--redact`, `--optigem-field <key>` (or
@@ -55,11 +58,42 @@ Pairs are dropped when:
 
 ## Review and merge
 
-`ct dupes review` opens a full-screen terminal view (Ink) modelled on ChurchTools' "Dubletten
-überprüfen" dialog. Ink and React load only for this command, so every other `ct` command
-starts as fast as before.
+`ct dupes review` starts a small local web server and opens a page in the browser that is
+modelled on ChurchTools' own duplicate page (`/persons/duplicates`) and its "Dubletten
+überprüfen" dialog, with the ct dupes additions (tiers, match class, Optigem, shared groups).
+The command prints the URL and keeps running until you press "Beenden" on the page or `Ctrl-C`.
+`--no-open` only prints the URL. `--tui` uses the full-screen terminal view instead (below).
 
-### List screen
+### Browser view
+
+The list shows one card per pair with tier, score, match class and source, and the two persons
+as **Original** and **Duplikat** (name, ID, created date, last login). Tabs filter by state
+(Überprüfen, Zusammengeführt, Keine Dublette), chips by tier, and a search box by name or ID.
+`⇄` swaps Original and Duplikat for that pair.
+
+"Vergleichen und zusammenführen" opens the dialog: the two cards on top, then a table with the
+columns Original, Vorschlag für Zusammenführung and Duplikat, grouped into Sonstiges (group
+counts), Adresse, Informationen, Kategorie and Finanzen. Click the Original's or the Duplikat's
+value to take it; `×` clears the field. Email rows have a checkbox (include) and a star (default
+address). "Identische Felder" also lists equal fields. The shared groups follow, one block per
+group with its plan and its membership values, chosen the same way. The footer has Abbrechen,
+"Keine Dublette", a pager (`→` skips to the next open pair) and Zusammenführen, which first shows
+a confirm box listing everything that differs from the Original. After an action the dialog moves
+on to the next open pair. `Esc` closes the dialog.
+
+The server listens on `127.0.0.1` only, on a random port. The URL carries a random token in its
+fragment, and every API call must send it back in a header; requests with a `Host` other than
+`127.0.0.1:<port>` are refused (against DNS rebinding). The page itself contains no person data
+and loads nothing from outside (strict Content-Security-Policy); values are inserted as text,
+never as HTML. With `--redact` the page gets the same pseudonyms as the terminal, never raw ids.
+Merges and dismissals go through the same code as the terminal view.
+
+### Terminal view (`--tui`)
+
+A full-screen terminal view (Ink). Ink and React load only for `--tui`, so every other `ct`
+command starts as fast as before.
+
+#### List screen
 
 All candidates of the last scan with tier, score, match class, source, both names and state
 (`open`, `merged`, `dismissed`). Names come from one `GET /persons` when the screen opens.
@@ -72,7 +106,7 @@ All candidates of the last scan with tier, score, match class, source, both name
 | `Enter`     | open the pair (open pairs only) |
 | `q`         | quit                            |
 
-### Pair screen
+#### Pair screen
 
 Two cards, **Original** (green) and **Duplikat** (red), show name, ID, created date and last
 login. The Original is the older person (the lower id), as in ChurchTools' own merge UI. Below
@@ -92,6 +126,8 @@ listed; `i` also shows identical ones. The chosen side is green, the other red.
 | `n`          | "keine Dublette"                                                                 |
 | `s`          | skip                                                                             |
 | `Esc`        | back to the list                                                                 |
+
+### Choices and merge
 
 Defaults: the non-empty side wins, the Original wins a conflict. Only real person fields can
 be chosen (names, nickname, birthday, address, phones, sex, campus, status, job, departments

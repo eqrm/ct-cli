@@ -94,12 +94,26 @@ export function formatValue(key: string, v: unknown, labels: Labels): string {
   return typeof v === "object" ? JSON.stringify(v) : String(v);
 }
 
-/** id -> "First Last" for the list screen: one paginated collection GET. */
-export async function loadNames(client: DupesClient): Promise<Map<number, { first: string; last: string }>> {
-  const out = new Map<number, { first: string; last: string }>();
+/** id -> name, created date and last login for the list: one paginated collection GET. */
+export async function loadNames(
+  client: DupesClient,
+): Promise<Map<number, { first: string; last: string; created?: string; login?: string }>> {
+  const out = new Map<number, { first: string; last: string; created?: string; login?: string }>();
   try {
-    const { data } = await client.getAll<{ id: number; firstName?: string; lastName?: string }>("/persons");
-    for (const p of data) out.set(p.id, { first: p.firstName ?? "", last: p.lastName ?? "" });
+    const { data } = await client.getAll<{
+      id: number;
+      firstName?: string;
+      lastName?: string;
+      lastLogin?: string | null;
+      meta?: { createdDate?: string };
+    }>("/persons");
+    for (const p of data)
+      out.set(p.id, {
+        first: p.firstName ?? "",
+        last: p.lastName ?? "",
+        created: p.meta?.createdDate ?? "",
+        login: p.lastLogin ?? "",
+      });
   } catch {
     /* ids only */
   }
