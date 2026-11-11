@@ -1,12 +1,18 @@
-import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { safeErrorText } from "../src/commands/dupes.js";
 import { CtApiError } from "../src/api/ctClient.js";
-import { agentMarkers, assertHumanSession, needsGuard, type GuardInput } from "../src/dupes/guard.js";
+import {
+  agentMarkers,
+  assertHumanSession,
+  isAgentProcess,
+  needsGuard,
+  type GuardInput,
+} from "../src/dupes/guard.js";
 import { makeRedactor } from "../src/dupes/redact.js";
-import { DupesStore, hostSlug } from "../src/dupes/store.js";
+import { DupesStore, hostSlug, writePrivateFiles } from "../src/dupes/store.js";
 
 const prod = { protected: true } as const;
 const dev = { protected: false } as const;
@@ -61,6 +67,78 @@ describe("personal-data guard", () => {
 
   it("detects agent markers in the environment", () => {
     expect(agentMarkers({ CLAUDECODE: "1", PATH: "/bin" })).toEqual(["CLAUDECODE"]);
+  });
+});
+
+describe("guard breadth and fail-closed", () => {
+  it.each([{ CODEX_SANDBOX: "1" }, { CURSOR_AGENT: "1" }, { GEMINI_CLI: "1" }, { OPENCODE: "1" }])(
+    "refuses env marker %j",
+    (env) => {
+      expect(() => assertHumanSession(human({ env }))).toThrow("not available");
+    },
+  );
+
+  it.each([{ CURSOR_TRACE_ID: "x" }, { AIDER_MODEL: "x" }, { CODEX_HOME: "/tmp/codex" }])(
+    "lets a human with agent config in their shell through %j",
+    (env) => {
+      expect(() => assertHumanSession(human({ env }))).not.toThrow();
+    },
+  );
+
+  it.each([
+    "node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js --resume",
+    "node /opt/lib/@openai/codex/bin/codex.js",
+    "/usr/bin/python3 /usr/local/bin/aider",
+    "claude",
+  ])("recognises agent command line %s", (line) => {
+    expect(isAgentProcess(line)).toBe(true);
+    expect(() => assertHumanSession(human({ ancestors: () => ["-zsh", line] }))).toThrow();
+  });
+
+  it("does not flag ordinary shells or .claude paths", () => {
+    expect(isAgentProcess("-zsh")).toBe(false);
+    expect(isAgentProcess("/bin/zsh -c cd /Users/x/.claude/foo")).toBe(false);
+  });
+
+  it("refuses when the ancestor walk cannot run", () => {
+    const ancestors = (): string[] => {
+      throw new Error("ps: not found");
+    };
+    expect(() => assertHumanSession(human({ ancestors }))).toThrow(/process check could not run/);
+  });
+});
+
+describe("writePrivateFiles", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  const tmp = (): string => {
+    const d = mkdtempSync(join(tmpdir(), "ct-dupes-out-"));
+    dirs.push(d);
+    return d;
+  };
+
+  it("refuses a git work tree", () => {
+    const repo = tmp();
+    mkdirSync(join(repo, ".git"));
+    expect(() => writePrivateFiles(join(repo, "out"), { "a.csv": "x" })).toThrow(/repository/);
+  });
+
+  it("creates a new dir 0700 and files 0600", () => {
+    const out = join(tmp(), "new");
+    const res = writePrivateFiles(out, { "a.csv": "x" });
+    expect(statSync(out).mode & 0o777).toBe(0o700);
+    expect(statSync(res.paths[0] as string).mode & 0o777).toBe(0o600);
+    expect(res.warning).toBeUndefined();
+  });
+
+  it("warns about, but does not change, an open existing dir", () => {
+    const out = tmp();
+    chmodSync(out, 0o755);
+    const res = writePrivateFiles(out, { "a.csv": "x" });
+    expect(res.warning).toMatch(/readable by other users/);
+    expect(statSync(out).mode & 0o777).toBe(0o755);
   });
 });
 

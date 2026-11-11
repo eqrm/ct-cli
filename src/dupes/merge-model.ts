@@ -212,15 +212,20 @@ export interface OptigemOutcome {
   orphaned: string;
 }
 
-/** Leading ID follows the choice; the orphaned one is the other side's, only when both had one. */
+/**
+ * Leading ID follows the choice. The orphaned ID(s) are every ID that no longer sits on the merged
+ * person: the other side's ID, or both when the field is cleared. Several are joined with "; ".
+ * Empty when no ID is lost (a lone ID that is kept).
+ */
 export function optigemOutcome(m: MergeModel): OptigemOutcome {
   const row = m.fields.find((f) => f.optigem);
   if (!row) return { leading: "", orphaned: "" };
   const o = canon(row.original);
   const d = canon(row.duplicate);
   const chosen = row.choice === "original" ? o : row.choice === "duplicate" ? d : "";
-  const other = row.choice === "original" ? d : row.choice === "duplicate" ? o : "";
-  return { leading: chosen, orphaned: o !== "" && d !== "" && chosen !== "" ? other : "" };
+  const lost = row.choice === "original" ? [d] : row.choice === "duplicate" ? [o] : [o, d];
+  const orphaned = [...new Set(lost.filter((x) => x !== ""))].join("; ");
+  return { leading: chosen, orphaned };
 }
 
 /**

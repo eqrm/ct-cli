@@ -70,7 +70,8 @@ export function financeMerges(audit: ReadonlyArray<Record<string, unknown>>, sin
     if (e.action !== MERGE_CONFIRMED) continue;
     const leading = typeof e.leadingOptigemId === "string" ? e.leadingOptigemId : "";
     const orphaned = typeof e.orphanedOptigemId === "string" ? e.orphanedOptigemId : "";
-    if (leading === "" || orphaned === "") continue;
+    // Leading may be empty (the field was cleared); a merge that orphaned no ID is not for finance.
+    if (orphaned === "") continue;
     const ts = String(e.ts);
     if (since && ts.slice(0, 10) < since) continue;
     const str = (v: unknown): string => (typeof v === "string" ? v : "");

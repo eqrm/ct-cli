@@ -9,6 +9,7 @@ import {
   isMasterValue,
   loadPair,
   markNotDuplicate,
+  PairLoadError,
   recoverUnrecordedMerge,
   type PairData,
   type ReviewDeps,
@@ -137,7 +138,7 @@ export function PairScreen(props: {
       },
       async (err: unknown) => {
         if (!live) return;
-        if (err instanceof CtApiError && err.status === 404) {
+        if (err instanceof PairLoadError && err.personGone) {
           if (await recoverUnrecordedMerge(deps, cand.a, cand.b)) {
             setOutcome("merged");
             setMessage(["An earlier merge of this pair had not been recorded; recorded it now."]);
@@ -148,7 +149,15 @@ export function PairScreen(props: {
           setMode("result");
           return;
         }
-        setError(`Could not load the pair${err instanceof CtApiError ? ` (HTTP ${err.status})` : ""}.`);
+        setError(
+          `Could not load the pair (${
+            err instanceof PairLoadError
+              ? `${err.step === "preview" ? "merge preview" : err.step === "membership" ? "group membership" : err.step}${err.status ? `, HTTP ${err.status}` : ""}`
+              : err instanceof CtApiError
+                ? `HTTP ${err.status}`
+                : "error"
+          }).`,
+        );
       },
     );
     return () => {
@@ -225,6 +234,11 @@ export function PairScreen(props: {
     setMode("busy");
     const res = await executeMerge(deps, pair, model, shared);
     if (res.kind === "failed") {
+      // Group steps went through: take the re-read pair so a retry sees the groups as they are now.
+      if (res.fresh) {
+        setPair(res.fresh);
+        setShared(res.fresh.shared);
+      }
       setOutcome("back");
       setMessage([
         res.stage === "reread"
@@ -234,6 +248,8 @@ export function PairScreen(props: {
                 res.groupsDone && res.groupsDone.length > 0
                   ? ` Bereits erledigt (nicht zurückgenommen): Gruppen ${res.groupsDone.map((g) => g.groupId).join(", ")}.`
                   : ""
+              }${res.groupPatched ? ` In Gruppe ${res.groupId ?? "?"} wurde die Mitgliedschaft des Originals schon angepasst.` : ""}${
+                res.stale ? " Bitte das Paar neu laden, bevor du es erneut versuchst." : ""
               }`
             : `Merge failed${res.status ? ` (HTTP ${res.status})` : ""}${
                 res.fields && res.fields.length > 0 ? `; ChurchTools rejected: ${res.fields.join(", ")}` : ""

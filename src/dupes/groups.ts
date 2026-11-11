@@ -12,6 +12,7 @@
  * `memberStartDate`, `comment` and `fields`, and `DELETE` removes a member from a dynamic group too.
  */
 import { fetchDynamicGroupIds } from "../api/dynamicGroups.js";
+import { CtApiError } from "../api/ctClient.js";
 import type { DupesClient, MergeGroup } from "./ct.js";
 import { canon, isEmpty, type Side } from "./merge-model.js";
 
@@ -95,10 +96,19 @@ export function buildItems(original: RawMembership, duplicate: RawMembership): M
 
 export const itemDiffers = (i: MemberItem): boolean => canon(i.original) !== canon(i.duplicate);
 
-/** Ids of all dynamic groups (one GET; empty when the endpoint is unavailable). */
+const dynamicIdCache = new WeakMap<DupesClient, Set<number>>();
+
+/**
+ * Ids of all dynamic groups (one GET per client, cached: the set hardly changes during a session;
+ * empty and not cached when the endpoint is unavailable).
+ */
 export async function loadDynamicGroupIds(client: DupesClient): Promise<Set<number>> {
+  const hit = dynamicIdCache.get(client);
+  if (hit) return hit;
   try {
-    return await fetchDynamicGroupIds(client);
+    const ids = await fetchDynamicGroupIds(client);
+    dynamicIdCache.set(client, ids);
+    return ids;
   } catch {
     return new Set();
   }
@@ -159,9 +169,18 @@ export interface GroupStep {
   updated: string[];
 }
 
+/** Where `prepareSharedGroups` stopped, so the caller can say what was already changed. */
+export interface GroupProgress {
+  /** The group being worked on when it threw. */
+  groupId?: number;
+  /** The Original's membership in that group was already rewritten. */
+  patched?: boolean;
+}
+
 /**
  * Update the Original's memberships, then remove the Duplikat from every shared group. Stops at the
- * first failure and throws; `done` holds the steps that went through (for the audit).
+ * first failure and throws; `done` holds the steps that went through (for the audit). Idempotent for a
+ * retry: a Duplikat that is no longer a member (404 on the DELETE) counts as removed.
  */
 export async function prepareSharedGroups(
   client: DupesClient,
@@ -169,11 +188,21 @@ export async function prepareSharedGroups(
   originalId: number,
   duplicateId: number,
   done: GroupStep[],
+  progress: GroupProgress = {},
 ): Promise<void> {
   for (const g of groups) {
+    progress.groupId = g.id;
+    progress.patched = false;
     const patch = g.dynamic ? null : membershipPatch(g);
-    if (patch) await client.request("PATCH", `/groups/${g.id}/members/${originalId}`, patch);
-    await client.request("DELETE", `/groups/${g.id}/members/${duplicateId}`);
+    if (patch) {
+      await client.request("PATCH", `/groups/${g.id}/members/${originalId}`, patch);
+      progress.patched = true;
+    }
+    try {
+      await client.request("DELETE", `/groups/${g.id}/members/${duplicateId}`);
+    } catch (err) {
+      if (!(err instanceof CtApiError && err.status === 404)) throw err;
+    }
     const updated = patch
       ? g.items.filter((i) => i.choice === "duplicate" && itemDiffers(i)).map((i) => i.key)
       : [];

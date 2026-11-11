@@ -37,7 +37,7 @@ its behaviour may change between ChurchTools releases.
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `ct dupes scan [--env]`                  | Loads non-archived persons and ChurchTools' own duplicate suggestions, scores pairs, stores them. |
 | `ct dupes review [--tui] [--no-open]`    | Review the scanned pairs in the browser (or the terminal): merge, "keine Dublette", skip.         |
-| `ct dupes export-finance [--since DATE]` | Writes `optigem-merges-<date>.csv` and `.json` for merges where both persons had an Optigem ID.   |
+| `ct dupes export-finance [--since DATE]` | Writes `optigem-merges-<date>.csv` and `.json` for merges that orphaned an Optigem ID.            |
 
 Common options: `-e, --env`, `--redact`, `--optigem-field <key>` (or
 `CT_DUPES_OPTIGEM_FIELD`, default `optigemId`).
@@ -209,6 +209,12 @@ environment) `ct dupes` runs only if stdin and stdout are both terminals and the
 is not running inside an AI coding agent session. There is no flag to bypass this. The
 refusal message is deliberately neutral and prints no person data.
 
+The agent check is best-effort detection, not a guarantee. It looks for the environment
+markers and command lines of known coding-agent tools, so an unknown or deliberately
+disguised agent can slip through. If the process ancestry cannot be read (for example
+`ps` is missing), the command refuses rather than guessing. Treat the guard as a safety
+net and keep personal data off sessions you do not control.
+
 ## Local store
 
 Scan results, the audit log and exports live outside any repository, in directories with
@@ -217,6 +223,9 @@ mode `0700` and files with mode `0600`:
 - macOS: `~/Library/Application Support/ct-cli/dupes/<host-slug>/`
 - Linux: `${XDG_DATA_HOME:-~/.local/share}/ct-cli/dupes/<host-slug>/`
 - override with `CT_DUPES_DIR`; the store refuses a path inside a git work tree.
+- `export-finance --out <dir>` follows the same rules: it refuses a git work tree, creates
+  a new directory with `0700`, writes files `0600`, and warns if an existing directory is
+  readable by group or others.
 
 Files: `candidates.json`, `audit.jsonl` (one JSON line per action), `redact.key`, `exports/`.
 

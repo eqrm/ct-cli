@@ -8,6 +8,7 @@ import {
   loadMergePreview,
   loadPerson,
   loadRawPerson,
+  toPersonRecord,
   markNoDuplicate,
   mergePersons,
   type DupesClient,
@@ -21,6 +22,7 @@ import {
   loadDynamicGroupIds,
   loadSharedGroups,
   prepareSharedGroups,
+  type GroupProgress,
   type GroupStep,
   type SharedGroup,
 } from "./groups.js";
@@ -173,29 +175,71 @@ export interface PairData {
   shared: SharedGroup[];
 }
 
+/** Which request of `loadPair` failed. */
+export type PairLoadStep = "original" | "duplicate" | "preview" | "membership";
+
+/** A pair that did not load, naming the request that failed. */
+export class PairLoadError extends Error {
+  constructor(
+    readonly step: PairLoadStep,
+    readonly status: number | null,
+    override readonly cause: unknown,
+  ) {
+    super(`pair load failed at ${step}${status ? ` (HTTP ${status})` : ""}`);
+  }
+
+  /** True only when `GET /persons/{id}` itself answered 404: that person is gone. */
+  get personGone(): boolean {
+    return (this.step === "original" || this.step === "duplicate") && this.status === 404;
+  }
+
+  /** German description for the UI. No person data. */
+  describe(): string {
+    const what =
+      this.step === "preview"
+        ? "Merge-Vorschau"
+        : this.step === "membership"
+          ? "Gruppenmitgliedschaft"
+          : this.step === "original"
+            ? "Original"
+            : "Duplikat";
+    return `${what}${this.status ? `, HTTP ${this.status}` : ""}`;
+  }
+}
+
 /** Load both persons and the merge preview for one direction (`originalId` survives). */
 export async function loadPair(deps: ReviewDeps, originalId: number, duplicateId: number): Promise<PairData> {
   const { client } = deps;
-  const [original, duplicate, preview, originalRaw, duplicateRaw] = await Promise.all([
-    loadPerson(client, originalId, deps.optigemField),
-    loadPerson(client, duplicateId, deps.optigemField),
-    loadMergePreview(client, originalId, duplicateId),
+  const statusOf = (err: unknown): number | null => (err instanceof CtApiError ? err.status : null);
+  // One GET per person: the record is derived from the raw object.
+  const settled = await Promise.allSettled([
     loadRawPerson(client, originalId),
     loadRawPerson(client, duplicateId),
+    loadMergePreview(client, originalId, duplicateId),
   ]);
-  const shared =
-    preview.groupsDiff.both.length === 0
-      ? []
-      : await loadSharedGroups(
-          client,
-          preview.groupsDiff.both,
-          originalId,
-          duplicateId,
-          await loadDynamicGroupIds(client),
-        );
+  const steps: PairLoadStep[] = ["original", "duplicate", "preview"];
+  for (const [i, r] of settled.entries())
+    if (r.status === "rejected") throw new PairLoadError(steps[i]!, statusOf(r.reason), r.reason);
+  const [originalRaw, duplicateRaw, preview] = settled.map(
+    (r) => (r as PromiseFulfilledResult<unknown>).value,
+  ) as [Record<string, unknown>, Record<string, unknown>, MergePreview];
+  let shared: SharedGroup[] = [];
+  if (preview.groupsDiff.both.length > 0) {
+    try {
+      shared = await loadSharedGroups(
+        client,
+        preview.groupsDiff.both,
+        originalId,
+        duplicateId,
+        await loadDynamicGroupIds(client),
+      );
+    } catch (err) {
+      throw new PairLoadError("membership", statusOf(err), err);
+    }
+  }
   return {
-    original,
-    duplicate,
+    original: toPersonRecord(originalRaw, deps.optigemField),
+    duplicate: toPersonRecord(duplicateRaw, deps.optigemField),
     originalRaw,
     duplicateRaw,
     preview,
@@ -223,6 +267,15 @@ export type MergeResult =
       groupsDone?: GroupStep[];
       /** The group whose clean-up failed (stage "groups"). */
       groupId?: number;
+      /** In that group the Original's membership was already rewritten before the failure. */
+      groupPatched?: boolean;
+      /**
+       * The pair re-read after group steps went through, so a retry sees the groups as they are now
+       * (the cached `shared` list is stale). Absent when nothing changed or the re-read failed;
+       * then `stale` is true if groups were changed and the caller must reload the pair.
+       */
+      fresh?: PairData;
+      stale?: boolean;
     };
 
 async function duplicateGone(deps: ReviewDeps, id: number): Promise<boolean | null> {
@@ -272,7 +325,27 @@ function confirm(
   );
 }
 
-/** Merge `pair.duplicate` into `pair.original` with the model's choices. Re-reads the original first. */
+/** After a failure that left group changes behind: re-read the pair so retries start from reality. */
+async function withFresh(
+  deps: ReviewDeps,
+  pair: PairData,
+  res: Extract<MergeResult, { kind: "failed" }>,
+): Promise<MergeResult> {
+  const changed = res.groupsDone && res.groupsDone.length > 0;
+  if (!changed && !res.groupPatched) return res;
+  try {
+    return { ...res, fresh: await loadPair(deps, pair.original.id, pair.duplicate.id) };
+  } catch {
+    return { ...res, stale: true };
+  }
+}
+
+/**
+ * Merge `pair.duplicate` into `pair.original` with the model's choices. The Original is re-read
+ * right before the write (one GET): the operator may have taken minutes to decide and the body is
+ * built from that object, so a stale copy could overwrite a concurrent edit. The Duplikat comes
+ * from the loaded pair.
+ */
 export async function executeMerge(
   deps: ReviewDeps,
   pair: PairData,
@@ -289,7 +362,7 @@ export async function executeMerge(
 
   let built: ReturnType<typeof buildBody>;
   try {
-    built = buildBody(await loadRawPerson(deps.client, survivingId), pair.duplicateRaw, model);
+    built = buildBody(await loadRawPerson(deps.client, survivingId), pair.duplicateRaw, model); // fresh: see above
   } catch (err) {
     store.audit({ action: "merge-error", survivingId, loserId }, now());
     return { kind: "failed", status: status(err), stage: "reread" };
@@ -317,15 +390,31 @@ export async function executeMerge(
     now(),
   );
   const groupsDone: GroupStep[] = [];
+  const progress: GroupProgress = {};
   try {
-    await prepareSharedGroups(deps.client, shared, survivingId, loserId, groupsDone);
+    await prepareSharedGroups(deps.client, shared, survivingId, loserId, groupsDone, progress);
   } catch (err) {
-    const failedGroup = shared[groupsDone.length]?.id;
+    const failedGroup = progress.groupId;
     store.audit(
-      { action: "merge-error", survivingId, loserId, stage: "groups", groupsDone, failedGroup },
+      {
+        action: "merge-error",
+        survivingId,
+        loserId,
+        stage: "groups",
+        groupsDone,
+        failedGroup,
+        ...(progress.patched ? { failedGroupPatched: true } : {}),
+      },
       now(),
     );
-    return { kind: "failed", status: status(err), stage: "groups", groupsDone, groupId: failedGroup };
+    return withFresh(deps, pair, {
+      kind: "failed",
+      status: status(err),
+      stage: "groups",
+      groupsDone,
+      groupId: failedGroup,
+      ...(progress.patched ? { groupPatched: true } : {}),
+    });
   }
   if (groupsDone.length > 0)
     store.audit({ action: "groups-prepared", survivingId, loserId, groupsDone }, now());
@@ -343,14 +432,14 @@ export async function executeMerge(
         warnings: built.warnings,
       };
     }
-    return {
+    return withFresh(deps, pair, {
       kind: "failed",
       status: status(err),
       stage: "patch",
       fields: rejectedFields(err),
       reason: errorKey(err),
       groupsDone,
-    };
+    });
   }
   const gone = await duplicateGone(deps, loserId);
   confirm(deps, survivingId, loserId, parties, leading, orphaned, {
@@ -397,6 +486,12 @@ export async function recoverUnrecordedMerge(deps: ReviewDeps, a: number, b: num
     if (e.action === MERGE_CONFIRMED) started = null;
   }
   if (!started || (await duplicateGone(deps, Number(started.loserId))) !== true) return false;
+  // Only a recovered merge when the surviving person is still there: otherwise the 404 says nothing.
+  try {
+    await loadRawPerson(deps.client, Number(started.survivingId));
+  } catch {
+    return false;
+  }
   confirm(
     deps,
     Number(started.survivingId),

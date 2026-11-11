@@ -20,6 +20,7 @@ import {
   isMasterValue,
   loadPair,
   markNotDuplicate,
+  PairLoadError,
   recoverUnrecordedMerge,
   type MergeResult,
   type PairData,
@@ -252,14 +253,18 @@ export function mergeMessages(res: MergeResult): string[] {
     ];
   }
   const done =
-    res.groupsDone && res.groupsDone.length > 0
+    (res.groupsDone && res.groupsDone.length > 0
       ? ` Bereits erledigt (nicht zurückgenommen): Gruppen ${res.groupsDone.map((g) => g.groupId).join(", ")}.`
-      : "";
+      : "") +
+    (res.groupPatched
+      ? ` In Gruppe ${res.groupId ?? "?"} wurde die Mitgliedschaft des Originals schon angepasst.`
+      : "") +
+    (res.stale ? " Das Paar bitte neu laden, bevor du es erneut versuchst." : "");
   if (res.stage === "reread")
     return [`Das Original ließ sich nicht neu laden${http(res.status)}. Nichts geändert.`];
   if (res.stage === "groups")
     return [
-      `Gruppe ${res.groupId ?? "?"} ließ sich nicht vorbereiten${http(res.status)}. Nicht zusammengeführt.${done}`,
+      `Gruppe ${res.groupId ?? "?"} ließ sich nicht vorbereiten${http(res.status)}. Nicht zusammengeführt.${done || " Nichts geändert."}`,
     ];
   const fields =
     res.fields && res.fields.length > 0 ? ` ChurchTools lehnt ab: ${res.fields.join(", ")}.` : "";
@@ -370,7 +375,8 @@ export async function startReviewServer(
         pairs.set(`${o}:${d}`, p);
         return { pair: pairView(deps, p) };
       } catch (err) {
-        if (err instanceof CtApiError && err.status === 404) {
+        if (err instanceof PairLoadError && err.personGone) {
+          // recoverUnrecordedMerge re-checks from the audit: the recorded loser 404s and the survivor loads.
           if (await recoverUnrecordedMerge(deps, c.a, c.b)) {
             c.state = "merged";
             deps.store.saveScan(scan);
@@ -383,7 +389,9 @@ export async function startReviewServer(
         }
         throw new HttpError(
           502,
-          `Paar ließ sich nicht laden${err instanceof CtApiError ? ` (HTTP ${err.status})` : ""}.`,
+          err instanceof PairLoadError
+            ? `Paar ließ sich nicht laden (${err.describe()}).`
+            : `Paar ließ sich nicht laden${err instanceof CtApiError ? ` (HTTP ${err.status})` : ""}.`,
         );
       }
     }
@@ -399,8 +407,18 @@ export async function startReviewServer(
         c.state = "merged";
         deps.store.saveScan(scan);
         pairs.delete(`${o}:${d}`);
+      } else if (res.fresh) {
+        pairs.set(`${o}:${d}`, res.fresh); // group steps went through: retry against reality
+      } else if (res.stale) {
+        pairs.delete(`${o}:${d}`);
       }
-      return { ok: res.kind === "merged", messages: mergeMessages(res), optigem: optigemOutcome(model) };
+      return {
+        ok: res.kind === "merged",
+        // Group steps already went through: the dialog must show the pair as it is now.
+        reload: res.kind !== "merged" && Boolean(res.fresh || res.stale),
+        messages: mergeMessages(res),
+        optigem: optigemOutcome(model),
+      };
     }
     if (method === "POST" && path === "/api/dismiss") {
       const c = candidate(body.index);

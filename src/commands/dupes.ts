@@ -154,7 +154,7 @@ export function dupesCommand(): Command {
   addCommon(
     dupes
       .command("export-finance")
-      .description("Write CSV and JSON of merges where both persons had an Optigem ID")
+      .description("Write CSV and JSON of merges that orphaned an Optigem ID")
       .option("--since <date>", "only merges on or after this date (YYYY-MM-DD)")
       .option("--out <dir>", "output directory (default: the local dupes store)"),
   ).action((opts: CommonOptions & { since?: string; out?: string }) =>
@@ -172,13 +172,13 @@ export function dupesCommand(): Command {
       let csvPath: string;
       let jsonPath: string;
       if (opts.out) {
-        const { mkdirSync, writeFileSync } = await import("node:fs");
-        const { join } = await import("node:path");
-        mkdirSync(opts.out, { recursive: true, mode: 0o700 });
-        csvPath = join(opts.out, `optigem-merges-${day}.csv`);
-        jsonPath = join(opts.out, `optigem-merges-${day}.json`);
-        writeFileSync(csvPath, csv, { mode: 0o600 });
-        writeFileSync(jsonPath, json, { mode: 0o600 });
+        const { writePrivateFiles } = await import("../dupes/store.js");
+        const res = writePrivateFiles(opts.out, {
+          [`optigem-merges-${day}.csv`]: csv,
+          [`optigem-merges-${day}.json`]: json,
+        });
+        if (res.warning) warn(res.warning);
+        [csvPath, jsonPath] = res.paths as [string, string];
       } else {
         csvPath = s.store.writeExport(`optigem-merges-${day}.csv`, csv);
         jsonPath = s.store.writeExport(`optigem-merges-${day}.json`, json);

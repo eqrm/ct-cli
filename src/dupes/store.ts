@@ -7,7 +7,16 @@
  * `CT_DUPES_DIR` overrides the base directory (tests); it may not point into a git work tree.
  */
 import { randomBytes } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { Candidate } from "./detector.js";
@@ -69,6 +78,38 @@ export function insideGitWorkTree(dir: string): boolean {
     if (up === cur) return false;
     cur = up;
   }
+}
+
+/**
+ * Write export files into a user-chosen directory with the store's protections: refuses a
+ * git work tree, creates a new dir 0700 (an existing dir is left alone, with a warning if it
+ * is group/world accessible), and writes files 0600 via temp file + rename.
+ */
+export function writePrivateFiles(
+  dir: string,
+  files: Record<string, string>,
+): { paths: string[]; warning?: string } {
+  const target = resolve(dir);
+  if (insideGitWorkTree(target)) throw new Error("The export directory must not be inside a repository.");
+  let warning: string | undefined;
+  if (existsSync(target)) {
+    if ((statSync(target).mode & 0o077) !== 0) {
+      warning = "The export directory is readable by other users; consider restricting it (chmod 700).";
+    }
+  } else {
+    mkdirSync(target, { recursive: true, mode: 0o700 });
+    chmodSync(target, 0o700);
+  }
+  const paths: string[] = [];
+  for (const [name, content] of Object.entries(files)) {
+    const path = join(target, name);
+    const tmp = join(target, `.${name}.${randomBytes(4).toString("hex")}.tmp`);
+    writeFileSync(tmp, content, { mode: 0o600 });
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, path);
+    paths.push(path);
+  }
+  return warning ? { paths, warning } : { paths };
 }
 
 export class DupesStore {

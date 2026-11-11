@@ -106,8 +106,21 @@ h1 { font-size: 30px; margin: 0 0 24px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 760px) {
   .people { grid-template-columns: 1fr; } .swap { margin: 8px auto 0; }
-  .grid { grid-template-columns: 1fr 1fr; } .grid .arrow { display: none; }
-  .cmp-head { grid-template-columns: 1fr; }
+  .overlay { padding: 6px; } .scroll { padding: 12px; } .dialog > .top, .foot { padding: 8px 12px; }
+  .pair { padding: 16px 12px 12px; } main { padding: 20px 12px 60px; }
+  .dialog h2 { font-size: 20px; }
+  /* one column: field label, then Original / Ergebnis / Duplikat, each with its own caption */
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .grid > div { padding: 8px 10px; min-height: 0; min-width: 0; }
+  .grid .arrow, .grid .gap, .cmp-head .gap, .grid .hdr:not(.first):not(.tog) { display: none; }
+  .grid .hdr .cap { display: none; }
+  .grid .label { font-weight: 700; background: #fafbfd; padding-top: 12px; }
+  .grid .val::before, .grid .res::before { content: attr(data-cap); flex: 0 0 74px; font-size: 12px; font-weight: 700; color: var(--muted); }
+  .grid .val:empty::after { content: "–"; color: var(--muted); }
+  .grid .res .both, .grid .res .clear { margin-left: auto; }
+  .cmp-head { grid-template-columns: 1fr; gap: 8px; padding: 10px; }
+  .foot .pager { order: 3; flex-basis: 100%; }
+  .foot .btn { flex: 1 1 auto; }
 }
 </style>
 </head>
@@ -123,8 +136,13 @@ h1 { font-size: 30px; margin: 0 0 24px; }
 <script>
 "use strict";
 var TOKEN = location.hash.slice(1);
+// Keep the token out of the visible URL, but in sessionStorage so a reload or restored tab still works.
+try {
+  if (TOKEN) sessionStorage.setItem("ctDupesToken", TOKEN);
+  else TOKEN = sessionStorage.getItem("ctDupesToken") || "";
+} catch (e) { /* storage blocked: the token lives in this variable only */ }
 history.replaceState(null, "", location.pathname);
-var S = { list: null, tab: "open", tier: null, q: "", limit: 30, swapped: {}, dlg: null };
+var S = { list: null, tab: "open", tier: null, q: "", limit: 30, swapped: {}, dlg: null, composing: false, shell: null };
 
 function h(tag, attrs) {
   var el = document.createElement(tag);
@@ -154,6 +172,7 @@ function api(path, body) {
     body: body ? JSON.stringify(body) : undefined
   }).then(function (r) {
     return r.json().catch(function () { return {}; }).then(function (j) {
+      if (r.status === 403) throw new Error("Der Zugriffsschlüssel fehlt oder ist ungültig. Bitte die URL, die „ct dupes review“ im Terminal ausgibt, erneut öffnen.");
       if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
       return j;
     });
@@ -176,18 +195,34 @@ function personCard(kind, p) {
 }
 
 /* ---------- list ---------- */
-function filtered() {
+function matches(c) {
   var q = S.q.toLowerCase();
-  return S.list.candidates.filter(function (c) {
-    if (c.state !== S.tab) return false;
-    if (S.tier && c.tier !== S.tier) return false;
-    if (q && (c.original.name + " " + c.duplicate.name + " " + c.original.id + " " + c.duplicate.id).toLowerCase().indexOf(q) < 0) return false;
-    return true;
-  });
+  if (S.tier && c.tier !== S.tier) return false;
+  if (q && (c.original.name + " " + c.duplicate.name + " " + c.original.id + " " + c.duplicate.id).toLowerCase().indexOf(q) < 0) return false;
+  return true;
+}
+function filtered() { return S.list.candidates.filter(function (c) { return c.state === S.tab && matches(c); }); }
+// The pairs the dialog pages through: exactly the open pairs the list shows (tier and search), plus the current one.
+function pagerList(keep) {
+  return S.list.candidates.filter(function (c) { return matches(c) && (c.state === "open" || c.index === keep); });
+}
+// The h1 and the search box are built once, so typing (and IME/dead-key composition) never loses the input.
+function shell() {
+  var app = document.getElementById("app");
+  if (S.shell && app.contains(S.shell.search)) return S.shell;
+  var search = h("input", { class: "search", placeholder: "Suche (Name oder ID)", value: S.q });
+  var body = h("div", { id: "listpart" });
+  var apply = function () { S.q = search.value; S.limit = 30; renderList(); };
+  search.addEventListener("compositionstart", function () { S.composing = true; });
+  search.addEventListener("compositionend", function () { S.composing = false; apply(); });
+  search.addEventListener("input", function () { if (!S.composing) apply(); });
+  fill(app, h("h1", null, "Dubletten überprüfen"), search, body);
+  S.shell = { search: search, body: body };
+  return S.shell;
 }
 function sides(c) { return S.swapped[c.index] ? [c.duplicate, c.original] : [c.original, c.duplicate]; }
 function renderList() {
-  var app = document.getElementById("app");
+  var part = shell().body;
   var all = S.list.candidates;
   var count = function (st) { return all.filter(function (c) { return c.state === st; }).length; };
   var list = filtered();
@@ -198,11 +233,7 @@ function renderList() {
   var chip = function (t, label) {
     return h("button", { class: "chip" + (S.tier === t ? " on" : ""), onclick: function () { S.tier = t; S.limit = 30; renderList(); } }, label);
   };
-  var search = h("input", { class: "search", placeholder: "Suche (Name oder ID)", value: S.q,
-    oninput: function (e) { S.q = e.target.value; S.limit = 30; renderList(); var s = document.querySelector(".search"); s.focus(); s.setSelectionRange(S.q.length, S.q.length); } });
-  fill(app,
-    h("h1", null, "Dubletten überprüfen"),
-    search,
+  fill(part,
     h("div", { class: "tabs" }, tab("open", "Überprüfen"), tab("merged", "Zusammengeführt"), tab("dismissed", "Keine Dublette"),
       h("div", { class: "tiers" }, chip(null, "Alle"), chip("T1", "T1"), chip("T2", "T2"), chip("T3", "T3"))),
     list.length === 0 ? h("p", { class: "empty" }, "Keine Paare.") : null,
@@ -243,9 +274,9 @@ function toast(text, ok) {
 function openList() { return filtered(); }
 // While the next pair loads, the current one stays on screen (dimmed) and is swapped in one render,
 // so the dialog never blanks to a loading line between pairs.
-function openDialog(index, msg) {
+function openDialog(index, msg, failed) {
   var prev = S.dlg;
-  var d = { index: index, pair: null, msg: msg || null, ok: true, identical: prev ? prev.identical : false, loading: true, done: false };
+  var d = { index: index, pair: null, msg: msg || null, ok: !failed, identical: prev ? prev.identical : false, loading: true, done: false };
   S.pending = d;
   if (prev && prev.pair && !prev.loading) { prev.busy = prev.busy || "load"; renderDialog(); }
   else { S.dlg = d; renderDialog(); }
@@ -263,9 +294,13 @@ function openDialog(index, msg) {
 }
 function load() { openDialog(S.dlg.index, null); }
 function refresh() { api("/api/list").then(function (l) { S.list = l; renderList(); }); }
+function isBusy() { return !!S.dlg && (S.dlg.busy === "merge" || S.dlg.busy === "dismiss"); }
+// Esc, ×, Abbrechen and overlay clicks: never while a merge or dismissal is in flight.
+function requestClose() { if (!isBusy()) closeDialog(); }
 function closeDialog() { S.dlg = null; S.pending = null; document.getElementById("layer").replaceChildren(); renderList(); }
 function step(delta) {
-  var list = S.list.candidates.filter(function (c) { return c.state === "open" && (!S.tier || c.tier === S.tier); });
+  if (isBusy()) return;
+  var list = pagerList(S.dlg.index);
   var at = list.findIndex(function (c) { return c.index === S.dlg.index; });
   var next = list[at + delta] || (at < 0 ? list[0] : null);
   if (next) openDialog(next.index); else closeDialog();
@@ -282,7 +317,7 @@ function conflicts(p) {
     p.groups.reduce(function (n, g) { return n + g.items.filter(function (i) { return i.differs && i.original && i.duplicate; }).length; }, 0);
 }
 function arrow(show, on, title, glyph, onclick) {
-  return h("div", { class: "arrow" }, show ? h("button", { class: "arr" + (on ? " on" : ""), title: title, onclick: onclick }, glyph) : null);
+  return h("div", { class: "arrow" + (show ? "" : " gap") }, show ? h("button", { class: "arr" + (on ? " on" : ""), title: title, onclick: onclick }, glyph) : null);
 }
 function valueRow(label, row, onPick, canClear) {
   var both = row.choice === "both";
@@ -290,14 +325,14 @@ function valueRow(label, row, onPick, canClear) {
   var canBoth = !!row.both && !!row.original && !!row.duplicate && row.differs;
   var cells = [
     h("div", { class: "label" }, label),
-    h("div", { class: "val pick" + (o ? " chosen" : row.differs && row.original ? " lost" : ""), title: "Wert des Originals übernehmen",
+    h("div", { "data-cap": "Original", class: "val pick" + (o ? " chosen" : row.differs && row.original ? " lost" : ""), title: "Wert des Originals übernehmen",
       onclick: function () { onPick("original"); } }, row.original),
     arrow(!!row.original, o, "Wert des Originals übernehmen", "→", function () { onPick("original"); }),
-    h("div", { class: "res" + (row.choice === "none" ? " cleared" : "") }, row.choice === "none" ? "(leer)" : resultText(row),
+    h("div", { "data-cap": "Ergebnis", class: "res" + (row.choice === "none" ? " cleared" : "") }, row.choice === "none" ? "(leer)" : resultText(row),
       canBoth && !both ? h("button", { class: "both", title: "Einträge beider Personen übernehmen", onclick: function () { onPick("both"); } }, "beide") : null,
       canClear && row.choice !== "none" ? h("button", { class: "clear", title: "Feld leeren", onclick: function () { onPick("none"); } }, "×") : null),
     arrow(!!row.duplicate, dsel, "Wert des Duplikats übernehmen", "←", function () { onPick("duplicate"); }),
-    h("div", { class: "val pick" + (dsel ? " chosen" : row.differs && row.duplicate ? " lost" : ""), title: "Wert des Duplikats übernehmen",
+    h("div", { "data-cap": "Duplikat", class: "val pick" + (dsel ? " chosen" : row.differs && row.duplicate ? " lost" : ""), title: "Wert des Duplikats übernehmen",
       onclick: function () { onPick("duplicate"); } }, row.duplicate)
   ];
   return cells;
@@ -306,7 +341,7 @@ function renderDialog() {
   var d = S.dlg, layer = document.getElementById("layer");
   if (!d) { layer.replaceChildren(); return; }
   var p = d.pair;
-  var list = S.list.candidates.filter(function (c) { return c.state === "open" && (!S.tier || c.tier === S.tier); });
+  var list = pagerList(d.index);
   var at = list.findIndex(function (c) { return c.index === d.index; });
   var body = [];
   if (d.msg) body.push(h("div", { class: "msg " + (d.ok ? "ok" : "err") }, d.msg.map(function (m) { return h("div", null, m); })));
@@ -314,17 +349,17 @@ function renderDialog() {
   if (p && !d.loading) {
     var g = [];
     var hdr = [
-      h("div", { class: "hdr" }, (conflicts(p) === 1 ? "1 Konflikt" : conflicts(p) + " Konflikte") + " überprüfen"),
+      h("div", { class: "hdr first" }, (conflicts(p) === 1 ? "1 Konflikt" : conflicts(p) + " Konflikte") + " überprüfen"),
       h("div", { class: "hdr" }, "Original"), h("div", { class: "hdr" }),
       h("div", { class: "hdr" }, "Vorschlag für Zusammenführung"), h("div", { class: "hdr" }),
-      h("div", { class: "hdr" }, "Duplikat", h("label", { class: "toggle" }, "Identische Felder",
+      h("div", { class: "hdr tog" }, h("span", { class: "cap" }, "Duplikat"), h("label", { class: "toggle" }, "Identische Felder",
         h("input", { type: "checkbox", checked: d.identical, onchange: function (e) { d.identical = e.target.checked; renderDialog(); } })))
     ];
     g.push(hdr);
     g.push(h("div", { class: "sec" }, "Sonstiges"));
-    g.push(h("div", { class: "label" }, "Gruppen"), h("div", { class: "val" }, p.groupCounts.original + " Gruppen"), h("div"),
-      h("div", { class: "res" }, (p.groupCounts.original + p.groupCounts.duplicate - p.groupCounts.both) + " Gruppen (davon " + p.groupCounts.both + " gemeinsam)"),
-      h("div"), h("div", { class: "val" }, p.groupCounts.duplicate + " Gruppen"));
+    g.push(h("div", { class: "label" }, "Gruppen"), h("div", { class: "val", "data-cap": "Original" }, p.groupCounts.original + " Gruppen"), h("div", { class: "gap" }),
+      h("div", { class: "res", "data-cap": "Ergebnis" }, (p.groupCounts.original + p.groupCounts.duplicate - p.groupCounts.both) + " Gruppen (davon " + p.groupCounts.both + " gemeinsam)"),
+      h("div", { class: "gap" }), h("div", { class: "val", "data-cap": "Duplikat" }, p.groupCounts.duplicate + " Gruppen"));
     var sections = ["Adresse", "Informationen", "Kategorie", "Bereich", "Finanzen"];
     sections.forEach(function (sec) {
       var rows = p.fields.filter(function (f) { return f.section === sec && (d.identical || f.differs); });
@@ -345,12 +380,12 @@ function renderDialog() {
         };
         var take = function () { setInclude(true); };
         g.push(h("div", { class: "label" }, e.label, star),
-          h("div", { class: "val" + (e.inOriginal ? (e.include ? " chosen" : " lost") : "") }, e.inOriginal ? e.address : ""),
+          h("div", { "data-cap": "Original", class: "val" + (e.inOriginal ? (e.include ? " chosen" : " lost") : "") }, e.inOriginal ? e.address : ""),
           arrow(e.inOriginal, e.inOriginal && e.include, "Adresse übernehmen", "→", take),
-          h("div", { class: "res" + (e.include ? "" : " cleared") }, e.include ? e.address : "(nicht übernehmen)",
+          h("div", { "data-cap": "Ergebnis", class: "res" + (e.include ? "" : " cleared") }, e.include ? e.address : "(nicht übernehmen)",
             e.include ? h("button", { class: "clear", title: "Adresse nicht übernehmen", onclick: function () { setInclude(false); } }, "×") : null),
           arrow(e.inDuplicate, !e.inOriginal && e.include, "Adresse übernehmen", "←", take),
-          h("div", { class: "val" + (e.inDuplicate ? (e.include ? " chosen" : " lost") : "") }, e.inDuplicate ? e.address : "",
+          h("div", { "data-cap": "Duplikat", class: "val" + (e.inDuplicate ? (e.include ? " chosen" : " lost") : "") }, e.inDuplicate ? e.address : "",
             e.duplicateType ? h("span", { class: "note", title: "Typ beim Duplikat; übernommen wird der Typ des Originals" }, " (" + e.duplicateType + ")") : null));
       });
     });
@@ -365,7 +400,7 @@ function renderDialog() {
     }
     body.push(h("h2", null, "Welche Daten sollen übernommen werden?"),
       h("div", { class: "cmp" },
-        h("div", { class: "cmp-head" }, h("div"), personCard("o", p.original),
+        h("div", { class: "cmp-head" }, h("div", { class: "gap" }), personCard("o", p.original),
           h("button", { class: "swaplink", onclick: function () { S.swapped[d.index] = !S.swapped[d.index]; d.msg = null; load(); } }, "⇄ Original und Duplikat tauschen"),
           personCard("d", p.duplicate)),
         h("div", { class: "grid" }, g)));
@@ -374,12 +409,12 @@ function renderDialog() {
   var old = layer.querySelector(".scroll");
   var keep = old && S.scrolled === d && !d.loading ? old.scrollTop : 0;
   S.scrolled = d;
-  layer.replaceChildren(h("div", { class: "overlay", onclick: function (e) { if (e.target === e.currentTarget) closeDialog(); } },
+  layer.replaceChildren(h("div", { class: "overlay", onclick: function (e) { if (e.target === e.currentTarget) requestClose(); } },
     h("div", { class: "dialog" + (d.busy ? " busy" : "") },
-      h("div", { class: "top" }, "Dubletten überprüfen", h("button", { class: "x", title: "Schließen", onclick: closeDialog }, "×")),
+      h("div", { class: "top" }, "Dubletten überprüfen", h("button", { class: "x", title: "Schließen", onclick: requestClose }, "×")),
       h("div", { class: "scroll" }, body),
       h("div", { class: "foot" },
-        h("button", { class: "btn", onclick: closeDialog }, "Abbrechen"),
+        h("button", { class: "btn", onclick: requestClose }, "Abbrechen"),
         h("button", { class: "btn red" + (d.busy === "dismiss" ? " working" : ""), disabled: !canAct, onclick: dialogDismiss }, "Als \"Keine Dublette\" markieren"),
         h("div", { class: "pager" },
           h("button", { class: "round", title: "Vorheriges Paar", disabled: at <= 0, onclick: function () { step(-1); } }, "←"),
@@ -390,19 +425,28 @@ function renderDialog() {
   layer.querySelector(".scroll").scrollTop = keep;
 }
 function dialogDismiss() {
-  var d = S.dlg; if (d.busy) return; d.busy = "dismiss"; renderDialog();
+  var d = S.dlg; if (!d || d.busy) return; d.busy = "dismiss"; renderDialog();
   api("/api/dismiss", { index: d.index }).then(function (r) {
-    markState(d.index, "dismissed"); afterAction(r.messages, true);
-  }, function (e) { d.busy = false; d.msg = [e.message]; d.ok = false; renderDialog(); });
+    markState(d.index, "dismissed"); afterAction(d, r.messages, true);
+  }).catch(function (e) { fail(d, e); });
 }
 function markState(index, st) { S.list.candidates[index].state = st; }
-function afterAction(messages, ok) {
-  var d = S.dlg;
-  if (!ok) { d.busy = false; d.msg = messages; d.ok = false; renderDialog(); return; }
+// d is the dialog state captured before the request: S.dlg may have changed by now.
+function fail(d, e) {
+  d.busy = false; d.msg = [e.message]; d.ok = false;
+  if (S.dlg === d) renderDialog(); else toast(e.message, false);
+}
+function afterAction(d, messages, ok) {
+  if (!ok) {
+    d.busy = false; d.msg = messages; d.ok = false;
+    if (S.dlg === d) renderDialog(); else toast(messages.join(" "), false);
+    return;
+  }
   renderList();
+  if (S.dlg !== d) { toast(messages.join(" "), true); return; }
   var from = d.index;
   // Stay at the same place in the pager: the pair that now fills this slot, not the first one.
-  var list = S.list.candidates.filter(function (c) { return (c.state === "open" || c.index === from) && (!S.tier || c.tier === S.tier); });
+  var list = pagerList(from);
   var at = list.findIndex(function (c) { return c.index === from; });
   var rest = list.filter(function (c) { return c.index !== from; });
   var next = rest[at] || rest[rest.length - 1];
@@ -416,19 +460,20 @@ function choices(p) {
   return { fields: fields, emails: p.emails.map(function (e) { return { index: e.index, include: e.include, isDefault: e.isDefault }; }), groups: groups };
 }
 function doMerge() {
-  var d = S.dlg; if (d.busy) return; d.busy = "merge"; renderDialog();
+  var d = S.dlg; if (!d || d.busy) return; d.busy = "merge"; renderDialog();
   api("/api/merge", { index: d.index, swapped: !!S.swapped[d.index], choices: choices(d.pair) }).then(function (r) {
     if (r.ok) markState(d.index, "merged");
-    afterAction(r.messages, r.ok);
-  }, function (e) { d.busy = false; d.msg = [e.message]; d.ok = false; renderDialog(); });
+    if (!r.ok && r.reload && S.dlg === d) { openDialog(d.index, r.messages, true); return; }
+    afterAction(d, r.messages, r.ok);
+  }).catch(function (e) { fail(d, e); });
 }
 
 document.addEventListener("keydown", function (e) {
-  if (e.key === "Escape" && S.dlg) closeDialog();
+  if (e.key === "Escape" && S.dlg) requestClose();
 });
 document.getElementById("finance").addEventListener("click", function () {
   api("/api/finance-export", {}).then(function (r) {
-    if (r.count === 0) { toast("Noch keine Merges, bei denen beide Personen eine Optigem-ID hatten.", true); return; }
+    if (r.count === 0) { toast("Noch keine Merges, bei denen eine Optigem-ID verwaist ist.", true); return; }
     // BOM so Excel reads names with umlauts as UTF-8.
     var url = URL.createObjectURL(new Blob(["\ufeff" + r.csv], { type: "text/csv;charset=utf-8" }));
     var a = h("a", { href: url, download: r.filename });
@@ -449,7 +494,7 @@ api("/api/list").then(function (l) {
   document.getElementById("who").textContent = l.operator;
   renderList();
 }, function (e) {
-  document.getElementById("app").replaceChildren(h("p", { class: "empty" }, "Keine Verbindung: " + e.message));
+  document.getElementById("app").replaceChildren(h("p", { class: "empty" }, e.message));
 });
 </script>
 </body>
