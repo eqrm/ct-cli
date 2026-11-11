@@ -95,11 +95,6 @@ h1 { font-size: 30px; margin: 0 0 24px; }
 .round { border: 1px solid #c4cdda; background: #fff; color: var(--blue); border-radius: 6px; width: 36px; height: 34px; }
 .msg { margin: 0 0 14px; padding: 10px 14px; border-radius: 6px; }
 .msg.ok { background: var(--green-bg); } .msg.err { background: var(--red-bg); }
-.confirm { position: fixed; inset: 0; background: rgba(20,30,50,.35); display: flex; align-items: center; justify-content: center; z-index: 20; padding: 16px; }
-.confirm .box { background: #fff; border-radius: 8px; max-width: 640px; width: 100%; padding: 22px 24px; max-height: 90vh; overflow: auto; }
-.confirm h3 { margin: 0 0 12px; }
-.confirm ul { padding-left: 20px; margin: 8px 0 16px; }
-.confirm .row { display: flex; gap: 8px; justify-content: flex-end; }
 .busy { opacity: .6; pointer-events: none; }
 @media (max-width: 760px) {
   .people { grid-template-columns: 1fr; } .swap { margin: 8px auto 0; }
@@ -373,7 +368,7 @@ function renderDialog() {
           h("button", { class: "round", title: "Vorheriges Paar", disabled: at <= 0, onclick: function () { step(-1); } }, "←"),
           at >= 0 ? "Seite " + (at + 1) + " von " + list.length : "",
           h("button", { class: "round", title: "Nächstes Paar (überspringen)", onclick: function () { step(1); } }, "→")),
-        h("button", { class: "btn primary", disabled: !canAct, onclick: askMerge }, "Zusammenführen")))));
+        h("button", { class: "btn primary", disabled: !canAct, onclick: doMerge }, "Zusammenführen")))));
   layer.querySelector(".scroll").scrollTop = keep;
 }
 function dialogDismiss() {
@@ -398,26 +393,6 @@ function choices(p) {
   var groups = {}; p.groups.forEach(function (g) { var m = {}; g.items.forEach(function (i) { m[i.key] = i.choice; }); groups[g.id] = m; });
   return { fields: fields, emails: p.emails.map(function (e) { return { index: e.index, include: e.include, isDefault: e.isDefault }; }), groups: groups };
 }
-function askMerge() {
-  var d = S.dlg, p = d.pair;
-  var changed = p.fields.filter(function (f) { return f.choice !== "original" && (f.differs || f.choice === "none"); });
-  var dropped = p.emails.filter(function (e) { return !e.include; });
-  var opt = p.fields.find(function (f) { return f.optigem; });
-  var box = h("div", { class: "box" },
-    h("h3", null, "Wirklich zusammenführen?"),
-    h("p", null, p.duplicate.name + " (ID " + p.duplicate.id + ") wird in " + p.original.name + " (ID " + p.original.id + ") zusammengeführt. ChurchTools löscht das Duplikat; das lässt sich nicht rückgängig machen."),
-    changed.length ? [h("b", null, "Vom Original abweichend:"), h("ul", null, changed.map(function (f) {
-      return h("li", null, f.label + ": " + (f.choice === "none" ? "(leer)" : f.duplicate + " (vom Duplikat)"));
-    }))] : h("p", null, "Alle Personenfelder bleiben wie beim Original."),
-    h("p", null, h("b", null, "E-Mail-Adressen: "), p.emails.filter(function (e) { return e.include; }).length + " übernommen" + (dropped.length ? ", " + dropped.length + " entfernt" : "")),
-    opt && opt.original && opt.duplicate && opt.original !== opt.duplicate ? h("p", null, "Optigem: führend " + resultText(opt) + ", verwaist " + (opt.choice === "original" ? opt.duplicate : opt.original) + " (landet im Finanz-Export).") : null,
-    p.groups.length ? [h("b", null, "Gemeinsame Gruppen (vor dem Merge):"), h("ul", null, p.groups.map(function (g) { return h("li", null, g.title + ": " + plan(g)); }))] : null,
-    h("div", { class: "row" },
-      h("button", { class: "btn", onclick: function () { c.remove(); } }, "Abbrechen"),
-      h("button", { class: "btn primary", onclick: function () { c.remove(); doMerge(); } }, "Zusammenführen")));
-  var c = h("div", { class: "confirm" }, box);
-  document.body.appendChild(c);
-}
 function doMerge() {
   var d = S.dlg; d.busy = true; renderDialog();
   api("/api/merge", { index: d.index, swapped: !!S.swapped[d.index], choices: choices(d.pair) }).then(function (r) {
@@ -428,7 +403,7 @@ function doMerge() {
 }
 
 document.addEventListener("keydown", function (e) {
-  if (e.key === "Escape") { var c = document.querySelector(".confirm"); if (c) c.remove(); else if (S.dlg) closeDialog(); }
+  if (e.key === "Escape" && S.dlg) closeDialog();
 });
 document.getElementById("quit").addEventListener("click", function () {
   api("/api/quit", {}).finally(function () {

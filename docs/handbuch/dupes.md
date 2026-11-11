@@ -1,5 +1,5 @@
 ---
-sources_hash: cbce4e6746501c81
+sources_hash: 35ce1afc715adda6
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -79,8 +79,8 @@ outlined, and `×` clears the field. On email rows the arrow or the checkbox inc
 the address, and the star makes it the default address. Campus, status, sex and Bereich show
 their masterdata names. "Identische Felder" also lists equal fields. The shared groups follow, one block per
 group with its plan and its membership values, chosen the same way. The footer has Abbrechen,
-"Keine Dublette", a pager (`→` skips to the next open pair) and Zusammenführen, which first shows
-a confirm box listing everything that differs from the Original. After an action the dialog moves
+"Keine Dublette", a pager (`→` skips to the next open pair) and Zusammenführen, which merges right
+away, as in ChurchTools (the dialog itself is the review). After an action the dialog moves
 on to the next open pair. `Esc` closes the dialog.
 
 The server listens on `127.0.0.1` only, on a random port. The URL carries a random token in its
@@ -161,12 +161,12 @@ itself, but it refuses the merge (HTTP 403) while both persons are in a common g
   are written to the Original's membership (`PATCH /groups/{g}/members/{original}`), then the
   Duplikat is removed from the group.
 
-The confirm dialog lists the plan per group. The merge preview reports shared groups under
+The dialog shows the plan per group (the terminal view's confirm dialog too). The merge preview reports shared groups under
 `both` as group ids; titles come from its `old` and `new` lists. If a group step fails, the merge
 is not sent, the pair stays open and `merge-error` (stage `groups`, with the steps already done)
 is logged; successful steps are logged as `groups-prepared`.
 
-On confirm the Original is re-read, your choices are applied to that fresh object and sent in
+On merge the Original is re-read, your choices are applied to that fresh object and sent in
 one `PATCH /persons/{original}/merge/{duplicate}`. The body has the shape ChurchTools' own merge
 UI sends: a fixed list of system keys (`id`, `guid`, `meta` with its four created/modified keys,
 campus, status, departments, security levels, privacy agreement and similar) plus the person
