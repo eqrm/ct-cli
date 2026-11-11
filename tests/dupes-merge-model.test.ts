@@ -190,6 +190,8 @@ describe("campus and status ids", () => {
     expect(formatValue("campusId", 0, labels)).toBe("Hauptcampus");
     expect(formatValue("statusId", 0, labels)).toBe("0");
     expect(formatValue("campusId", null, labels)).toBe("");
+    expect(formatValue("birthday", "1999-06-30", labels)).toBe("30.06.1999");
+    expect(formatValue("job", "1999-06-30 Umzug", labels)).toBe("1999-06-30 Umzug");
   });
 
   it("names each department of a list and treats a fully named list as masterdata", () => {

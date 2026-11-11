@@ -119,6 +119,9 @@ export function formatValue(key: string, v: unknown, labels: Labels): string {
   if (v === null || v === undefined || v === "") return "";
   if (Array.isArray(v)) return v.map((x) => formatValue(key, x, labels)).join(", ");
   if (typeof v === "number" && labels[key]?.has(v)) return labels[key]!.get(v)!;
+  // Dates as ChurchTools shows them: 30.06.1999.
+  const date = typeof v === "string" ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(v) : null;
+  if (date) return `${date[3]}.${date[2]}.${date[1]}`;
   return typeof v === "object" ? JSON.stringify(v) : String(v);
 }
 

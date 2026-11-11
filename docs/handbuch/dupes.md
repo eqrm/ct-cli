@@ -1,5 +1,5 @@
 ---
-sources_hash: 4f4515d4c3d403fe
+sources_hash: 669ac6f55dcbd95b
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -79,7 +79,7 @@ outlined, and `×` clears the field. On email rows the arrow or the checkbox inc
 the address, and the star makes it the default address. Each email row is labelled with its
 contact type from masterdata ("E-Mail (Privat)"); an address both persons have keeps the
 Original's type, and the Duplikat's differing type is shown next to its value. Campus, status, sex and Bereich show
-their masterdata names. "Identische Felder" also lists equal fields. The shared groups follow, one block per
+their masterdata names, and dates read as in ChurchTools (30.06.1999). "Identische Felder" also lists equal fields. The shared groups follow, one block per
 group with its plan and its membership values, chosen the same way. The footer has Abbrechen,
 "Keine Dublette", a pager (`→` skips to the next open pair) and Zusammenführen, which merges right
 away, as in ChurchTools (the dialog itself is the review). After an action the dialog moves
