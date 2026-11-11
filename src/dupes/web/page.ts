@@ -98,7 +98,12 @@ h1 { font-size: 30px; margin: 0 0 24px; }
 .round { border: 1px solid #c4cdda; background: #fff; color: var(--blue); border-radius: 6px; width: 36px; height: 34px; }
 .msg { margin: 0 0 14px; padding: 10px 14px; border-radius: 6px; }
 .msg.ok { background: var(--green-bg); } .msg.err { background: var(--red-bg); }
-.busy { opacity: .6; pointer-events: none; }
+.busy { pointer-events: none; }
+.busy .scroll { opacity: .55; }
+.scroll { transition: opacity .15s ease; }
+.btn.working::before { content: ""; display: inline-block; width: 11px; height: 11px; margin-right: 7px; vertical-align: -1px;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 760px) {
   .people { grid-template-columns: 1fr; } .swap { margin: 8px auto 0; }
   .grid { grid-template-columns: 1fr 1fr; } .grid .arrow { display: none; }
@@ -235,24 +240,29 @@ function toast(text, ok) {
 
 /* ---------- dialog ---------- */
 function openList() { return filtered(); }
-function openDialog(index) {
-  S.dlg = { index: index, pair: null, msg: null, ok: true, identical: false, loading: true, done: false };
-  renderDialog();
-  load();
-}
-function load() {
-  var d = S.dlg;
-  d.loading = true; renderDialog();
+// While the next pair loads, the current one stays on screen (dimmed) and is swapped in one render,
+// so the dialog never blanks to a loading line between pairs.
+function openDialog(index, msg) {
+  var prev = S.dlg;
+  var d = { index: index, pair: null, msg: msg || null, ok: true, identical: prev ? prev.identical : false, loading: true, done: false };
+  S.pending = d;
+  if (prev && prev.pair && !prev.loading) { prev.busy = prev.busy || "load"; renderDialog(); }
+  else { S.dlg = d; renderDialog(); }
   api("/api/pair", { index: d.index, swapped: !!S.swapped[d.index] }).then(function (r) {
-    if (S.dlg !== d) return;
-    d.loading = false;
+    if (S.pending !== d) return;
+    S.pending = null; d.loading = false;
     if (r.gone) { d.pair = null; d.msg = [r.message]; d.ok = false; d.done = true; refresh(); }
     else d.pair = r.pair;
-    renderDialog();
-  }, function (e) { if (S.dlg !== d) return; d.loading = false; d.msg = [e.message]; d.ok = false; renderDialog(); });
+    S.dlg = d; renderDialog();
+  }, function (e) {
+    if (S.pending !== d) return;
+    S.pending = null; d.loading = false; d.msg = [e.message]; d.ok = false;
+    S.dlg = d; renderDialog();
+  });
 }
+function load() { openDialog(S.dlg.index, null); }
 function refresh() { api("/api/list").then(function (l) { S.list = l; renderList(); }); }
-function closeDialog() { S.dlg = null; document.getElementById("layer").replaceChildren(); renderList(); }
+function closeDialog() { S.dlg = null; S.pending = null; document.getElementById("layer").replaceChildren(); renderList(); }
 function step(delta) {
   var list = S.list.candidates.filter(function (c) { return c.state === "open" && (!S.tier || c.tier === S.tier); });
   var at = list.findIndex(function (c) { return c.index === S.dlg.index; });
@@ -369,24 +379,26 @@ function renderDialog() {
       h("div", { class: "scroll" }, body),
       h("div", { class: "foot" },
         h("button", { class: "btn", onclick: closeDialog }, "Abbrechen"),
-        h("button", { class: "btn red", disabled: !canAct, onclick: dialogDismiss }, "Als \"Keine Dublette\" markieren"),
+        h("button", { class: "btn red" + (d.busy === "dismiss" ? " working" : ""), disabled: !canAct, onclick: dialogDismiss }, "Als \"Keine Dublette\" markieren"),
         h("div", { class: "pager" },
           h("button", { class: "round", title: "Vorheriges Paar", disabled: at <= 0, onclick: function () { step(-1); } }, "←"),
           at >= 0 ? "Seite " + (at + 1) + " von " + list.length : "",
           h("button", { class: "round", title: "Nächstes Paar (überspringen)", onclick: function () { step(1); } }, "→")),
-        h("button", { class: "btn primary", disabled: !canAct, onclick: doMerge }, "Zusammenführen")))));
+        h("button", { class: "btn primary" + (d.busy === "merge" ? " working" : ""), disabled: !canAct, onclick: doMerge },
+          d.busy === "merge" ? "Wird zusammengeführt…" : "Zusammenführen")))));
   layer.querySelector(".scroll").scrollTop = keep;
 }
 function dialogDismiss() {
-  var d = S.dlg; d.busy = true; renderDialog();
+  var d = S.dlg; if (d.busy) return; d.busy = "dismiss"; renderDialog();
   api("/api/dismiss", { index: d.index }).then(function (r) {
-    d.busy = false; markState(d.index, "dismissed"); afterAction(r.messages, true);
+    markState(d.index, "dismissed"); afterAction(r.messages, true);
   }, function (e) { d.busy = false; d.msg = [e.message]; d.ok = false; renderDialog(); });
 }
 function markState(index, st) { S.list.candidates[index].state = st; }
 function afterAction(messages, ok) {
   var d = S.dlg;
-  if (!ok) { d.msg = messages; d.ok = false; renderDialog(); return; }
+  if (!ok) { d.busy = false; d.msg = messages; d.ok = false; renderDialog(); return; }
+  renderList();
   var from = d.index;
   // Stay at the same place in the pager: the pair that now fills this slot, not the first one.
   var list = S.list.candidates.filter(function (c) { return (c.state === "open" || c.index === from) && (!S.tier || c.tier === S.tier); });
@@ -394,8 +406,8 @@ function afterAction(messages, ok) {
   var rest = list.filter(function (c) { return c.index !== from; });
   var next = rest[at] || rest[rest.length - 1];
   if (!next) { closeDialog(); toast(messages.join(" "), true); return; }
-  openDialog(next.index);
-  S.dlg.msg = messages; S.dlg.ok = true;
+  // The finished pair stays dimmed (button still spinning) until the next one is ready.
+  openDialog(next.index, messages);
 }
 function choices(p) {
   var fields = {}; p.fields.forEach(function (f) { fields[f.key] = f.choice; });
@@ -403,9 +415,8 @@ function choices(p) {
   return { fields: fields, emails: p.emails.map(function (e) { return { index: e.index, include: e.include, isDefault: e.isDefault }; }), groups: groups };
 }
 function doMerge() {
-  var d = S.dlg; d.busy = true; renderDialog();
+  var d = S.dlg; if (d.busy) return; d.busy = "merge"; renderDialog();
   api("/api/merge", { index: d.index, swapped: !!S.swapped[d.index], choices: choices(d.pair) }).then(function (r) {
-    d.busy = false;
     if (r.ok) markState(d.index, "merged");
     afterAction(r.messages, r.ok);
   }, function (e) { d.busy = false; d.msg = [e.message]; d.ok = false; renderDialog(); });

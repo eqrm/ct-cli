@@ -1,5 +1,5 @@
 ---
-sources_hash: 7b3916c415d1d84e
+sources_hash: 26631f90125ed1c5
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -83,7 +83,8 @@ their masterdata names, and dates read as in ChurchTools (30.06.1999). "Identisc
 group with its plan and its membership values, chosen the same way. The footer has Abbrechen,
 "Keine Dublette", a pager (`→` skips to the next open pair) and Zusammenführen, which merges right
 away, as in ChurchTools (the dialog itself is the review). After an action the dialog moves
-on to the next open pair at the same position in the pager. `Esc` closes the dialog.
+on to the next open pair at the same position in the pager; the finished pair stays on screen,
+dimmed, until the next one has loaded, so the dialog never blanks in between. `Esc` closes the dialog.
 
 The server listens on `127.0.0.1` only, on a random port. The URL carries a random token in its
 fragment, and every API call must send it back in a header; requests with a `Host` other than
