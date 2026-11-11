@@ -1,5 +1,5 @@
 ---
-sources_hash: defb2cd8b4887243
+sources_hash: b23b90a81c56fa87
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -183,7 +183,7 @@ The group clean-up was run end to end there with one static group (join date, co
 member field taken from the Duplikat) and one dynamic group.
 
 If the call fails, the HTTP
-status, the field names ChurchTools rejected and its `translationKey` are shown (never values or
+status, the field names ChurchTools rejected and its `messageKey` are shown (never values or
 messages) and the pair
 stays open. `merge-error` is logged; if the duplicate is gone
 nevertheless, the merge is recorded (`afterError: true`). When a pair later no longer loads and
@@ -224,7 +224,12 @@ secret. Error messages never include person data.
 Schema `ct-cli.dupes.optigem-merges/1` (additive changes only within version 1). Rows are
 taken from confirmed merges where both persons carried an Optigem ID.
 
-CSV header: `surviving_person_id,leading_optigem_id,orphaned_optigem_id,identical_ids,merged_at,merged_by`.
+Each row names both persons as they were before the merge (id, name, Optigem ID), the person
+that survives in ChurchTools and the Optigem ID it now carries (`leading`; the other one is
+`orphaned`). Finance decides which ID stays in Optigem and updates its records. Names and
+per-person IDs are empty for merges logged before they were recorded.
+
+CSV header: `surviving_person_id,surviving_person_name,surviving_person_optigem_id,merged_person_id,merged_person_name,merged_person_optigem_id,leading_optigem_id,orphaned_optigem_id,identical_ids,merged_at,merged_by`.
 The JSON file wraps the same rows as camelCase objects in `{ schema, generatedAt, host, since, merges }`.
 Cells starting with a formula character are prefixed with `'`.
 

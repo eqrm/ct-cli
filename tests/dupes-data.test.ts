@@ -68,6 +68,11 @@ describe("finance export", () => {
       action: "merge-confirmed",
       ts: "2026-02-01T10:00:00.000Z",
       survivingId: 5,
+      loserId: 9,
+      survivingName: "Erika Muster",
+      loserName: "Erika Beispiel",
+      survivingOptigemId: "10002",
+      loserOptigemId: "10001",
       leadingOptigemId: "10001",
       orphanedOptigemId: "10002",
       mergedBy: "Erika Muster",
@@ -109,10 +114,13 @@ describe("finance export", () => {
   it("writes a stable CSV and neutralises formulas", () => {
     const csv = toCsv(financeMerges(audit)).split("\n");
     expect(csv[0]).toBe(
-      "surviving_person_id,leading_optigem_id,orphaned_optigem_id,identical_ids,merged_at,merged_by",
+      "surviving_person_id,surviving_person_name,surviving_person_optigem_id,merged_person_id,merged_person_name,merged_person_optigem_id,leading_optigem_id,orphaned_optigem_id,identical_ids,merged_at,merged_by",
     );
-    expect(csv[1]).toBe("5,10001,10002,false,2026-02-01T10:00:00.000Z,Erika Muster");
-    expect(csv[2]).toContain(",'=cmd");
+    expect(csv[1]).toBe(
+      "5,Erika Muster,10002,9,Erika Beispiel,10001,10001,10002,false,2026-02-01T10:00:00.000Z,Erika Muster",
+    );
+    // A line logged before names were recorded leaves those cells empty.
+    expect(csv[2]).toBe("7,,,,,,10005,10005,true,2026-03-01T10:00:00.000Z,'=cmd");
   });
 
   it("builds the documented JSON envelope", () => {
@@ -125,6 +133,11 @@ describe("finance export", () => {
     expect(j).toMatchObject({ schema: FINANCE_SCHEMA, since: null, host: "https://example.church.tools" });
     expect(Object.keys(j.merges[0]!)).toEqual([
       "survivingPersonId",
+      "survivingPersonName",
+      "survivingPersonOptigemId",
+      "mergedPersonId",
+      "mergedPersonName",
+      "mergedPersonOptigemId",
       "leadingOptigemId",
       "orphanedOptigemId",
       "identicalIds",

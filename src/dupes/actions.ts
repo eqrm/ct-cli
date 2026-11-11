@@ -68,12 +68,13 @@ export function rejectedFields(err: unknown): string[] {
 }
 
 /**
- * ChurchTools' translation key for a refusal (`translationKey`, e.g. on a 403). Only a key that looks
+ * ChurchTools' key for a refusal (`messageKey`, on older responses `translationKey`; e.g. on a 403). Only a key that looks
  * like one is returned, never the message, which can echo values.
  */
 export function errorKey(err: unknown): string | undefined {
   if (!(err instanceof CtApiError)) return undefined;
-  const key = (err.body as { translationKey?: unknown } | null)?.translationKey;
+  const body = err.body as { messageKey?: unknown; translationKey?: unknown } | null;
+  const key = body?.messageKey ?? body?.translationKey;
   return typeof key === "string" && /^[A-Za-z0-9_.-]{1,120}$/.test(key) ? key : undefined;
 }
 
@@ -233,10 +234,24 @@ async function duplicateGone(deps: ReviewDeps, id: number): Promise<boolean | nu
   }
 }
 
+/** Both persons as they were before the merge, for the finance export (the local store is 0600). */
+type MergeParties = Record<"survivingName" | "loserName" | "survivingOptigemId" | "loserOptigemId", string>;
+
+function mergeParties(pair: PairData): MergeParties {
+  const name = (p: PersonRecord): string => `${p.firstName} ${p.lastName}`.trim();
+  return {
+    survivingName: name(pair.original),
+    loserName: name(pair.duplicate),
+    survivingOptigemId: pair.original.optigem,
+    loserOptigemId: pair.duplicate.optigem,
+  };
+}
+
 function confirm(
   deps: ReviewDeps,
   survivingId: number,
   loserId: number,
+  parties: Partial<MergeParties>,
   leading: string,
   orphaned: string,
   extra: Record<string, unknown>,
@@ -246,6 +261,7 @@ function confirm(
       action: MERGE_CONFIRMED,
       survivingId,
       loserId,
+      ...parties,
       leadingOptigemId: leading,
       orphanedOptigemId: orphaned,
       mergedBy: deps.operator.name,
@@ -269,6 +285,7 @@ export async function executeMerge(
   const loserId = pair.duplicate.id;
   const status = (err: unknown): number | null => (err instanceof CtApiError ? err.status : null);
   const { leading, orphaned } = optigemOutcome(model);
+  const parties = mergeParties(pair);
 
   let built: ReturnType<typeof buildBody>;
   try {
@@ -293,6 +310,7 @@ export async function executeMerge(
       fromDuplicate: model.fields
         .filter((f) => f.choice === "duplicate" || f.choice === "both")
         .map((f) => f.key),
+      ...parties,
       leadingOptigemId: leading,
       orphanedOptigemId: orphaned,
     },
@@ -316,7 +334,7 @@ export async function executeMerge(
   } catch (err) {
     store.audit({ action: "merge-error", survivingId, loserId }, now());
     if ((await duplicateGone(deps, loserId)) === true) {
-      confirm(deps, survivingId, loserId, leading, orphaned, { afterError: true });
+      confirm(deps, survivingId, loserId, parties, leading, orphaned, { afterError: true });
       return {
         kind: "merged",
         duplicateStillExists: false,
@@ -335,7 +353,7 @@ export async function executeMerge(
     };
   }
   const gone = await duplicateGone(deps, loserId);
-  confirm(deps, survivingId, loserId, leading, orphaned, {
+  confirm(deps, survivingId, loserId, parties, leading, orphaned, {
     ...(gone === false ? { duplicateStillExists: true } : {}),
     ...(gone === null ? { duplicateCheckFailed: true } : {}),
   });
@@ -383,6 +401,11 @@ export async function recoverUnrecordedMerge(deps: ReviewDeps, a: number, b: num
     deps,
     Number(started.survivingId),
     Number(started.loserId),
+    Object.fromEntries(
+      (["survivingName", "loserName", "survivingOptigemId", "loserOptigemId"] as const)
+        .filter((k) => typeof started[k] === "string")
+        .map((k) => [k, started[k] as string]),
+    ),
     typeof started.leadingOptigemId === "string" ? started.leadingOptigemId : "",
     typeof started.orphanedOptigemId === "string" ? started.orphanedOptigemId : "",
     { recovered: true },

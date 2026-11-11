@@ -83,8 +83,16 @@ describe("merge actions", () => {
     await executeMerge(t.deps, pair, setChoice(pair.model, "optigemId", "duplicate"));
     expect(patches(t.calls)[0]!.body).toMatchObject({ optigemId: "10002" });
     expect(financeMerges(t.store.readAudit())).toMatchObject([
-      { leadingOptigemId: "10002", orphanedOptigemId: "10001" },
+      {
+        survivingPersonId: 1,
+        survivingPersonOptigemId: "10001",
+        mergedPersonId: 2,
+        mergedPersonOptigemId: "10002",
+        leadingOptigemId: "10002",
+        orphanedOptigemId: "10001",
+      },
     ]);
+    expect(financeMerges(t.store.readAudit())[0]!.survivingPersonName).not.toBe("");
     const lone = setup({ persons: { 1: raw(1), 2: raw(2, { optigemId: "7" }) } });
     const p2 = await loadPair(lone.deps, 1, 2);
     await executeMerge(lone.deps, p2, p2.model);
@@ -131,14 +139,16 @@ describe("rejectedFields", () => {
     expect(rejectedFields(new CtApiError("x", 400, null))).toEqual([]);
   });
 
-  it("passes on ChurchTools' translation key for a refusal, never the message", async () => {
+  it("passes on ChurchTools' message key for a refusal, never the message", async () => {
     const { errorKey } = await import("../src/dupes/actions.js");
     const { CtApiError } = await import("../src/api/ctClient.js");
     const err = new CtApiError("x", 403, {
       message: "secret@example.org",
-      translationKey: "error.merge.example",
+      translatedMessage: "secret@example.org",
+      messageKey: "error.merge.example",
     });
     expect(errorKey(err)).toBe("error.merge.example");
+    expect(errorKey(new CtApiError("x", 403, { translationKey: "error.old" }))).toBe("error.old");
     expect(
       errorKey(new CtApiError("x", 403, { translationKey: "has spaces secret@example.org" })),
     ).toBeUndefined();
