@@ -16,7 +16,7 @@ import {
   type RelationshipTypeIds,
 } from "./ct.js";
 import { MERGE_CONFIRMED } from "./finance.js";
-import { buildBody, buildModel, optigemOutcome, type MergeModel } from "./merge-model.js";
+import { buildBody, buildModel, optigemOutcome, type EmailRow, type MergeModel } from "./merge-model.js";
 import {
   loadDynamicGroupIds,
   loadSharedGroups,
@@ -50,6 +50,7 @@ const LOOKUPS: Record<string, string> = {
   nationalityId: "nationalities",
   familyStatusId: "familyStatuses",
   departmentIds: "departments",
+  contactLabelId: "contactLabels",
 };
 
 /**
@@ -75,8 +76,9 @@ export async function loadLabels(client: DupesClient): Promise<Labels> {
       const rows = md[list];
       const map = new Map<number, string>();
       if (Array.isArray(rows)) {
-        for (const r of rows as Array<{ id?: unknown; name?: unknown }>) {
-          if (typeof r.id === "number" && typeof r.name === "string") map.set(r.id, r.name);
+        for (const r of rows as Array<{ id?: unknown; name?: unknown; nameTranslated?: unknown }>) {
+          const name = typeof r.nameTranslated === "string" && r.nameTranslated ? r.nameTranslated : r.name;
+          if (typeof r.id === "number" && typeof name === "string") map.set(r.id, name);
         }
       }
       out[field] = map;
@@ -85,6 +87,25 @@ export async function loadLabels(client: DupesClient): Promise<Labels> {
     /* ids are shown instead */
   }
   return out;
+}
+
+/**
+ * The contact label ("Privat", "Arbeit", ...) of an email row on each side, as ChurchTools shows it
+ * next to "E-Mail". Empty when the side has no entry or masterdata has no name for the label.
+ */
+export function emailTypes(row: EmailRow, labels: Labels): { original: string; duplicate: string } {
+  const name = (e: Record<string, unknown> | null): string => {
+    const id = e?.contactLabelId;
+    return typeof id === "number" ? (labels.contactLabelId?.get(id) ?? "") : "";
+  };
+  return { original: name(row.originalEntry), duplicate: name(row.duplicateEntry) };
+}
+
+/** Row label for an email row: "E-Mail (Privat)", the type the merged address keeps. */
+export function emailLabel(row: EmailRow, labels: Labels): string {
+  const t = emailTypes(row, labels);
+  const type = row.originalEntry ? t.original : t.duplicate;
+  return type ? `E-Mail (${type})` : "E-Mail";
 }
 
 /** True when the value is a masterdata id (or list of them) that masterdata names: not personal data. */

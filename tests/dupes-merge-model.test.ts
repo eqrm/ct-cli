@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatValue, isMasterValue } from "../src/dupes/actions.js";
+import { emailLabel, emailTypes, formatValue, isMasterValue } from "../src/dupes/actions.js";
 import { toPersonRecord } from "../src/dupes/ct.js";
 import {
   buildBody,
+  buildEmailRows,
   buildModel,
   defaultChoice,
   olderFirst,
@@ -203,5 +204,27 @@ describe("campus and status ids", () => {
     expect(formatValue("departmentIds", [], labels)).toBe("");
     expect(isMasterValue("departmentIds", [1, 2], labels)).toBe(true);
     expect(isMasterValue("departmentIds", [1, 9], labels)).toBe(false);
+  });
+
+  it("labels email rows with their contact type, the Original's when both have the address", () => {
+    const labels = {
+      contactLabelId: new Map([
+        [1, "Privat"],
+        [4, "Arbeit"],
+      ]),
+    };
+    const rows = buildEmailRows(
+      { emails: [{ email: "a@example.org", contactLabelId: 1, isDefault: true }] },
+      {
+        emails: [
+          { email: "A@example.org", contactLabelId: 4, isDefault: true },
+          { email: "b@example.org", contactLabelId: 4, isDefault: false },
+          { email: "c@example.org", contactLabelId: 99, isDefault: false },
+        ],
+      },
+    );
+    expect(rows.map((r) => emailLabel(r, labels))).toEqual(["E-Mail (Privat)", "E-Mail (Arbeit)", "E-Mail"]);
+    expect(emailTypes(rows[0]!, labels)).toEqual({ original: "Privat", duplicate: "Arbeit" });
+    expect(emailLabel(rows[0]!, {})).toBe("E-Mail");
   });
 });

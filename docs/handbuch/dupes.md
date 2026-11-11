@@ -1,5 +1,5 @@
 ---
-sources_hash: 35ce1afc715adda6
+sources_hash: 4f4515d4c3d403fe
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -76,7 +76,9 @@ columns Original, Vorschlag für Zusammenführung and Duplikat, grouped into Son
 counts), Adresse, Informationen, Kategorie, Bereich and Finanzen. Click the arrow next to the
 Original's or the Duplikat's value (or the value itself) to take that side; the chosen arrow is
 outlined, and `×` clears the field. On email rows the arrow or the checkbox includes or excludes
-the address, and the star makes it the default address. Campus, status, sex and Bereich show
+the address, and the star makes it the default address. Each email row is labelled with its
+contact type from masterdata ("E-Mail (Privat)"); an address both persons have keeps the
+Original's type, and the Duplikat's differing type is shown next to its value. Campus, status, sex and Bereich show
 their masterdata names. "Identische Felder" also lists equal fields. The shared groups follow, one block per
 group with its plan and its membership values, chosen the same way. The footer has Abbrechen,
 "Keine Dublette", a pager (`→` skips to the next open pair) and Zusammenführen, which merges right

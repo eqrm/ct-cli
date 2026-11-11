@@ -5,6 +5,7 @@ import { CtApiError } from "../../api/ctClient.js";
 import {
   executeMerge,
   formatValue,
+  emailLabel,
   isMasterValue,
   loadPair,
   markNotDuplicate,
@@ -416,7 +417,7 @@ export function PairScreen(props: {
           <Box key={entryId(e)}>
             <Text inverse={selected}>
               {pointer}
-              {clip("E-Mail", labelW - 1)}
+              {clip(emailLabel(m, labels), labelW - 1)}
             </Text>
             <Text> </Text>
             {cell(m.originalEntry ? r.value(m.address) : "", m.include ? "green" : "red")}

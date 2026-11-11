@@ -73,6 +73,7 @@ h1 { font-size: 30px; margin: 0 0 24px; }
 .grid .hdr { font-weight: 700; position: sticky; top: -20px; background: #fff; z-index: 1; }
 .grid .sec { grid-column: 1 / -1; font-size: 20px; font-weight: 700; padding-top: 22px; }
 .grid .sub { grid-column: 1 / -1; font-weight: 700; background: #fafbfd; flex-wrap: wrap; }
+.grid .note { color: #6b7280; margin-left: 4px; }
 .grid .sub .plan { font-weight: 400; color: #7a5b00; background: var(--yellow-bg); border-radius: 4px; padding: 2px 8px; font-size: 13px; }
 .grid .val { background: var(--cell); }
 .grid .pick { cursor: pointer; }
@@ -329,12 +330,13 @@ function renderDialog() {
         var box = h("input", { type: "checkbox", checked: e.include, title: "Adresse übernehmen",
           onchange: function (ev) { setInclude(ev.target.checked); } });
         var flip = function () { setInclude(!e.include); };
-        g.push(h("div", { class: "label" }, "E-Mail", star),
+        g.push(h("div", { class: "label" }, e.label, star),
           h("div", { class: "val" + (e.inOriginal ? (e.include ? " chosen" : " lost") : "") }, e.inOriginal ? e.address : ""),
           arrow(e.inOriginal, e.inOriginal && e.include, "Adresse übernehmen oder weglassen", "→", flip),
           h("div", { class: "res" + (e.include ? "" : " cleared") }, box, e.include ? e.address : "(nicht übernehmen)"),
           arrow(e.inDuplicate, !e.inOriginal && e.include, "Adresse übernehmen oder weglassen", "←", flip),
-          h("div", { class: "val" + (e.inDuplicate ? (e.include ? " chosen" : " lost") : "") }, e.inDuplicate ? e.address : ""));
+          h("div", { class: "val" + (e.inDuplicate ? (e.include ? " chosen" : " lost") : "") }, e.inDuplicate ? e.address : "",
+            e.duplicateType ? h("span", { class: "note", title: "Typ beim Duplikat; übernommen wird der Typ des Originals" }, " (" + e.duplicateType + ")") : null));
       });
     });
     if (p.groups.length > 0) {

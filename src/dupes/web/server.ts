@@ -15,6 +15,8 @@ import { CtApiError } from "../../api/ctClient.js";
 import {
   executeMerge,
   formatValue,
+  emailLabel,
+  emailTypes,
   isMasterValue,
   loadPair,
   markNotDuplicate,
@@ -103,7 +105,10 @@ export interface PairView {
   }>;
   emails: Array<{
     index: number;
+    label: string;
     address: string;
+    /** The Duplikat's contact label when it differs from the Original's (same address). */
+    duplicateType: string;
     inOriginal: boolean;
     inDuplicate: boolean;
     include: boolean;
@@ -161,14 +166,19 @@ export function pairView(deps: ReviewDeps, p: PairData): PairView {
       differs: differs(f),
       optigem: f.optigem,
     })),
-    emails: p.model.emails.map((e, index) => ({
-      index,
-      address: r.value(e.address),
-      inOriginal: e.originalEntry !== null,
-      inDuplicate: e.duplicateEntry !== null,
-      include: e.include,
-      isDefault: e.isDefault,
-    })),
+    emails: p.model.emails.map((e, index) => {
+      const t = emailTypes(e, deps.labels);
+      return {
+        index,
+        label: emailLabel(e, deps.labels),
+        address: r.value(e.address),
+        duplicateType: e.originalEntry && e.duplicateEntry && t.duplicate !== t.original ? t.duplicate : "",
+        inOriginal: e.originalEntry !== null,
+        inDuplicate: e.duplicateEntry !== null,
+        include: e.include,
+        isDefault: e.isDefault,
+      };
+    }),
     groups: p.shared.map((g) => ({
       id: g.id,
       title: g.title,
