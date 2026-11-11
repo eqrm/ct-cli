@@ -26,7 +26,15 @@ import {
   type ReviewDeps,
 } from "../actions.js";
 import { itemDiffers, setItemChoice, type SharedGroup } from "../groups.js";
-import { differs, optigemOutcome, setChoice, type MergeModel, type Side } from "../merge-model.js";
+import {
+  canMergeBoth,
+  differs,
+  optigemOutcome,
+  setChoice,
+  unionOf,
+  type MergeModel,
+  type Side,
+} from "../merge-model.js";
 import type { ScanFile, StoredCandidate } from "../store.js";
 import { PAGE_HTML } from "./page.js";
 
@@ -78,7 +86,7 @@ const SECTION: Record<string, string> = {
   departmentIds: "Bereich",
 };
 
-const SIDES: readonly Side[] = ["original", "duplicate", "none"];
+const SIDES: readonly Side[] = ["original", "duplicate", "none", "both"];
 
 interface Card {
   id: string;
@@ -99,6 +107,8 @@ export interface PairView {
     section: string;
     original: string;
     duplicate: string;
+    /** The union of both lists, for list fields (Bereich); empty otherwise. */
+    both: string;
     choice: Side;
     differs: boolean;
     optigem: boolean;
@@ -162,6 +172,7 @@ export function pairView(deps: ReviewDeps, p: PairData): PairView {
       section: f.optigem ? "Finanzen" : (SECTION[f.key] ?? "Adresse"),
       original: show(f.key, f.original),
       duplicate: show(f.key, f.duplicate),
+      both: canMergeBoth(f.key) ? show(f.key, unionOf(f.original, f.duplicate)) : "",
       choice: f.choice,
       differs: differs(f),
       optigem: f.optigem,
@@ -251,7 +262,10 @@ export function mergeMessages(res: MergeResult): string[] {
     ];
   const fields =
     res.fields && res.fields.length > 0 ? ` ChurchTools lehnt ab: ${res.fields.join(", ")}.` : "";
-  return [`Zusammenführen fehlgeschlagen${http(res.status)}.${fields}${done || " Nichts geändert."}`];
+  const reason = res.reason ? ` Grund laut ChurchTools: ${res.reason}.` : "";
+  return [
+    `Zusammenführen fehlgeschlagen${http(res.status)}.${fields}${reason}${done || " Nichts geändert."}`,
+  ];
 }
 
 class HttpError extends Error {

@@ -4,7 +4,21 @@
  */
 import type { MergeDiffEntry } from "./ct.js";
 
-export type Side = "original" | "duplicate" | "none";
+/** `both` (the union of both lists) exists only for list fields a person can have several of. */
+export type Side = "original" | "duplicate" | "none" | "both";
+
+/** Fields that hold a list (a person can be in several Bereiche); `both` merges the two lists. */
+const LIST_FIELDS = new Set(["departmentIds"]);
+export const canMergeBoth = (key: string): boolean => LIST_FIELDS.has(key);
+
+/** Both lists, the Original's items first, without repeats. */
+export function unionOf(original: unknown, duplicate: unknown): unknown[] {
+  const out: unknown[] = [];
+  for (const v of [original, duplicate]) {
+    for (const x of Array.isArray(v) ? v : []) if (!out.includes(x)) out.push(x);
+  }
+  return out;
+}
 
 /**
  * The only person fields an operator can choose between. Everything else in a merge preview
@@ -146,12 +160,14 @@ export function buildModel(
     const o = originalRaw[s.key];
     const d = duplicateRaw[s.key];
     if (isEmpty(o) && isEmpty(d)) continue;
+    // A list field keeps the entries of both persons when both have some and they differ.
+    const both = canMergeBoth(s.key) && !isEmpty(o) && !isEmpty(d) && canon(unionOf(o, d)) !== canon(o);
     fields.push({
       key: s.key,
       label: s.key === optigemField ? s.label : (diffNames.get(s.key) ?? s.label),
       original: o,
       duplicate: d,
-      choice: defaultChoice(o, d),
+      choice: both ? "both" : defaultChoice(o, d),
       optigem: s.key === optigemField,
     });
   }
@@ -161,6 +177,7 @@ export function buildModel(
 export const differs = (r: FieldRow): boolean => canon(r.original) !== canon(r.duplicate);
 
 export function setChoice(m: MergeModel, key: string, choice: Side): MergeModel {
+  if (choice === "both" && !canMergeBoth(key)) return m;
   return { ...m, fields: m.fields.map((f) => (f.key === key ? { ...f, choice } : f)) };
 }
 
@@ -274,6 +291,8 @@ export function buildBody(
     if (f.choice === "original") continue;
     if (f.choice === "none") {
       body[f.key] = cleared(freshOriginal[f.key] ?? f.original);
+    } else if (f.choice === "both") {
+      body[f.key] = unionOf(freshOriginal[f.key] ?? f.original, duplicateRaw[f.key] ?? f.duplicate);
     } else if (f.key in duplicateRaw) {
       body[f.key] = duplicateRaw[f.key];
     } else {

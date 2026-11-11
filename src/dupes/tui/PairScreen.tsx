@@ -16,6 +16,7 @@ import {
 import {
   differs,
   setChoice,
+  unionOf,
   setDefaultEmail,
   toggleEmail,
   type EmailRow,
@@ -183,8 +184,17 @@ export function PairScreen(props: {
     else if (input === "s") onDone("skipped");
     else if (input === "n") void doNoDuplicate();
     else if (input === "m") setMode("confirm");
-    else if (current?.kind === "field" && (key.leftArrow || key.rightArrow || input === "x")) {
-      const side: Side = key.leftArrow ? "duplicate" : key.rightArrow ? "original" : "none";
+    else if (
+      current?.kind === "field" &&
+      (key.leftArrow || key.rightArrow || input === "x" || input === "b")
+    ) {
+      const side: Side = key.leftArrow
+        ? "duplicate"
+        : key.rightArrow
+          ? "original"
+          : input === "b"
+            ? "both"
+            : "none";
       update((m) => setChoice(m, current.row.key, side));
     } else if (current?.kind === "member" && (key.leftArrow || key.rightArrow)) {
       const side: Side = key.leftArrow ? "duplicate" : "original";
@@ -227,7 +237,7 @@ export function PairScreen(props: {
               }`
             : `Merge failed${res.status ? ` (HTTP ${res.status})` : ""}${
                 res.fields && res.fields.length > 0 ? `; ChurchTools rejected: ${res.fields.join(", ")}` : ""
-              }.${
+              }${res.reason ? `; reason: ${res.reason}` : ""}.${
                 res.groupsDone && res.groupsDone.length > 0
                   ? ` Gruppen ${res.groupsDone.map((g) => g.groupId).join(", ")} wurden schon vorbereitet (Duplikat entfernt).`
                   : " Nothing was changed."
@@ -318,7 +328,11 @@ export function PairScreen(props: {
           changed.map((f) => (
             <Text key={f.key}>
               {f.label}: {show(f.key, f.original) || "(leer)"} →{" "}
-              {f.choice === "none" ? "(leer)" : show(f.key, f.duplicate)}
+              {f.choice === "none"
+                ? "(leer)"
+                : f.choice === "both"
+                  ? show(f.key, unionOf(f.original, f.duplicate))
+                  : show(f.key, f.duplicate)}
             </Text>
           ))
         )}
@@ -362,9 +376,17 @@ export function PairScreen(props: {
           const diff = differs(f);
           const oText = show(f.key, f.original);
           const dText = show(f.key, f.duplicate);
-          const result = f.choice === "original" ? oText : f.choice === "duplicate" ? dText : "";
-          const oColor = diff ? (f.choice === "original" ? "green" : "red") : undefined;
-          const dColor = diff ? (f.choice === "duplicate" ? "green" : "red") : undefined;
+          const both = f.choice === "both";
+          const result =
+            f.choice === "original"
+              ? oText
+              : f.choice === "duplicate"
+                ? dText
+                : both
+                  ? show(f.key, unionOf(f.original, f.duplicate))
+                  : "";
+          const oColor = diff ? (f.choice === "original" || both ? "green" : "red") : undefined;
+          const dColor = diff ? (f.choice === "duplicate" || both ? "green" : "red") : undefined;
           return (
             <Box key={entryId(e)}>
               <Text inverse={selected}>

@@ -73,6 +73,8 @@ h1 { font-size: 30px; margin: 0 0 24px; }
 .grid .hdr { font-weight: 700; position: sticky; top: -20px; background: #fff; z-index: 1; }
 .grid .sec { grid-column: 1 / -1; font-size: 20px; font-weight: 700; padding-top: 22px; }
 .grid .sub { grid-column: 1 / -1; font-weight: 700; background: #fafbfd; flex-wrap: wrap; }
+.grid .res .both { margin-left: auto; border: 1px solid #3a4456; border-radius: 6px; background: none; font-size: 12px; padding: 1px 6px; cursor: pointer; }
+.grid .res .both + .clear { margin-left: 6px; }
 .grid .note { color: #6b7280; margin-left: 4px; }
 .grid .sub .plan { font-weight: 400; color: #7a5b00; background: var(--yellow-bg); border-radius: 4px; padding: 2px 8px; font-size: 13px; }
 .grid .val { background: var(--cell); }
@@ -263,7 +265,7 @@ function plan(g) {
   return taken.length === 0 ? "Mitgliedschaft des Originals bleibt, Duplikat wird entfernt"
     : "Original übernimmt " + taken.join(", ") + " vom Duplikat; Duplikat wird entfernt";
 }
-function resultText(f) { return f.choice === "original" ? f.original : f.choice === "duplicate" ? f.duplicate : ""; }
+function resultText(f) { return f.choice === "original" ? f.original : f.choice === "duplicate" ? f.duplicate : f.choice === "both" ? f.both : ""; }
 function conflicts(p) {
   return p.fields.filter(function (f) { return f.differs && f.original && f.duplicate; }).length +
     p.groups.reduce(function (n, g) { return n + g.items.filter(function (i) { return i.differs && i.original && i.duplicate; }).length; }, 0);
@@ -272,13 +274,16 @@ function arrow(show, on, title, glyph, onclick) {
   return h("div", { class: "arrow" }, show ? h("button", { class: "arr" + (on ? " on" : ""), title: title, onclick: onclick }, glyph) : null);
 }
 function valueRow(label, row, onPick, canClear) {
-  var o = row.choice === "original", dsel = row.choice === "duplicate";
+  var both = row.choice === "both";
+  var o = row.choice === "original" || both, dsel = row.choice === "duplicate" || both;
+  var canBoth = !!row.both && !!row.original && !!row.duplicate && row.differs;
   var cells = [
     h("div", { class: "label" }, label),
     h("div", { class: "val pick" + (o ? " chosen" : row.differs && row.original ? " lost" : ""), title: "Wert des Originals übernehmen",
       onclick: function () { onPick("original"); } }, row.original),
     arrow(!!row.original, o, "Wert des Originals übernehmen", "→", function () { onPick("original"); }),
     h("div", { class: "res" + (row.choice === "none" ? " cleared" : "") }, row.choice === "none" ? "(leer)" : resultText(row),
+      canBoth && !both ? h("button", { class: "both", title: "Einträge beider Personen übernehmen", onclick: function () { onPick("both"); } }, "beide") : null,
       canClear && row.choice !== "none" ? h("button", { class: "clear", title: "Feld leeren", onclick: function () { onPick("none"); } }, "×") : null),
     arrow(!!row.duplicate, dsel, "Wert des Duplikats übernehmen", "←", function () { onPick("duplicate"); }),
     h("div", { class: "val pick" + (dsel ? " chosen" : row.differs && row.duplicate ? " lost" : ""), title: "Wert des Duplikats übernehmen",
@@ -383,8 +388,11 @@ function afterAction(messages, ok) {
   var d = S.dlg;
   if (!ok) { d.msg = messages; d.ok = false; renderDialog(); return; }
   var from = d.index;
-  var list = S.list.candidates.filter(function (c) { return c.state === "open" && (!S.tier || c.tier === S.tier); });
-  var next = list.find(function (c) { return c.index > from; }) || list[0];
+  // Stay at the same place in the pager: the pair that now fills this slot, not the first one.
+  var list = S.list.candidates.filter(function (c) { return (c.state === "open" || c.index === from) && (!S.tier || c.tier === S.tier); });
+  var at = list.findIndex(function (c) { return c.index === from; });
+  var rest = list.filter(function (c) { return c.index !== from; });
+  var next = rest[at] || rest[rest.length - 1];
   if (!next) { closeDialog(); toast(messages.join(" "), true); return; }
   openDialog(next.index);
   S.dlg.msg = messages; S.dlg.ok = true;

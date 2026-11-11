@@ -1,5 +1,5 @@
 ---
-sources_hash: fce9da8b156765fc
+sources_hash: defb2cd8b4887243
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -75,14 +75,15 @@ as **Original** and **Duplikat** (name, ID, created date, last login). Tabs filt
 columns Original, Vorschlag für Zusammenführung and Duplikat, grouped into Sonstiges (group
 counts), Adresse, Informationen, Kategorie, Bereich and Finanzen. Click the arrow next to the
 Original's or the Duplikat's value (or the value itself) to take that side; the chosen arrow is
-outlined, and `×` clears the field. On email rows the arrow includes the address and `×` leaves it out, and the star makes it the default address. Each email row is labelled with its
+outlined, and `×` clears the field. Bereich is a list: when both persons have
+different Bereiche, the result keeps both (`beide`), and an arrow takes one side only. On email rows the arrow includes the address and `×` leaves it out, and the star makes it the default address. Each email row is labelled with its
 contact type from masterdata ("E-Mail (Privat)"); an address both persons have keeps the
 Original's type, and the Duplikat's differing type is shown next to its value. Campus, status, sex and Bereich show
 their masterdata names, and dates read as in ChurchTools (30.06.1999). "Identische Felder" also lists equal fields. The shared groups follow, one block per
 group with its plan and its membership values, chosen the same way. The footer has Abbrechen,
 "Keine Dublette", a pager (`→` skips to the next open pair) and Zusammenführen, which merges right
 away, as in ChurchTools (the dialog itself is the review). After an action the dialog moves
-on to the next open pair. `Esc` closes the dialog.
+on to the next open pair at the same position in the pager. `Esc` closes the dialog.
 
 The server listens on `127.0.0.1` only, on a random port. The URL carries a random token in its
 fragment, and every API call must send it back in a header; requests with a `Host` other than
@@ -122,6 +123,7 @@ listed; `i` also shows identical ones. The chosen side is green, the other red.
 | `←`          | take the Duplikat's value into Ergebnis (also on group membership rows)          |
 | `→`          | take the Original's value                                                        |
 | `x`          | clear Ergebnis (field rows); include or exclude the address (email rows)         |
+| `b`          | Bereich: keep the entries of both persons                                        |
 | `Space`, `*` | email rows: include or exclude an address; make it the default address           |
 | `i`          | show or hide identical fields                                                    |
 | `t`          | swap Original and Duplikat (reloads the merge preview for the new direction)     |
@@ -181,7 +183,8 @@ The group clean-up was run end to end there with one static group (join date, co
 member field taken from the Duplikat) and one dynamic group.
 
 If the call fails, the HTTP
-status and the field names ChurchTools rejected are shown (never values or messages) and the pair
+status, the field names ChurchTools rejected and its `translationKey` are shown (never values or
+messages) and the pair
 stays open. `merge-error` is logged; if the duplicate is gone
 nevertheless, the merge is recorded (`afterError: true`). When a pair later no longer loads and
 its `merge-started` was never confirmed, it is recorded as merged (`recovered: true`). After an

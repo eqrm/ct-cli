@@ -57,6 +57,19 @@ describe("merge model", () => {
     expect(buildBody(o, d, m).body.lastName).toBe("");
   });
 
+  it("keeps the Bereiche of both persons by default and can still pick one side", () => {
+    const o = raw(1, { departmentIds: [1] });
+    const d = raw(2, { departmentIds: [2, 1] });
+    let m = model(o, d);
+    expect(m.fields.find((f) => f.key === "departmentIds")!.choice).toBe("both");
+    expect(buildBody(o, d, m).body.departmentIds).toEqual([1, 2]);
+    m = setChoice(m, "departmentIds", "duplicate");
+    expect(buildBody(o, d, m).body.departmentIds).toEqual([2, 1]);
+    expect(setChoice(m, "lastName", "both")).toBe(m);
+    const same = model(raw(1, { departmentIds: [1, 2] }), raw(2, { departmentIds: [2] }));
+    expect(same.fields.find((f) => f.key === "departmentIds")!.choice).toBe("original");
+  });
+
   it("unions emails: duplicate addresses without id, original ids kept, one default", () => {
     const o = raw(1, {
       email: "a@example.org",

@@ -130,6 +130,20 @@ describe("rejectedFields", () => {
     expect(rejectedFields(new Error("x"))).toEqual([]);
     expect(rejectedFields(new CtApiError("x", 400, null))).toEqual([]);
   });
+
+  it("passes on ChurchTools' translation key for a refusal, never the message", async () => {
+    const { errorKey } = await import("../src/dupes/actions.js");
+    const { CtApiError } = await import("../src/api/ctClient.js");
+    const err = new CtApiError("x", 403, {
+      message: "secret@example.org",
+      translationKey: "error.merge.example",
+    });
+    expect(errorKey(err)).toBe("error.merge.example");
+    expect(
+      errorKey(new CtApiError("x", 403, { translationKey: "has spaces secret@example.org" })),
+    ).toBeUndefined();
+    expect(errorKey(new Error("x"))).toBeUndefined();
+  });
 });
 
 describe("shared groups", () => {

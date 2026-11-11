@@ -67,6 +67,16 @@ export function rejectedFields(err: unknown): string[] {
   return [...new Set(keys)];
 }
 
+/**
+ * ChurchTools' translation key for a refusal (`translationKey`, e.g. on a 403). Only a key that looks
+ * like one is returned, never the message, which can echo values.
+ */
+export function errorKey(err: unknown): string | undefined {
+  if (!(err instanceof CtApiError)) return undefined;
+  const key = (err.body as { translationKey?: unknown } | null)?.translationKey;
+  return typeof key === "string" && /^[A-Za-z0-9_.-]{1,120}$/.test(key) ? key : undefined;
+}
+
 /** Names for campus, status, sex, ... from `/person/masterdata`. Empty when unavailable. */
 export async function loadLabels(client: DupesClient): Promise<Labels> {
   const out: Labels = {};
@@ -206,6 +216,8 @@ export type MergeResult =
       status: number | null;
       stage: "reread" | "groups" | "patch";
       fields?: string[];
+      /** ChurchTools' translation key for the refusal, when it sent one. */
+      reason?: string;
       /** Group steps that went through before the failure (they are not rolled back). */
       groupsDone?: GroupStep[];
       /** The group whose clean-up failed (stage "groups"). */
@@ -278,7 +290,9 @@ export async function executeMerge(
         duplicate: gd.new.map((g) => g.id),
         both: gd.both.map((g) => g.id),
       },
-      fromDuplicate: model.fields.filter((f) => f.choice === "duplicate").map((f) => f.key),
+      fromDuplicate: model.fields
+        .filter((f) => f.choice === "duplicate" || f.choice === "both")
+        .map((f) => f.key),
       leadingOptigemId: leading,
       orphanedOptigemId: orphaned,
     },
@@ -311,7 +325,14 @@ export async function executeMerge(
         warnings: built.warnings,
       };
     }
-    return { kind: "failed", status: status(err), stage: "patch", fields: rejectedFields(err), groupsDone };
+    return {
+      kind: "failed",
+      status: status(err),
+      stage: "patch",
+      fields: rejectedFields(err),
+      reason: errorKey(err),
+      groupsDone,
+    };
   }
   const gone = await duplicateGone(deps, loserId);
   confirm(deps, survivingId, loserId, leading, orphaned, {
