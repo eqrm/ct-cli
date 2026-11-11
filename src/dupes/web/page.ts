@@ -79,7 +79,10 @@ h1 { font-size: 30px; margin: 0 0 24px; }
 .grid .pick:hover { outline: 2px solid #b7c8f2; outline-offset: -2px; }
 .grid .chosen { background: var(--green-bg); }
 .grid .lost { background: var(--red-bg); }
-.grid .arrow { justify-content: center; color: var(--text); font-size: 18px; }
+.grid .arrow { justify-content: center; padding: 4px; }
+.arr { width: 40px; height: 40px; border: 2px solid transparent; border-radius: 8px; background: none; color: var(--text); font-size: 18px; cursor: pointer; }
+.arr:hover { background: #eef0f4; }
+.arr.on { border-color: #3a4456; background: #eef0f4; }
 .grid .res { background: var(--cell); }
 .grid .res .clear { margin-left: auto; border: none; background: none; color: var(--muted); font-size: 16px; }
 .grid .res.cleared { color: var(--muted); font-style: italic; }
@@ -269,16 +272,19 @@ function conflicts(p) {
   return p.fields.filter(function (f) { return f.differs && f.original && f.duplicate; }).length +
     p.groups.reduce(function (n, g) { return n + g.items.filter(function (i) { return i.differs && i.original && i.duplicate; }).length; }, 0);
 }
+function arrow(show, on, title, glyph, onclick) {
+  return h("div", { class: "arrow" }, show ? h("button", { class: "arr" + (on ? " on" : ""), title: title, onclick: onclick }, glyph) : null);
+}
 function valueRow(label, row, onPick, canClear) {
   var o = row.choice === "original", dsel = row.choice === "duplicate";
   var cells = [
     h("div", { class: "label" }, label),
     h("div", { class: "val pick" + (o ? " chosen" : row.differs && row.original ? " lost" : ""), title: "Wert des Originals übernehmen",
       onclick: function () { onPick("original"); } }, row.original),
-    h("div", { class: "arrow" }, o && row.original ? "→" : ""),
+    arrow(!!row.original, o, "Wert des Originals übernehmen", "→", function () { onPick("original"); }),
     h("div", { class: "res" + (row.choice === "none" ? " cleared" : "") }, row.choice === "none" ? "(leer)" : resultText(row),
       canClear && row.choice !== "none" ? h("button", { class: "clear", title: "Feld leeren", onclick: function () { onPick("none"); } }, "×") : null),
-    h("div", { class: "arrow" }, dsel && row.duplicate ? "←" : ""),
+    arrow(!!row.duplicate, dsel, "Wert des Duplikats übernehmen", "←", function () { onPick("duplicate"); }),
     h("div", { class: "val pick" + (dsel ? " chosen" : row.differs && row.duplicate ? " lost" : ""), title: "Wert des Duplikats übernehmen",
       onclick: function () { onPick("duplicate"); } }, row.duplicate)
   ];
@@ -307,7 +313,7 @@ function renderDialog() {
     g.push(h("div", { class: "label" }, "Gruppen"), h("div", { class: "val" }, p.groupCounts.original + " Gruppen"), h("div"),
       h("div", { class: "res" }, (p.groupCounts.original + p.groupCounts.duplicate - p.groupCounts.both) + " Gruppen (davon " + p.groupCounts.both + " gemeinsam)"),
       h("div"), h("div", { class: "val" }, p.groupCounts.duplicate + " Gruppen"));
-    var sections = ["Adresse", "Informationen", "Kategorie", "Finanzen"];
+    var sections = ["Adresse", "Informationen", "Kategorie", "Bereich", "Finanzen"];
     sections.forEach(function (sec) {
       var rows = p.fields.filter(function (f) { return f.section === sec && (d.identical || f.differs); });
       var emails = sec === "Adresse" ? p.emails.filter(function (e) { return d.identical || !(e.inOriginal && e.inDuplicate); }) : [];
@@ -319,17 +325,20 @@ function renderDialog() {
       emails.forEach(function (e) {
         var star = h("button", { class: "star" + (e.isDefault ? " on" : ""), title: "Als Standard-Adresse setzen",
           onclick: function () { p.emails.forEach(function (x) { x.isDefault = x === e; }); e.include = true; renderDialog(); } }, e.isDefault ? "★" : "☆");
+        var setInclude = function (on) {
+          e.include = on;
+          if (!on && e.isDefault) { e.isDefault = false; var n = p.emails.find(function (x) { return x.include; }); if (n) n.isDefault = true; }
+          if (on && !p.emails.some(function (x) { return x.isDefault; })) e.isDefault = true;
+          renderDialog();
+        };
         var box = h("input", { type: "checkbox", checked: e.include, title: "Adresse übernehmen",
-          onchange: function (ev) {
-            e.include = ev.target.checked;
-            if (!e.include && e.isDefault) { e.isDefault = false; var n = p.emails.find(function (x) { return x.include; }); if (n) n.isDefault = true; }
-            renderDialog();
-          } });
+          onchange: function (ev) { setInclude(ev.target.checked); } });
+        var flip = function () { setInclude(!e.include); };
         g.push(h("div", { class: "label" }, "E-Mail", star),
           h("div", { class: "val" + (e.inOriginal ? (e.include ? " chosen" : " lost") : "") }, e.inOriginal ? e.address : ""),
-          h("div", { class: "arrow" }, e.inOriginal && e.include ? "→" : ""),
+          arrow(e.inOriginal, e.inOriginal && e.include, "Adresse übernehmen oder weglassen", "→", flip),
           h("div", { class: "res" + (e.include ? "" : " cleared") }, box, e.include ? e.address : "(nicht übernehmen)"),
-          h("div", { class: "arrow" }, !e.inOriginal && e.include ? "←" : ""),
+          arrow(e.inDuplicate, !e.inOriginal && e.include, "Adresse übernehmen oder weglassen", "←", flip),
           h("div", { class: "val" + (e.inDuplicate ? (e.include ? " chosen" : " lost") : "") }, e.inDuplicate ? e.address : ""));
       });
     });

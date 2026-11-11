@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatValue } from "../src/dupes/actions.js";
+import { formatValue, isMasterValue } from "../src/dupes/actions.js";
 import { toPersonRecord } from "../src/dupes/ct.js";
 import {
   buildBody,
@@ -189,5 +189,19 @@ describe("campus and status ids", () => {
     expect(formatValue("campusId", 0, labels)).toBe("Hauptcampus");
     expect(formatValue("statusId", 0, labels)).toBe("0");
     expect(formatValue("campusId", null, labels)).toBe("");
+  });
+
+  it("names each department of a list and treats a fully named list as masterdata", () => {
+    const labels = {
+      departmentIds: new Map([
+        [1, "Bereich A"],
+        [2, "Bereich B"],
+      ]),
+    };
+    expect(formatValue("departmentIds", [1, 2], labels)).toBe("Bereich A, Bereich B");
+    expect(formatValue("departmentIds", [1, 9], labels)).toBe("Bereich A, 9");
+    expect(formatValue("departmentIds", [], labels)).toBe("");
+    expect(isMasterValue("departmentIds", [1, 2], labels)).toBe(true);
+    expect(isMasterValue("departmentIds", [1, 9], labels)).toBe(false);
   });
 });

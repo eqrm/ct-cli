@@ -5,6 +5,7 @@ import { CtApiError } from "../../api/ctClient.js";
 import {
   executeMerge,
   formatValue,
+  isMasterValue,
   loadPair,
   markNotDuplicate,
   recoverUnrecordedMerge,
@@ -273,7 +274,7 @@ export function PairScreen(props: {
   const labels = deps.labels;
   const show = (key: string, v: unknown): string => {
     const text = formatValue(key, v, labels);
-    return typeof v === "number" && labels[key]?.has(v) ? text : r.value(text);
+    return isMasterValue(key, v, labels) ? text : r.value(text);
   };
   const nameOf = (p: PairData["original"]): string => r.name(p.firstName, p.lastName);
   const date = (s: string): string => s.slice(0, 10);

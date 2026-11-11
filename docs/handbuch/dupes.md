@@ -1,5 +1,5 @@
 ---
-sources_hash: 929c6c2b397760ab
+sources_hash: cbce4e6746501c81
 title: Duplicate review (ct dupes)
 sources:
   - src/commands/dupes.ts
@@ -73,9 +73,11 @@ as **Original** and **Duplikat** (name, ID, created date, last login). Tabs filt
 
 "Vergleichen und zusammenführen" opens the dialog: the two cards on top, then a table with the
 columns Original, Vorschlag für Zusammenführung and Duplikat, grouped into Sonstiges (group
-counts), Adresse, Informationen, Kategorie and Finanzen. Click the Original's or the Duplikat's
-value to take it; `×` clears the field. Email rows have a checkbox (include) and a star (default
-address). "Identische Felder" also lists equal fields. The shared groups follow, one block per
+counts), Adresse, Informationen, Kategorie, Bereich and Finanzen. Click the arrow next to the
+Original's or the Duplikat's value (or the value itself) to take that side; the chosen arrow is
+outlined, and `×` clears the field. On email rows the arrow or the checkbox includes or excludes
+the address, and the star makes it the default address. Campus, status, sex and Bereich show
+their masterdata names. "Identische Felder" also lists equal fields. The shared groups follow, one block per
 group with its plan and its membership values, chosen the same way. The footer has Abbrechen,
 "Keine Dublette", a pager (`→` skips to the next open pair) and Zusammenführen, which first shows
 a confirm box listing everything that differs from the Original. After an action the dialog moves

@@ -49,6 +49,7 @@ const LOOKUPS: Record<string, string> = {
   groupTypeRoleId: "roles",
   nationalityId: "nationalities",
   familyStatusId: "familyStatuses",
+  departmentIds: "departments",
 };
 
 /**
@@ -86,10 +87,16 @@ export async function loadLabels(client: DupesClient): Promise<Labels> {
   return out;
 }
 
+/** True when the value is a masterdata id (or list of them) that masterdata names: not personal data. */
+export function isMasterValue(key: string, v: unknown, labels: Labels): boolean {
+  const known = (x: unknown) => typeof x === "number" && labels[key]?.has(x) === true;
+  return Array.isArray(v) ? v.length > 0 && v.every(known) : known(v);
+}
+
 /** Display text for a person field value. Names for ids where masterdata knows them. */
 export function formatValue(key: string, v: unknown, labels: Labels): string {
   if (v === null || v === undefined || v === "") return "";
-  if (Array.isArray(v)) return v.length === 0 ? "" : v.map(String).join(", ");
+  if (Array.isArray(v)) return v.map((x) => formatValue(key, x, labels)).join(", ");
   if (typeof v === "number" && labels[key]?.has(v)) return labels[key]!.get(v)!;
   return typeof v === "object" ? JSON.stringify(v) : String(v);
 }

@@ -15,6 +15,7 @@ import { CtApiError } from "../../api/ctClient.js";
 import {
   executeMerge,
   formatValue,
+  isMasterValue,
   loadPair,
   markNotDuplicate,
   recoverUnrecordedMerge,
@@ -59,7 +60,7 @@ const LABEL: Record<string, string> = {
   fax: "Fax",
   campusId: "Campus",
   statusId: "Status",
-  departmentIds: "Bereiche",
+  departmentIds: "Bereich",
 };
 
 const SECTION: Record<string, string> = {
@@ -72,7 +73,7 @@ const SECTION: Record<string, string> = {
   job: "Informationen",
   campusId: "Kategorie",
   statusId: "Kategorie",
-  departmentIds: "Kategorie",
+  departmentIds: "Bereich",
 };
 
 const SIDES: readonly Side[] = ["original", "duplicate", "none"];
@@ -136,7 +137,7 @@ export function pairView(deps: ReviewDeps, p: PairData): PairView {
   const r = deps.redactor;
   const show = (key: string, v: unknown): string => {
     const text = formatValue(key, v, deps.labels);
-    return typeof v === "number" && deps.labels[key]?.has(v) ? text : r.value(text);
+    return isMasterValue(key, v, deps.labels) ? text : r.value(text);
   };
   const card = (x: PairData["original"]): Card => ({
     id: r.id(x.id),
